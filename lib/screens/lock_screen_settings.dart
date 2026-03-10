@@ -303,8 +303,12 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                       color: Color(color),
                       shape: BoxShape.circle,
                       border: selected
-                          ? Border.all(color: Colors.white, width: 3)
-                          : Border.all(color: Colors.grey, width: 1),
+                          ? Border.all(
+                              color: Theme.of(context).colorScheme.primary,
+                              width: 3)
+                          : Border.all(
+                              color: Theme.of(context).colorScheme.outline,
+                              width: 1),
                     ),
                   ),
                 );

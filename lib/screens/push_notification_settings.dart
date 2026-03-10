@@ -22,6 +22,8 @@ class _PushNotificationSettingsScreenState
   final Set<int> _selectedDays = {1, 2, 3, 4, 5}; // 월~금
   bool _loading = true;
 
+  static const _settingNotificationEnabled = 'notification_enabled';
+
   static const _dayLabels = ['일', '월', '화', '수', '목', '금', '토'];
 
   @override
@@ -33,7 +35,14 @@ class _PushNotificationSettingsScreenState
   Future<void> _loadData() async {
     final alarms = await DatabaseHelper.instance.getAllPushAlarms();
     final folders = await DatabaseHelper.instance.getNonBundleFolders();
+    final settings = await DatabaseHelper.instance.getAllSettings();
     if (!mounted) return;
+
+    // 알림 ON/OFF 상태 복원
+    final enabledStr = settings[_settingNotificationEnabled];
+    if (enabledStr != null) {
+      _enabled = enabledStr == 'true';
+    }
 
     // 첫 번째 알람에서 글로벌 설정 복원
     if (alarms.isNotEmpty) {
@@ -158,6 +167,8 @@ class _PushNotificationSettingsScreenState
                   value: _enabled,
                   onChanged: (v) {
                     setState(() => _enabled = v);
+                    DatabaseHelper.instance.upsertSetting(
+                        _settingNotificationEnabled, v.toString());
                     _scheduleAlarms();
                   },
                 ),

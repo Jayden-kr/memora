@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart' show Share, XFile;
 
 import '../database/database_helper.dart';
 import 'import_screen.dart';
@@ -111,6 +112,20 @@ class _FileListScreenState extends State<FileListScreen> {
     _loadFiles();
   }
 
+  Future<void> _shareFile(Map<String, dynamic> file) async {
+    final filePath = file['file_path'] as String;
+    final f = File(filePath);
+    if (!await f.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('파일을 찾을 수 없습니다.')),
+      );
+      return;
+    }
+
+    await Share.shareXFiles([XFile(filePath)]);
+  }
+
   void _showFileOptions(Map<String, dynamic> file) {
     showModalBottomSheet(
       context: context,
@@ -118,6 +133,14 @@ class _FileListScreenState extends State<FileListScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ListTile(
+              leading: const Icon(Icons.share),
+              title: const Text('공유'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _shareFile(file);
+              },
+            ),
             if ((file['file_type'] as String?) == 'memk')
               ListTile(
                 leading: const Icon(Icons.restore),
