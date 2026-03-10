@@ -25,10 +25,10 @@ class PdfExportService {
   Future<pw.Font> _getKoreanFont() async {
     if (_koreanFont != null) return _koreanFont!;
     try {
-      final fontData = await rootBundle.load('assets/fonts/NotoSansKR-Regular.ttf');
+      final fontData =
+          await rootBundle.load('assets/fonts/NotoSansKR-Regular.ttf');
       _koreanFont = pw.Font.ttf(fontData);
     } catch (_) {
-      // 폰트가 없으면 기본 폰트 사용 (한글 깨질 수 있음)
       _koreanFont = pw.Font.helvetica();
     }
     return _koreanFont!;
@@ -42,13 +42,6 @@ class PdfExportService {
   }) async {
     final db = DatabaseHelper.instance;
     final font = await _getKoreanFont();
-    pw.Font? boldFont;
-    try {
-      final boldData = await rootBundle.load('assets/fonts/NotoSansKR-Bold.ttf');
-      boldFont = pw.Font.ttf(boldData);
-    } catch (_) {
-      boldFont = font;
-    }
 
     final doc = pw.Document();
     int processedFolders = 0;
@@ -66,32 +59,45 @@ class PdfExportService {
         message: '${folder.name} 처리 중...',
       ));
 
-      // 폴더 헤더 페이지
+      // MultiPage로 자동 페이지네이션
       doc.addPage(
-        pw.Page(
+        pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
-          build: (context) => pw.Column(
+          header: (context) => pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Text(
-                folder.name,
-                style: pw.TextStyle(font: boldFont, fontSize: 24),
-              ),
-              pw.SizedBox(height: 8),
-              pw.Text(
-                '카드 ${cards.length}장',
-                style: pw.TextStyle(font: font, fontSize: 14),
-              ),
-              pw.Divider(),
-              pw.SizedBox(height: 16),
-              ...cards.map((card) => _buildCardWidget(
+              if (context.pageNumber == 1) ...[
+                pw.Text(
+                  folder.name,
+                  style: pw.TextStyle(font: font, fontSize: 24,
+                      fontWeight: pw.FontWeight.bold),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  '카드 ${cards.length}장',
+                  style: pw.TextStyle(font: font, fontSize: 12,
+                      color: PdfColors.grey600),
+                ),
+                pw.Divider(),
+                pw.SizedBox(height: 8),
+              ],
+            ],
+          ),
+          build: (context) => cards
+              .map((card) => _buildCardWidget(
                     card.question,
                     card.answer,
                     card.answerImagePaths,
                     font,
-                    boldFont!,
-                  )),
-            ],
+                  ))
+              .toList(),
+          footer: (context) => pw.Container(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Text(
+              '${context.pageNumber} / ${context.pagesCount}',
+              style: pw.TextStyle(font: font, fontSize: 9,
+                  color: PdfColors.grey500),
+            ),
           ),
         ),
       );
@@ -112,7 +118,6 @@ class PdfExportService {
     String answer,
     List<String> imagePaths,
     pw.Font font,
-    pw.Font boldFont,
   ) {
     return pw.Container(
       margin: const pw.EdgeInsets.only(bottom: 12),
@@ -126,7 +131,8 @@ class PdfExportService {
         children: [
           pw.Text(
             question.isEmpty ? '(내용 없음)' : question,
-            style: pw.TextStyle(font: boldFont, fontSize: 12),
+            style: pw.TextStyle(font: font, fontSize: 12,
+                fontWeight: pw.FontWeight.bold),
           ),
           pw.SizedBox(height: 4),
           pw.Divider(color: PdfColors.grey200),
@@ -137,23 +143,26 @@ class PdfExportService {
               style: pw.TextStyle(font: font, fontSize: 11),
             ),
           if (imagePaths.isNotEmpty)
-            pw.Row(
-              children: imagePaths.take(3).map((path) {
-                try {
-                  final file = File(path);
-                  if (file.existsSync()) {
-                    final bytes = file.readAsBytesSync();
-                    final image = pw.MemoryImage(bytes);
-                    return pw.Container(
-                      width: 60,
-                      height: 60,
-                      margin: const pw.EdgeInsets.only(right: 4, top: 4),
-                      child: pw.Image(image, fit: pw.BoxFit.cover),
-                    );
-                  }
-                } catch (_) {}
-                return pw.SizedBox.shrink();
-              }).toList(),
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 4),
+              child: pw.Row(
+                children: imagePaths.take(3).map((path) {
+                  try {
+                    final file = File(path);
+                    if (file.existsSync()) {
+                      final bytes = file.readAsBytesSync();
+                      final image = pw.MemoryImage(bytes);
+                      return pw.Container(
+                        width: 80,
+                        height: 80,
+                        margin: const pw.EdgeInsets.only(right: 6),
+                        child: pw.Image(image, fit: pw.BoxFit.contain),
+                      );
+                    }
+                  } catch (_) {}
+                  return pw.SizedBox.shrink();
+                }).toList(),
+              ),
             ),
         ],
       ),

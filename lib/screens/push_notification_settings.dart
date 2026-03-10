@@ -34,6 +34,22 @@ class _PushNotificationSettingsScreenState
     final alarms = await DatabaseHelper.instance.getAllPushAlarms();
     final folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
+
+    // 첫 번째 알람에서 글로벌 설정 복원
+    if (alarms.isNotEmpty) {
+      final first = alarms.first;
+      final daysStr = first['days'] as String?;
+      if (daysStr != null && daysStr.isNotEmpty) {
+        _selectedDays.clear();
+        for (final d in daysStr.split(',')) {
+          final parsed = int.tryParse(d.trim());
+          if (parsed != null) _selectedDays.add(parsed);
+        }
+      }
+      _selectedFolderId = first['folder_id'] as int?;
+      _soundEnabled = (first['sound_enabled'] as int? ?? 1) == 1;
+    }
+
     setState(() {
       _alarms = alarms;
       _folders = folders;
@@ -61,8 +77,8 @@ class _PushNotificationSettingsScreenState
   }
 
   Future<void> _deleteAlarm(int id) async {
-    await DatabaseHelper.instance.deletePushAlarm(id);
     await NotificationService.cancelNotification(id);
+    await DatabaseHelper.instance.deletePushAlarm(id);
     await _loadData();
   }
 
@@ -71,6 +87,19 @@ class _PushNotificationSettingsScreenState
       'enabled': enabled ? 1 : 0,
     });
     await _loadData();
+    await _scheduleAlarms();
+  }
+
+  /// 글로벌 설정 변경 시 모든 알람에 반영
+  Future<void> _updateGlobalSettings() async {
+    final daysStr = _selectedDays.join(',');
+    for (final alarm in _alarms) {
+      await DatabaseHelper.instance.updatePushAlarm(alarm['id'] as int, {
+        'folder_id': _selectedFolderId,
+        'days': daysStr,
+        'sound_enabled': _soundEnabled ? 1 : 0,
+      });
+    }
     await _scheduleAlarms();
   }
 
@@ -88,10 +117,27 @@ class _PushNotificationSettingsScreenState
       final minute = int.parse(parts[1]);
       final id = alarm['id'] as int;
 
+      // 알람별 요일 파싱
+      final daysStr = alarm['days'] as String?;
+      Set<int>? days;
+      if (daysStr != null && daysStr.isNotEmpty) {
+        days = daysStr
+            .split(',')
+            .map((d) => int.tryParse(d.trim()))
+            .whereType<int>()
+            .toSet();
+      }
+
+      final folderId = alarm['folder_id'] as int?;
+      final soundEnabled = (alarm['sound_enabled'] as int? ?? 1) == 1;
+
       await NotificationService.scheduleDailyNotification(
         id: id,
         hour: hour,
         minute: minute,
+        days: days,
+        folderId: folderId,
+        soundEnabled: soundEnabled,
       );
     }
   }
@@ -141,6 +187,7 @@ class _PushNotificationSettingsScreenState
                               _selectedDays.remove(index);
                             }
                           });
+                          _updateGlobalSettings();
                         },
                       );
                     }),
@@ -205,7 +252,10 @@ class _PushNotificationSettingsScreenState
                             child: Text(f.name),
                           )),
                     ],
-                    onChanged: (v) => setState(() => _selectedFolderId = v),
+                    onChanged: (v) {
+                      setState(() => _selectedFolderId = v);
+                      _updateGlobalSettings();
+                    },
                   ),
                 ),
                 const Divider(),
@@ -214,7 +264,10 @@ class _PushNotificationSettingsScreenState
                 SwitchListTile(
                   title: const Text('알림음'),
                   value: _soundEnabled,
-                  onChanged: (v) => setState(() => _soundEnabled = v),
+                  onChanged: (v) {
+                    setState(() => _soundEnabled = v);
+                    _updateGlobalSettings();
+                  },
                 ),
               ],
             ),
