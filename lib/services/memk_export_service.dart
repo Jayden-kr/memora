@@ -5,6 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../database/database_helper.dart';
+import '../models/folder.dart';
 import '../utils/constants.dart';
 
 /// Export 진행 상태
@@ -31,9 +32,11 @@ class MemkExportService {
   }
 
   /// DB 데이터를 .memk ZIP 파일로 export
+  /// [folderIds]: null이면 전체, 있으면 해당 폴더만
   Future<void> exportMemk({
     required String outputPath,
     required void Function(ExportProgress) onProgress,
+    List<int>? folderIds,
   }) async {
     final db = DatabaseHelper.instance;
     final appDocDir = (await getApplicationDocumentsDirectory()).path;
@@ -41,7 +44,14 @@ class MemkExportService {
     onProgress(const ExportProgress(phase: 'folders', message: '폴더 정보 준비 중...'));
 
     // 폴더 조회 + JSON
-    final folders = await db.getAllFolders();
+    List<Folder> folders;
+    if (folderIds != null) {
+      final allFolders = await db.getAllFolders();
+      final idSet = folderIds.toSet();
+      folders = allFolders.where((f) => idSet.contains(f.id)).toList();
+    } else {
+      folders = await db.getAllFolders();
+    }
     final folderNameMap = <int, String>{}; // folderId → name
     final foldersJsonList = <Map<String, dynamic>>[];
     for (final folder in folders) {
@@ -53,40 +63,64 @@ class MemkExportService {
     onProgress(const ExportProgress(phase: 'cards', message: '카드 정보 준비 중...'));
 
     // 카드 조회 + JSON + 이미지 파일명 수집
-    final totalCards = await db.getTotalCardCount();
     final cardsJsonList = <Map<String, dynamic>>[];
     final imageFileNames = <String>{}; // ZIP에 포함할 이미지 파일명
     int processed = 0;
 
-    // 페이지네이션으로 메모리 절약
-    const batchSize = 500;
-    int offset = 0;
-    while (true) {
-      final cards = await db.getAllCards(limit: batchSize, offset: offset);
-      if (cards.isEmpty) break;
-
-      for (final card in cards) {
-        final json = card.toJson();
-
-        // folderName 복원
-        json['folderName'] = folderNameMap[card.folderId] ?? '';
-
-        // 이미지 경로 변환: 로컬 → 암기짱 포맷
-        _convertToMemkPaths(json, imageFileNames);
-
-        cardsJsonList.add(json);
-        processed++;
+    if (folderIds != null) {
+      // 선택된 폴더의 카드만
+      int totalCards = 0;
+      for (final folderId in folderIds) {
+        totalCards += await db.countCardsByFolderId(folderId);
       }
-
-      onProgress(ExportProgress(
-        phase: 'cards',
-        current: processed,
-        total: totalCards,
-        message: '카드 정보 준비 중... $processed / $totalCards',
-      ));
-
-      offset += batchSize;
-      await Future.delayed(Duration.zero);
+      for (final folderId in folderIds) {
+        const batchSize = 500;
+        int offset = 0;
+        while (true) {
+          final cards = await db.getCardsByFolderId(folderId,
+              limit: batchSize, offset: offset);
+          if (cards.isEmpty) break;
+          for (final card in cards) {
+            final json = card.toJson();
+            json['folderName'] = folderNameMap[card.folderId] ?? '';
+            _convertToMemkPaths(json, imageFileNames);
+            cardsJsonList.add(json);
+            processed++;
+          }
+          onProgress(ExportProgress(
+            phase: 'cards',
+            current: processed,
+            total: totalCards,
+            message: '카드 정보 준비 중... $processed / $totalCards',
+          ));
+          offset += batchSize;
+          await Future.delayed(Duration.zero);
+        }
+      }
+    } else {
+      // 전체 카드
+      final totalCards = await db.getTotalCardCount();
+      const batchSize = 500;
+      int offset = 0;
+      while (true) {
+        final cards = await db.getAllCards(limit: batchSize, offset: offset);
+        if (cards.isEmpty) break;
+        for (final card in cards) {
+          final json = card.toJson();
+          json['folderName'] = folderNameMap[card.folderId] ?? '';
+          _convertToMemkPaths(json, imageFileNames);
+          cardsJsonList.add(json);
+          processed++;
+        }
+        onProgress(ExportProgress(
+          phase: 'cards',
+          current: processed,
+          total: totalCards,
+          message: '카드 정보 준비 중... $processed / $totalCards',
+        ));
+        offset += batchSize;
+        await Future.delayed(Duration.zero);
+      }
     }
     final cardsJsonStr = jsonEncode(cardsJsonList);
 

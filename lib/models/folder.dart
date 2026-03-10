@@ -10,6 +10,7 @@ class Folder {
   final int? parentFolderId;
   final String? parentFolderName;
   final bool isSpecialFolder;
+  final bool isBundle;
 
   Folder({
     this.id,
@@ -23,6 +24,7 @@ class Folder {
     this.parentFolderId,
     this.parentFolderName,
     this.isSpecialFolder = false,
+    this.isBundle = false,
   });
 
   /// .memk JSON → Dart (camelCase 키)
@@ -39,6 +41,7 @@ class Folder {
       parentFolderId: (json['parentFolderId'] as num?)?.toInt(),
       parentFolderName: json['parentFolderName'] as String?,
       isSpecialFolder: _parseBool(json['isSpecialFolder']),
+      isBundle: _parseBool(json['isBundle']),
     );
   }
 
@@ -63,6 +66,7 @@ class Folder {
       'parentFolderId': parentFolderId,
       'parentFolderName': parentFolderName,
       'isSpecialFolder': isSpecialFolder,
+      'isBundle': isBundle,
       'isDirty': false,
       'isSelected': false,
     };
@@ -82,6 +86,7 @@ class Folder {
       parentFolderId: map['parent_folder_id'] as int?,
       parentFolderName: map['parent_folder_name'] as String?,
       isSpecialFolder: (map['is_special_folder'] as int? ?? 0) == 1,
+      isBundle: (map['is_bundle'] as int? ?? 0) == 1,
     );
   }
 
@@ -98,6 +103,7 @@ class Folder {
       'parent_folder_id': parentFolderId,
       'parent_folder_name': parentFolderName,
       'is_special_folder': isSpecialFolder ? 1 : 0,
+      'is_bundle': isBundle ? 1 : 0,
     };
     if (id != null) {
       map['id'] = id;
@@ -117,6 +123,7 @@ class Folder {
     int? parentFolderId,
     String? parentFolderName,
     bool? isSpecialFolder,
+    bool? isBundle,
   }) {
     return Folder(
       id: id ?? this.id,
@@ -130,6 +137,7 @@ class Folder {
       parentFolderId: parentFolderId ?? this.parentFolderId,
       parentFolderName: parentFolderName ?? this.parentFolderName,
       isSpecialFolder: isSpecialFolder ?? this.isSpecialFolder,
+      isBundle: isBundle ?? this.isBundle,
     );
   }
 }

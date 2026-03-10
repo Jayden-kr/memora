@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../database/database_helper.dart';
+import '../models/folder.dart';
 import '../services/memk_import_service.dart';
 
 class ImportScreen extends StatefulWidget {
@@ -17,8 +19,13 @@ class _ImportScreenState extends State<ImportScreen> {
   final _importService = MemkImportService();
 
   _ImportStage _stage = _ImportStage.loading;
-  List<Map<String, dynamic>> _folders = [];
+  List<Map<String, dynamic>> _memkFolders = [];
   final Set<String> _selectedFolderNames = {};
+
+  // 가져올 위치
+  bool _useExistingFolder = false;
+  List<Folder> _localFolders = [];
+  final Map<int, int> _folderMapping = {}; // memk folderId → local folderId
 
   // 진행률
   ImportProgress _progress = const ImportProgress();
@@ -28,18 +35,20 @@ class _ImportScreenState extends State<ImportScreen> {
   @override
   void initState() {
     super.initState();
-    _loadFolderList();
+    _loadData();
   }
 
-  Future<void> _loadFolderList() async {
+  Future<void> _loadData() async {
     try {
-      final folders = await _importService.readFolderList(widget.filePath);
+      final memkFolders =
+          await _importService.readFolderList(widget.filePath);
+      final localFolders =
+          await DatabaseHelper.instance.getNonBundleFolders();
       setState(() {
-        _folders = folders;
-        // 기본: 전체 선택
-        _selectedFolderNames.addAll(
-          folders.map((f) => f['name'] as String),
-        );
+        _memkFolders = memkFolders;
+        _localFolders = localFolders;
+        _selectedFolderNames
+            .addAll(memkFolders.map((f) => f['name'] as String));
         _stage = _ImportStage.folderSelect;
       });
     } catch (e) {
@@ -55,10 +64,17 @@ class _ImportScreenState extends State<ImportScreen> {
 
     setState(() => _stage = _ImportStage.importing);
 
+    // folderMapping 구성 (기존 폴더 선택 모드)
+    Map<int, int>? mapping;
+    if (_useExistingFolder && _folderMapping.isNotEmpty) {
+      mapping = _folderMapping;
+    }
+
     try {
       final result = await _importService.importSelectedFolders(
         filePath: widget.filePath,
         selectedFolderNames: _selectedFolderNames.toList(),
+        folderMapping: mapping,
         onProgress: (progress) {
           if (mounted) {
             setState(() => _progress = progress);
@@ -83,15 +99,58 @@ class _ImportScreenState extends State<ImportScreen> {
 
   void _toggleSelectAll() {
     setState(() {
-      if (_selectedFolderNames.length == _folders.length) {
+      if (_selectedFolderNames.length == _memkFolders.length) {
         _selectedFolderNames.clear();
       } else {
         _selectedFolderNames.clear();
         _selectedFolderNames.addAll(
-          _folders.map((f) => f['name'] as String),
+          _memkFolders.map((f) => f['name'] as String),
         );
       }
     });
+  }
+
+  Future<void> _createNewLocalFolder() async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('새 폴더'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '폴더 이름'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('생성'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+
+    final existing = await DatabaseHelper.instance.getFolderByName(name);
+    if (existing != null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
+      );
+      return;
+    }
+
+    final maxSeq = await DatabaseHelper.instance.getMaxFolderSequence();
+    final folder = Folder(name: name, sequence: maxSeq + 1);
+    await DatabaseHelper.instance.insertFolder(folder);
+    final localFolders =
+        await DatabaseHelper.instance.getNonBundleFolders();
+    setState(() => _localFolders = localFolders);
   }
 
   @override
@@ -130,51 +189,138 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Widget _buildFolderSelect() {
-    final allSelected = _selectedFolderNames.length == _folders.length;
+    final allSelected = _selectedFolderNames.length == _memkFolders.length;
     return Column(
       children: [
-        // 전체 선택/해제
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            children: [
-              Text(
-                '폴더 ${_folders.length}개',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: _toggleSelectAll,
-                child: Text(allSelected ? '전체 해제' : '전체 선택'),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        // 폴더 리스트
         Expanded(
-          child: ListView.builder(
-            itemCount: _folders.length,
-            itemBuilder: (context, index) {
-              final folder = _folders[index];
-              final name = folder['name'] as String;
-              final cardCount = folder['cardCount'] as int? ?? 0;
-              final isSelected = _selectedFolderNames.contains(name);
-              return CheckboxListTile(
-                title: Text(name),
-                subtitle: Text('$cardCount장'),
-                value: isSelected,
-                onChanged: (checked) {
-                  setState(() {
-                    if (checked == true) {
-                      _selectedFolderNames.add(name);
-                    } else {
-                      _selectedFolderNames.remove(name);
-                    }
-                  });
-                },
-              );
-            },
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // .memk 내부 폴더 선택
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    children: [
+                      Text('.memk 폴더 ${_memkFolders.length}개',
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: _toggleSelectAll,
+                        child: Text(allSelected ? '전체 해제' : '전체 선택'),
+                      ),
+                    ],
+                  ),
+                ),
+                ..._memkFolders.map((folder) {
+                  final name = folder['name'] as String;
+                  final cardCount = folder['cardCount'] as int? ?? 0;
+                  final isSelected = _selectedFolderNames.contains(name);
+                  return CheckboxListTile(
+                    title: Text(name),
+                    subtitle: Text('$cardCount장'),
+                    value: isSelected,
+                    onChanged: (checked) {
+                      setState(() {
+                        if (checked == true) {
+                          _selectedFolderNames.add(name);
+                        } else {
+                          _selectedFolderNames.remove(name);
+                        }
+                      });
+                    },
+                  );
+                }),
+
+                const Divider(height: 32),
+
+                // 가져올 위치 선택
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text('가져올 위치',
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+                RadioGroup<bool>(
+                  groupValue: _useExistingFolder,
+                  onChanged: (v) =>
+                      setState(() => _useExistingFolder = v!),
+                  child: Column(
+                    children: [
+                      RadioListTile<bool>(
+                        title: const Text('새 폴더 자동 생성'),
+                        value: false,
+                      ),
+                      RadioListTile<bool>(
+                        title: const Text('기존 폴더 선택'),
+                        value: true,
+                      ),
+                    ],
+                  ),
+                ),
+
+                if (_useExistingFolder) ...[
+                  const Divider(),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text('대상 폴더 매핑',
+                        style: Theme.of(context).textTheme.titleSmall),
+                  ),
+                  const SizedBox(height: 8),
+                  ..._memkFolders.where((f) {
+                    return _selectedFolderNames
+                        .contains(f['name'] as String);
+                  }).map((memkFolder) {
+                    final name = memkFolder['name'] as String;
+                    final memkId = (memkFolder['id'] as num?)?.toInt();
+                    if (memkId == null) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(name,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold)),
+                          ),
+                          const Icon(Icons.arrow_forward, size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: DropdownButton<int>(
+                              isExpanded: true,
+                              value: _folderMapping[memkId],
+                              hint: const Text('폴더 선택'),
+                              items: _localFolders.map((f) {
+                                return DropdownMenuItem(
+                                  value: f.id,
+                                  child: Text(f.name),
+                                );
+                              }).toList(),
+                              onChanged: (v) {
+                                setState(() {
+                                  if (v != null) {
+                                    _folderMapping[memkId] = v;
+                                  }
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextButton.icon(
+                      onPressed: _createNewLocalFolder,
+                      icon: const Icon(Icons.add),
+                      label: const Text('새 폴더 만들기'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
         // Import 버튼
@@ -204,7 +350,6 @@ class _ImportScreenState extends State<ImportScreen> {
     final imageProgress = _progress.totalImages > 0
         ? _progress.currentImages / _progress.totalImages
         : 0.0;
-
     final progress = _progress.phase == 'images'
         ? (cardProgress + imageProgress) / 2
         : cardProgress * 0.5;
@@ -240,12 +385,11 @@ class _ImportScreenState extends State<ImportScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.check_circle, size: 64, color: Colors.green),
+            Icon(Icons.check_circle,
+                size: 64, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            Text(
-              'Import 완료',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
+            Text('Import 완료',
+                style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 24),
             _resultRow('신규 카드', '${r.newCards}장'),
             _resultRow('스킵 (중복)', '${r.skippedCards}장'),

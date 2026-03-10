@@ -27,6 +27,7 @@ void main() {
     'parent_folder_id': null,
     'parent_folder_name': null,
     'is_special_folder': 0,
+    'is_bundle': 0,
   };
 
   group('Folder.fromJson → toJson round-trip', () {
@@ -108,6 +109,46 @@ void main() {
       final updated = folder.copyWith(name: '일본어');
       expect(updated.name, '일본어');
       expect(updated.cardCount, folder.cardCount);
+    });
+  });
+
+  group('isBundle', () {
+    test('JSON round-trip — isBundle=false 기본값', () {
+      final folder = Folder.fromJson(sampleJson);
+      expect(folder.isBundle, false);
+      final json = folder.toJson();
+      expect(json['isBundle'], false);
+    });
+
+    test('JSON round-trip — isBundle=true', () {
+      final jsonWithBundle = Map<String, dynamic>.from(sampleJson);
+      jsonWithBundle['isBundle'] = true;
+      final folder = Folder.fromJson(jsonWithBundle);
+      expect(folder.isBundle, true);
+      final json = folder.toJson();
+      expect(json['isBundle'], true);
+    });
+
+    test('DB round-trip — is_bundle=0', () {
+      final folder = Folder.fromDb(sampleDbMap);
+      expect(folder.isBundle, false);
+      final db = folder.toDb();
+      expect(db['is_bundle'], 0);
+    });
+
+    test('DB round-trip — is_bundle=1', () {
+      final dbMap = Map<String, dynamic>.from(sampleDbMap);
+      dbMap['is_bundle'] = 1;
+      final folder = Folder.fromDb(dbMap);
+      expect(folder.isBundle, true);
+      expect(folder.toDb()['is_bundle'], 1);
+    });
+
+    test('copyWith isBundle', () {
+      final folder = Folder.fromJson(sampleJson);
+      final bundle = folder.copyWith(isBundle: true);
+      expect(bundle.isBundle, true);
+      expect(bundle.name, folder.name);
     });
   });
 }

@@ -55,7 +55,7 @@ class NotificationService {
 
     await _plugin.zonedSchedule(
       id,
-      '암기왕',
+      'Memora',
       body,
       scheduled,
       const NotificationDetails(

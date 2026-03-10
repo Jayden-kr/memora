@@ -80,10 +80,12 @@ class MemkImportService {
   }
 
   /// 선택된 폴더의 카드+이미지를 import
+  /// [folderMapping]: memk 폴더 ID → 로컬 폴더 ID (null이면 자동 생성)
   Future<ImportResult> importSelectedFolders({
     required String filePath,
     required List<String> selectedFolderNames,
     required void Function(ImportProgress) onProgress,
+    Map<int, int>? folderMapping,
   }) async {
     final stopwatch = Stopwatch()..start();
     final db = DatabaseHelper.instance;
@@ -131,6 +133,14 @@ class MemkImportService {
 
       final memkFolderId = (folderData['id'] as num?)?.toInt();
       if (memkFolderId == null) continue;
+
+      // folderMapping이 있으면 해당 매핑 사용
+      if (folderMapping != null && folderMapping.containsKey(memkFolderId)) {
+        folderIdMap[memkFolderId] = folderMapping[memkFolderId]!;
+        mergedFolders++;
+        continue;
+      }
+
       final existingFolder = await db.getFolderByName(name);
 
       if (existingFolder != null) {

@@ -24,6 +24,7 @@ class DatabaseHelper {
       path,
       version: AppConstants.dbVersion,
       onCreate: _createDB,
+      onUpgrade: _upgradeDB,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -43,7 +44,8 @@ class DatabaseHelper {
         parent            INTEGER NOT NULL DEFAULT 0,
         parent_folder_id  INTEGER,
         parent_folder_name TEXT,
-        is_special_folder INTEGER NOT NULL DEFAULT 0
+        is_special_folder INTEGER NOT NULL DEFAULT 0,
+        is_bundle         INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -152,6 +154,28 @@ class DatabaseHelper {
       )
     ''');
 
+    await db.execute('''
+      CREATE TABLE ${AppConstants.tableExportedFiles} (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_name   TEXT NOT NULL,
+        file_path   TEXT NOT NULL,
+        file_size   INTEGER,
+        file_type   TEXT,
+        created_at  TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE ${AppConstants.tablePushAlarms} (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        time          TEXT NOT NULL,
+        enabled       INTEGER DEFAULT 1,
+        folder_id     INTEGER,
+        days          TEXT,
+        sound_enabled INTEGER DEFAULT 1
+      )
+    ''');
+
     // 초기 카운터 row
     await db.insert(AppConstants.tableCounters, {
       'id': 1,
@@ -160,6 +184,33 @@ class DatabaseHelper {
       'folder_sequence': 0,
       'folder_minus_sequence': 0,
     });
+  }
+
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+          'ALTER TABLE ${AppConstants.tableFolders} ADD COLUMN is_bundle INTEGER NOT NULL DEFAULT 0');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS ${AppConstants.tableExportedFiles} (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          file_name   TEXT NOT NULL,
+          file_path   TEXT NOT NULL,
+          file_size   INTEGER,
+          file_type   TEXT,
+          created_at  TEXT
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS ${AppConstants.tablePushAlarms} (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          time          TEXT NOT NULL,
+          enabled       INTEGER DEFAULT 1,
+          folder_id     INTEGER,
+          days          TEXT,
+          sound_enabled INTEGER DEFAULT 1
+        )
+      ''');
+    }
   }
 
   // ─── Folder CRUD ───
@@ -173,6 +224,37 @@ class DatabaseHelper {
     final db = await database;
     final maps = await db.query(
       AppConstants.tableFolders,
+      orderBy: 'sequence ASC',
+    );
+    return maps.map((m) => Folder.fromDb(m)).toList();
+  }
+
+  Future<List<Folder>> getBundleFolders() async {
+    final db = await database;
+    final maps = await db.query(
+      AppConstants.tableFolders,
+      where: 'is_bundle = 1',
+      orderBy: 'sequence ASC',
+    );
+    return maps.map((m) => Folder.fromDb(m)).toList();
+  }
+
+  Future<List<Folder>> getNonBundleFolders() async {
+    final db = await database;
+    final maps = await db.query(
+      AppConstants.tableFolders,
+      where: 'is_bundle = 0',
+      orderBy: 'sequence ASC',
+    );
+    return maps.map((m) => Folder.fromDb(m)).toList();
+  }
+
+  Future<List<Folder>> getChildFolders(int parentId) async {
+    final db = await database;
+    final maps = await db.query(
+      AppConstants.tableFolders,
+      where: 'parent_folder_id = ?',
+      whereArgs: [parentId],
       orderBy: 'sequence ASC',
     );
     return maps.map((m) => Folder.fromDb(m)).toList();
@@ -233,6 +315,13 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [folderId],
     );
+  }
+
+  Future<int> getMaxFolderSequence() async {
+    final db = await database;
+    return Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT MAX(sequence) FROM ${AppConstants.tableFolders}',
+    )) ?? 0;
   }
 
   // ─── Card CRUD ───
@@ -342,7 +431,6 @@ class DatabaseHelper {
   }
 
   /// 카드 배치 insert (transaction) — Import 시 사용
-  /// conflictAlgorithm: replace로 UUID 중복 시 덮어쓰기
   Future<int> insertCardsBatch(List<CardModel> cards,
       {ConflictAlgorithm conflictAlgorithm = ConflictAlgorithm.abort}) async {
     final db = await database;
@@ -397,6 +485,122 @@ class DatabaseHelper {
     );
   }
 
+  // ─── Card Search & Batch ───
+
+  /// 검색 (Question 우선순위)
+  Future<List<CardModel>> searchCards(int folderId, String query) async {
+    final db = await database;
+    final questionMatches = await db.query(
+      AppConstants.tableCards,
+      where: 'folder_id = ? AND question LIKE ?',
+      whereArgs: [folderId, '%$query%'],
+      orderBy: 'sequence ASC',
+    );
+    final answerMatches = await db.query(
+      AppConstants.tableCards,
+      where: 'folder_id = ? AND answer LIKE ? AND question NOT LIKE ?',
+      whereArgs: [folderId, '%$query%', '%$query%'],
+      orderBy: 'sequence ASC',
+    );
+    return [
+      ...questionMatches.map((m) => CardModel.fromDb(m)),
+      ...answerMatches.map((m) => CardModel.fromDb(m)),
+    ];
+  }
+
+  /// 전체 카드 검색 (allCards 모드)
+  Future<List<CardModel>> searchAllCards(String query) async {
+    final db = await database;
+    final questionMatches = await db.query(
+      AppConstants.tableCards,
+      where: 'question LIKE ?',
+      whereArgs: ['%$query%'],
+      orderBy: 'folder_id, sequence ASC',
+    );
+    final answerMatches = await db.query(
+      AppConstants.tableCards,
+      where: 'answer LIKE ? AND question NOT LIKE ?',
+      whereArgs: ['%$query%', '%$query%'],
+      orderBy: 'folder_id, sequence ASC',
+    );
+    return [
+      ...questionMatches.map((m) => CardModel.fromDb(m)),
+      ...answerMatches.map((m) => CardModel.fromDb(m)),
+    ];
+  }
+
+  /// 배치 삭제
+  Future<int> deleteCardsBatch(List<int> cardIds) async {
+    if (cardIds.isEmpty) return 0;
+    final db = await database;
+    final placeholders = List.filled(cardIds.length, '?').join(',');
+    return await db.rawDelete(
+      'DELETE FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+      cardIds,
+    );
+  }
+
+  /// 배치 이동
+  Future<void> moveCardsBatch(List<int> cardIds, int newFolderId) async {
+    if (cardIds.isEmpty) return;
+    final db = await database;
+    final placeholders = List.filled(cardIds.length, '?').join(',');
+    await db.rawUpdate(
+      'UPDATE ${AppConstants.tableCards} SET folder_id = ? WHERE id IN ($placeholders)',
+      [newFolderId, ...cardIds],
+    );
+  }
+
+  /// 카드 복제
+  Future<int> duplicateCard(int cardId) async {
+    final db = await database;
+    final card = await getCardById(cardId);
+    if (card == null) return -1;
+    final maxSeq = await getMaxSequence(card.folderId);
+    final newUuid =
+        '${card.uuid}-copy-${DateTime.now().millisecondsSinceEpoch}';
+    final newCard = card.copyWith(
+      id: null,
+      uuid: newUuid,
+      sequence: maxSeq + 1,
+    );
+    final newId = await db.insert(AppConstants.tableCards, newCard.toDb());
+    await updateFolderCardCount(card.folderId);
+    return newId;
+  }
+
+  /// 정렬 옵션으로 카드 조회
+  Future<List<CardModel>> getCardsByFolderIdSorted(
+    int folderId,
+    String sortBy, {
+    int? limit,
+    int? offset,
+  }) async {
+    final db = await database;
+    String orderBy;
+    switch (sortBy) {
+      case 'newest':
+        orderBy = 'id DESC';
+      case 'oldest':
+        orderBy = 'id ASC';
+      case 'name_asc':
+        orderBy = 'question ASC';
+      case 'random':
+        orderBy = 'RANDOM()';
+      default:
+        orderBy = 'sequence ASC';
+    }
+    final maps = await db.query(
+      AppConstants.tableCards,
+      where: 'folder_id = ?',
+      whereArgs: [folderId],
+      orderBy: orderBy,
+      limit: limit,
+      offset: offset,
+    );
+    return maps.map((m) => CardModel.fromDb(m)).toList();
+  }
+
   // ─── Counter CRUD ───
 
   Future<Map<String, dynamic>?> getCounter() async {
@@ -412,6 +616,84 @@ class DatabaseHelper {
       AppConstants.tableCounters,
       counter,
       where: 'id = 1',
+    );
+  }
+
+  // ─── Exported Files CRUD ───
+
+  Future<int> insertExportedFile({
+    required String fileName,
+    required String filePath,
+    int? fileSize,
+    String? fileType,
+  }) async {
+    final db = await database;
+    return await db.insert(AppConstants.tableExportedFiles, {
+      'file_name': fileName,
+      'file_path': filePath,
+      'file_size': fileSize,
+      'file_type': fileType,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getAllExportedFiles() async {
+    final db = await database;
+    return await db.query(
+      AppConstants.tableExportedFiles,
+      orderBy: 'created_at DESC',
+    );
+  }
+
+  Future<int> deleteExportedFile(int id) async {
+    final db = await database;
+    return await db.delete(
+      AppConstants.tableExportedFiles,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // ─── Push Alarms CRUD ───
+
+  Future<int> insertPushAlarm({
+    required String time,
+    int enabled = 1,
+    int? folderId,
+    String? days,
+    int soundEnabled = 1,
+  }) async {
+    final db = await database;
+    return await db.insert(AppConstants.tablePushAlarms, {
+      'time': time,
+      'enabled': enabled,
+      'folder_id': folderId,
+      'days': days,
+      'sound_enabled': soundEnabled,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getAllPushAlarms() async {
+    final db = await database;
+    return await db.query(AppConstants.tablePushAlarms);
+  }
+
+  Future<int> updatePushAlarm(int id, Map<String, dynamic> values) async {
+    final db = await database;
+    return await db.update(
+      AppConstants.tablePushAlarms,
+      values,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<int> deletePushAlarm(int id) async {
+    final db = await database;
+    return await db.delete(
+      AppConstants.tablePushAlarms,
+      where: 'id = ?',
+      whereArgs: [id],
     );
   }
 }

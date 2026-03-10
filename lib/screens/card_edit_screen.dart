@@ -33,6 +33,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
   bool _finished = false;
   int _currentFolderId = 0;
+  List<Folder> _folders = [];
 
   // 이미지 경로 리스트 (최대 5장)
   List<String?> _questionImages = List.filled(5, null);
@@ -81,6 +82,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
         c.answerImageRatio5,
       ];
     }
+    _loadFolders();
   }
 
   @override
@@ -88,6 +90,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
     _questionController.dispose();
     _answerController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadFolders() async {
+    final folders = await DatabaseHelper.instance.getNonBundleFolders();
+    if (!mounted) return;
+    setState(() => _folders = folders);
   }
 
   Future<String> _copyImageToAppDir(String sourcePath) async {
@@ -105,7 +113,6 @@ class _CardEditScreenState extends State<CardEditScreen> {
   }
 
   Future<void> _pickImage(List<String?> images, List<double?> ratios) async {
-    // 빈 슬롯 찾기
     final emptyIndex = images.indexWhere((img) => img == null);
     if (emptyIndex == -1) {
       if (!mounted) return;
@@ -115,12 +122,34 @@ class _CardEditScreenState extends State<CardEditScreen> {
       return;
     }
 
-    final picked = await _picker.pickImage(source: ImageSource.gallery);
+    // 카메라/갤러리 선택
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('카메라'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('갤러리'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+
+    final picked = await _picker.pickImage(source: source);
     if (picked == null) return;
 
     final savedPath = await _copyImageToAppDir(picked.path);
 
-    // 이미지 비율 계산
     final bytes = await File(savedPath).readAsBytes();
     final decoded = await decodeImageFromList(bytes);
     final ratio = decoded.width / decoded.height;
@@ -185,7 +214,6 @@ class _CardEditScreenState extends State<CardEditScreen> {
       );
       await DatabaseHelper.instance.updateCard(updated);
 
-      // 폴더 이동한 경우 양쪽 card_count 갱신
       if (_currentFolderId != widget.folderId) {
         await DatabaseHelper.instance.moveCard(updated.id!, _currentFolderId);
         await DatabaseHelper.instance
@@ -244,26 +272,6 @@ class _CardEditScreenState extends State<CardEditScreen> {
     return months[month - 1];
   }
 
-  Future<void> _showFolderPicker() async {
-    final folders = await DatabaseHelper.instance.getAllFolders();
-    if (!mounted) return;
-    final selected = await showDialog<Folder>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('폴더 이동'),
-        children: folders.map((f) {
-          return SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, f),
-            child: Text(f.name),
-          );
-        }).toList(),
-      ),
-    );
-    if (selected != null) {
-      setState(() => _currentFolderId = selected.id!);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -281,6 +289,28 @@ class _CardEditScreenState extends State<CardEditScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 폴더 선택 드롭다운
+            if (_folders.isNotEmpty)
+              DropdownButtonFormField<int>(
+                initialValue: _folders.any((f) => f.id == _currentFolderId)
+                    ? _currentFolderId
+                    : null,
+                decoration: const InputDecoration(
+                  labelText: '폴더',
+                  border: OutlineInputBorder(),
+                ),
+                items: _folders.map((f) {
+                  return DropdownMenuItem(
+                    value: f.id,
+                    child: Text(f.name),
+                  );
+                }).toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _currentFolderId = v);
+                },
+              ),
+            const SizedBox(height: 16),
+
             // 앞면
             Text('앞면 (Question)',
                 style: Theme.of(context).textTheme.titleSmall),
@@ -320,13 +350,6 @@ class _CardEditScreenState extends State<CardEditScreen> {
               title: const Text('암기 완료'),
               value: _finished,
               onChanged: (v) => setState(() => _finished = v),
-            ),
-
-            // 폴더 이동
-            ListTile(
-              leading: const Icon(Icons.folder),
-              title: const Text('폴더 이동'),
-              onTap: _showFolderPicker,
             ),
           ],
         ),
@@ -368,7 +391,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
                         errorBuilder: (_, _, _) => Container(
                           height: 80,
                           width: 80,
-                          color: Colors.grey[300],
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
                           child: const Icon(Icons.broken_image),
                         ),
                       ),
@@ -380,12 +405,13 @@ class _CardEditScreenState extends State<CardEditScreen> {
                     child: GestureDetector(
                       onTap: () => _removeImage(images, ratios, index),
                       child: Container(
-                        decoration: const BoxDecoration(
-                          color: Colors.red,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.error,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.close,
-                            size: 18, color: Colors.white),
+                        child: Icon(Icons.close,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.onError),
                       ),
                     ),
                   ),
@@ -400,7 +426,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
                 height: 80,
                 width: 80,
                 decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
+                  border: Border.all(
+                      color: Theme.of(context).colorScheme.outline),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Icon(Icons.add_photo_alternate, size: 32),
