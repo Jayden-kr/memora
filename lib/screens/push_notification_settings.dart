@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
@@ -341,9 +342,14 @@ class _PushNotificationSettingsScreenState
                           if (!granted) {
                             if (!mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content:
-                                      Text('알림 권한이 필요합니다. 설정에서 허용해주세요.')),
+                              SnackBar(
+                                content:
+                                    const Text('알림 권한이 필요합니다.'),
+                                action: SnackBarAction(
+                                  label: '설정 열기',
+                                  onPressed: () => openAppSettings(),
+                                ),
+                              ),
                             );
                             return;
                           }

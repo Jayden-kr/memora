@@ -54,7 +54,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _loadData() async {
-    final folders = await DatabaseHelper.instance.getAllFolders();
+    final allFolders = await DatabaseHelper.instance.getAllFolders();
+    // 번들 폴더 제외 (카드를 직접 갖지 않으므로 잠금화면에 부적합)
+    final folders = allFolders.where((f) => !f.isBundle).toList();
     final settings = await LockScreenService.getSettings();
 
     setState(() {

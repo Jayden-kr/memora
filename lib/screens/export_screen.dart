@@ -23,6 +23,7 @@ class _ExportScreenState extends State<ExportScreen> {
   bool _loading = true;
   bool _exporting = false;
   String _progressMessage = '';
+  double _progressValue = 0.0;
 
   @override
   void initState() {
@@ -73,7 +74,11 @@ class _ExportScreenState extends State<ExportScreen> {
           folderIds: _selectedFolderIds.toList(),
           onProgress: (progress) {
             if (mounted) {
-              setState(() => _progressMessage = progress.message ?? '처리 중...');
+              final total = progress.total > 0 ? progress.total : 1;
+              setState(() {
+                _progressMessage = progress.message ?? '처리 중...';
+                _progressValue = progress.current / total;
+              });
             }
           },
         );
@@ -84,7 +89,11 @@ class _ExportScreenState extends State<ExportScreen> {
           folderIds: _selectedFolderIds.toList(),
           onProgress: (progress) {
             if (mounted) {
-              setState(() => _progressMessage = progress.message ?? '처리 중...');
+              final total = progress.totalFolders > 0 ? progress.totalFolders : 1;
+              setState(() {
+                _progressMessage = progress.message ?? '처리 중...';
+                _progressValue = progress.currentFolders / total;
+              });
             }
           },
         );
@@ -93,12 +102,17 @@ class _ExportScreenState extends State<ExportScreen> {
       // exported_files에 기록
       final file = File(outputPath);
       final fileSize = await file.length();
-      await DatabaseHelper.instance.insertExportedFile(
-        fileName: p.basename(outputPath),
-        filePath: outputPath,
-        fileSize: fileSize,
-        fileType: _fileType,
-      );
+      try {
+        await DatabaseHelper.instance.insertExportedFile(
+          fileName: p.basename(outputPath),
+          filePath: outputPath,
+          fileSize: fileSize,
+          fileType: _fileType,
+        );
+      } catch (dbErr) {
+        // DB 기록 실패 시 파일은 유지하되, 사용자에게 경고
+        debugPrint('[EXPORT] DB 기록 실패: $dbErr (파일은 저장됨: $outputPath)');
+      }
 
       if (!mounted) return;
       setState(() => _exporting = false);
@@ -132,13 +146,20 @@ class _ExportScreenState extends State<ExportScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _exporting
-              ? Center(
+              ? Padding(
+                  padding: const EdgeInsets.all(32),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const CircularProgressIndicator(),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 24),
+                      LinearProgressIndicator(value: _progressValue),
+                      const SizedBox(height: 12),
                       Text(_progressMessage),
+                      Text(
+                        '${(_progressValue * 100).toInt()}%',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                     ],
                   ),
                 )

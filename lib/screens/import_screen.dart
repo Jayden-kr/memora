@@ -85,9 +85,16 @@ class _ImportScreenState extends State<ImportScreen> {
     setState(() => _stage = _ImportStage.importing);
 
     // folderMapping 구성 (기존 폴더 선택 모드)
-    Map<int, int>? mapping;
-    if (_useExistingFolder && _folderMapping.isNotEmpty) {
-      mapping = _folderMapping;
+    // 매핑되지 않은 폴더는 null → 서비스에서 자동 새 폴더 생성
+    Map<int, int?>? mapping;
+    if (_useExistingFolder) {
+      mapping = {};
+      for (final f in _memkFolders) {
+        final memkId = (f['id'] as num?)?.toInt();
+        if (memkId != null && _selectedFolderNames.contains(f['name'])) {
+          mapping[memkId] = _folderMapping[memkId]; // null이면 새 폴더 생성
+        }
+      }
     }
 
     try {

@@ -80,7 +80,14 @@ class _FileListScreenState extends State<FileListScreen> {
       if (await f.exists()) {
         await f.delete();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[FILE_LIST] 파일 삭제 실패: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('파일 삭제 실패: $e')),
+        );
+      }
+    }
 
     await _loadFiles();
   }
@@ -193,7 +200,9 @@ class _FileListScreenState extends State<FileListScreen> {
                         [
                           _formatFileSize(fileSize),
                           if (createdAt != null)
-                            createdAt.substring(0, 10),
+                            createdAt.length >= 10
+                                ? createdAt.substring(0, 10)
+                                : createdAt,
                         ].join(' · '),
                       ),
                       onTap: () => _showFileOptions(file),

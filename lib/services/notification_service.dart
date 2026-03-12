@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -17,6 +16,11 @@ class NotificationNavEvent {
 
 class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
+
+  // 알림 ID 계산용 상수 (충돌 방지)
+  static const _dayMultiplier = 10;          // 고정 알림: id * _dayMultiplier + day(0~6)
+  static const _intervalMultiplier = 10000;  // 간격 알림: id * _intervalMultiplier + slot
+  static const _intervalDayMultiplier = 10;  // 간격+요일: id * _intervalMultiplier + slot * _intervalDayMultiplier + day
 
   /// 알림 탭 → 직접 네비게이션 콜백 (main.dart에서 등록)
   static Future<void> Function(NotificationNavEvent)? onNavigate;
@@ -101,7 +105,7 @@ class NotificationService {
 
   /// 즉시 테스트 알림 전송 (푸시알림 설정의 폴더 반영)
   static Future<void> showTestNotification() async {
-    String? title;
+    String title = 'Memora';
     String body = '카드를 복습할 시간입니다!';
     String? payload;
 
@@ -113,16 +117,13 @@ class NotificationService {
         folderId = alarms.first['folder_id'] as int?;
       }
 
-      final List cards;
-      if (folderId != null) {
-        cards = await DatabaseHelper.instance.getCardsByFolderId(folderId,
-            limit: 100);
-      } else {
-        cards = await DatabaseHelper.instance.getAllCards(limit: 100);
-      }
+      // DB에서 랜덤 1개만 효율적으로 조회
+      final card = await DatabaseHelper.instance.getRandomCard(folderId: folderId);
 
-      if (cards.isNotEmpty) {
-        final card = cards[Random().nextInt(cards.length)];
+      if (card != null) {
+        // 폴더명을 제목에 표시
+        final folder = await DatabaseHelper.instance.getFolderById(card.folderId);
+        if (folder != null) title = folder.name;
         body = card.question.isNotEmpty ? card.question : '(내용 없음)';
         payload = '${card.folderId}:${card.id}';
       }
@@ -210,24 +211,7 @@ class NotificationService {
     int? folderId,
     bool soundEnabled = true,
   }) async {
-    String? title;
-    String body = '카드를 복습할 시간입니다!';
-    String? payload;
-
-    try {
-      final List cards;
-      if (folderId != null) {
-        cards = await DatabaseHelper.instance.getCardsByFolderId(folderId,
-            limit: 100);
-      } else {
-        cards = await DatabaseHelper.instance.getAllCards(limit: 100);
-      }
-      if (cards.isNotEmpty) {
-        final card = cards[Random().nextInt(cards.length)];
-        body = card.question.isNotEmpty ? card.question : '(내용 없음)';
-        payload = '${card.folderId}:${card.id}';
-      }
-    } catch (_) {}
+    final content = await _buildNotificationContent(folderId: folderId);
 
     final notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
@@ -257,13 +241,13 @@ class NotificationService {
 
       await _plugin.zonedSchedule(
         id,
-        title,
-        body,
+        content.title,
+        content.body,
         scheduled,
         notificationDetails,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         matchDateTimeComponents: DateTimeComponents.time,
-        payload: payload,
+        payload: content.payload,
       );
     } else {
       for (final day in days) {
@@ -277,16 +261,16 @@ class NotificationService {
           now,
         );
 
-        final notifId = id * 10 + day;
+        final notifId = id * _dayMultiplier + day;
         await _plugin.zonedSchedule(
           notifId,
-          title,
-          body,
+          content.title,
+          content.body,
           scheduled,
           notificationDetails,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
-          payload: payload,
+          payload: content.payload,
         );
       }
     }
@@ -315,6 +299,24 @@ class NotificationService {
     return scheduled;
   }
 
+  /// 알림용 카드 정보 조회 (중복 코드 제거용 헬퍼)
+  static Future<({String title, String body, String? payload})>
+      _buildNotificationContent({int? folderId}) async {
+    String title = 'Memora';
+    String body = '카드를 복습할 시간입니다!';
+    String? payload;
+    try {
+      final card = await DatabaseHelper.instance.getRandomCard(folderId: folderId);
+      if (card != null) {
+        final folder = await DatabaseHelper.instance.getFolderById(card.folderId);
+        if (folder != null) title = folder.name;
+        body = card.question.isNotEmpty ? card.question : '(내용 없음)';
+        payload = '${card.folderId}:${card.id}';
+      }
+    } catch (_) {}
+    return (title: title, body: body, payload: payload);
+  }
+
   /// 간격 반복 알림 스케줄링
   static Future<void> scheduleIntervalNotifications({
     required int id,
@@ -337,17 +339,6 @@ class NotificationService {
       slots.add((hour: m ~/ 60, minute: m % 60));
     }
 
-    // 카드 풀 가져오기
-    List cards = [];
-    try {
-      if (folderId != null) {
-        cards = await DatabaseHelper.instance.getCardsByFolderId(folderId,
-            limit: 200);
-      } else {
-        cards = await DatabaseHelper.instance.getAllCards(limit: 200);
-      }
-    } catch (_) {}
-
     final notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
         'review_notification_channel',
@@ -360,24 +351,13 @@ class NotificationService {
       ),
     );
 
-    final rng = Random();
     final now = tz.TZDateTime.now(tz.local);
 
     for (int i = 0; i < slots.length; i++) {
       final slot = slots[i];
-
-      // 랜덤 카드 선택
-      String? title;
-      String body = '카드를 복습할 시간입니다!';
-      String? payload;
-      if (cards.isNotEmpty) {
-        final card = cards[rng.nextInt(cards.length)];
-        body = card.question.isNotEmpty ? card.question : '(내용 없음)';
-        payload = '${card.folderId}:${card.id}';
-      }
+      final content = await _buildNotificationContent(folderId: folderId);
 
       if (days == null || days.isEmpty || days.length == 7) {
-        // 매일 반복
         var scheduled = tz.TZDateTime(
           tz.local, now.year, now.month, now.day, slot.hour, slot.minute,
         );
@@ -385,27 +365,26 @@ class NotificationService {
           scheduled = scheduled.add(const Duration(days: 1));
         }
 
-        final notifId = id * 10000 + i;
+        final notifId = id * _intervalMultiplier + i;
         await _plugin.zonedSchedule(
-          notifId, title, body, scheduled, notificationDetails,
+          notifId, content.title, content.body, scheduled, notificationDetails,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
           matchDateTimeComponents: DateTimeComponents.time,
-          payload: payload,
+          payload: content.payload,
         );
       } else {
-        // 특정 요일만
         for (final day in days) {
           final dartWeekday = day == 0 ? DateTime.sunday : day;
           final scheduled = _nextInstanceOfWeekdayTime(
             dartWeekday, slot.hour, slot.minute, now,
           );
 
-          final notifId = id * 10000 + i * 10 + day;
+          final notifId = id * _intervalMultiplier + i * _intervalDayMultiplier + day;
           await _plugin.zonedSchedule(
-            notifId, title, body, scheduled, notificationDetails,
+            notifId, content.title, content.body, scheduled, notificationDetails,
             androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
-            payload: payload,
+            payload: content.payload,
           );
         }
       }
@@ -415,7 +394,7 @@ class NotificationService {
   static Future<void> cancelAlarm(int id, {Set<int>? days}) async {
     if (days != null && days.isNotEmpty && days.length < 7) {
       for (final day in days) {
-        await _plugin.cancel(id * 10 + day);
+        await _plugin.cancel(id * _dayMultiplier + day);
       }
     } else {
       await _plugin.cancel(id);
@@ -425,13 +404,13 @@ class NotificationService {
   static Future<void> cancelNotification(int id) async {
     await _plugin.cancel(id);
     for (int day = 0; day <= 6; day++) {
-      await _plugin.cancel(id * 10 + day);
+      await _plugin.cancel(id * _dayMultiplier + day);
     }
     // 간격 모드 알림 취소 (최대 300 슬롯)
     for (int slot = 0; slot < 300; slot++) {
-      await _plugin.cancel(id * 10000 + slot);
+      await _plugin.cancel(id * _intervalMultiplier + slot);
       for (int day = 0; day <= 6; day++) {
-        await _plugin.cancel(id * 10000 + slot * 10 + day);
+        await _plugin.cancel(id * _intervalMultiplier + slot * _intervalDayMultiplier + day);
       }
     }
   }

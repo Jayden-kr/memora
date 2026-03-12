@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +12,11 @@ import '../database/database_helper.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+
+/// Isolate용 ZIP 디코딩 (top-level 함수)
+Archive _decodeZip(List<int> bytes) {
+  return ZipDecoder().decodeBytes(bytes, verify: false);
+}
 
 /// Import 진행 상태
 class ImportProgress {
@@ -67,7 +73,7 @@ class MemkImportService {
   /// ZIP에서 folders.json만 읽어 폴더 목록 반환 (UI에서 선택용)
   Future<List<Map<String, dynamic>>> readFolderList(String filePath) async {
     final bytes = await File(filePath).readAsBytes();
-    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
+    final archive = await compute(_decodeZip, bytes);
 
     for (final file in archive.files) {
       if (file.name == AppConstants.memkFoldersJson && file.isFile) {
@@ -85,7 +91,7 @@ class MemkImportService {
     required String filePath,
     required List<String> selectedFolderNames,
     required void Function(ImportProgress) onProgress,
-    Map<int, int>? folderMapping,
+    Map<int, int?>? folderMapping,
   }) async {
     final stopwatch = Stopwatch()..start();
     final db = DatabaseHelper.instance;
@@ -99,9 +105,9 @@ class MemkImportService {
 
     onProgress(const ImportProgress(phase: 'parsing', message: '파일 분석 중...'));
 
-    // ZIP 디코드
+    // ZIP 디코드 (Isolate에서 처리하여 UI 블로킹 방지)
     final bytes = await File(filePath).readAsBytes();
-    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
+    final archive = await compute(_decodeZip, bytes);
 
     // ZIP 파일 인덱스 (이름 → ArchiveFile)
     final zipFileIndex = <String, ArchiveFile>{};
@@ -116,9 +122,17 @@ class MemkImportService {
     if (foldersFile == null) {
       return ImportResult(duration: stopwatch.elapsed);
     }
-    final foldersJson =
-        jsonDecode(utf8.decode(foldersFile.content as List<int>))
-            as List<dynamic>;
+    List<dynamic> foldersJson;
+    try {
+      foldersJson =
+          jsonDecode(utf8.decode(foldersFile.content as List<int>))
+              as List<dynamic>;
+    } catch (e) {
+      return ImportResult(
+        errors: 1,
+        duration: stopwatch.elapsed,
+      );
+    }
 
     // 선택된 폴더만 필터 + 폴더 ID 매핑
     final selectedFolderSet = selectedFolderNames.toSet();
@@ -134,11 +148,15 @@ class MemkImportService {
       final memkFolderId = (folderData['id'] as num?)?.toInt();
       if (memkFolderId == null) continue;
 
-      // folderMapping이 있으면 해당 매핑 사용
+      // folderMapping이 있으면 해당 매핑 사용 (null 값은 새 폴더 생성으로 fallback)
       if (folderMapping != null && folderMapping.containsKey(memkFolderId)) {
-        folderIdMap[memkFolderId] = folderMapping[memkFolderId]!;
-        mergedFolders++;
-        continue;
+        final mappedId = folderMapping[memkFolderId];
+        if (mappedId != null) {
+          folderIdMap[memkFolderId] = mappedId;
+          mergedFolders++;
+          continue;
+        }
+        // mappedId가 null이면 아래 로직에서 새 폴더 생성
       }
 
       final existingFolder = await db.getFolderByName(name);
@@ -177,9 +195,20 @@ class MemkImportService {
         duration: stopwatch.elapsed,
       );
     }
-    final cardsJson =
-        jsonDecode(utf8.decode(cardsFile.content as List<int>))
-            as List<dynamic>;
+    List<dynamic> cardsJson;
+    try {
+      cardsJson =
+          jsonDecode(utf8.decode(cardsFile.content as List<int>))
+              as List<dynamic>;
+    } catch (e) {
+      stopwatch.stop();
+      return ImportResult(
+        newFolders: newFolders,
+        mergedFolders: mergedFolders,
+        errors: 1,
+        duration: stopwatch.elapsed,
+      );
+    }
 
     // 선택된 폴더의 카드만 필터
     final selectedCards = <Map<String, dynamic>>[];

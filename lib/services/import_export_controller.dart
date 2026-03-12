@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import '../services/memk_import_service.dart';
@@ -13,6 +15,9 @@ class ImportExportController {
 
   final _importService = MemkImportService();
   final _exportService = MemkExportService();
+
+  // 동시 실행 방지 락
+  Completer<void>? _operationLock;
 
   // 상태
   bool isRunning = false;
@@ -71,9 +76,11 @@ class ImportExportController {
   Future<void> startImport({
     required String filePath,
     required List<String> selectedFolderNames,
-    Map<int, int>? folderMapping,
+    Map<int, int?>? folderMapping,
   }) async {
-    if (isRunning) return;
+    // 동시 실행 방지 (Completer 기반 락)
+    if (_operationLock != null && !_operationLock!.isCompleted) return;
+    _operationLock = Completer<void>();
 
     isRunning = true;
     currentOperation = 'import';
@@ -107,6 +114,7 @@ class ImportExportController {
       lastImportResult = result;
       isRunning = false;
       currentOperation = null;
+      _operationLock?.complete();
       _notify();
 
       await _complete(
@@ -116,6 +124,7 @@ class ImportExportController {
     } catch (e) {
       isRunning = false;
       currentOperation = null;
+      _operationLock?.complete();
       _notify();
       await _cancel();
       rethrow;
@@ -128,7 +137,8 @@ class ImportExportController {
     required String outputPath,
     List<int>? folderIds,
   }) async {
-    if (isRunning) return;
+    if (_operationLock != null && !_operationLock!.isCompleted) return;
+    _operationLock = Completer<void>();
 
     isRunning = true;
     currentOperation = 'export';
@@ -155,12 +165,14 @@ class ImportExportController {
 
       isRunning = false;
       currentOperation = null;
+      _operationLock?.complete();
       _notify();
 
       await _complete('Export 완료', '파일이 생성되었습니다.');
     } catch (e) {
       isRunning = false;
       currentOperation = null;
+      _operationLock?.complete();
       _notify();
       await _cancel();
       rethrow;

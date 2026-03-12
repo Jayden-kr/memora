@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -34,6 +35,20 @@ class PdfExportService {
     return _koreanFont!;
   }
 
+  /// 이미지 파일을 비동기로 미리 읽어 캐싱
+  Future<Map<String, Uint8List>> _preloadImages(List<String> paths) async {
+    final cache = <String, Uint8List>{};
+    for (final path in paths) {
+      try {
+        final file = File(path);
+        if (await file.exists()) {
+          cache[path] = await file.readAsBytes();
+        }
+      } catch (_) {}
+    }
+    return cache;
+  }
+
   /// 선택된 폴더의 카드를 PDF로 내보내기
   Future<void> exportPdf({
     required String outputPath,
@@ -56,8 +71,15 @@ class PdfExportService {
       onProgress(PdfExportProgress(
         currentFolders: processedFolders,
         totalFolders: folderIds.length,
-        message: '${folder.name} 처리 중...',
+        message: '${folder.name} 처리 중... (이미지 로딩)',
       ));
+
+      // 모든 이미지를 비동기로 미리 읽기
+      final allImagePaths = <String>[];
+      for (final card in cards) {
+        allImagePaths.addAll(card.answerImagePaths);
+      }
+      final imageCache = await _preloadImages(allImagePaths);
 
       // MultiPage로 자동 페이지네이션
       doc.addPage(
@@ -89,6 +111,7 @@ class PdfExportService {
                     card.answer,
                     card.answerImagePaths,
                     font,
+                    imageCache,
                   ))
               .toList(),
           footer: (context) => pw.Container(
@@ -118,6 +141,7 @@ class PdfExportService {
     String answer,
     List<String> imagePaths,
     pw.Font font,
+    Map<String, Uint8List> imageCache,
   ) {
     return pw.Container(
       margin: const pw.EdgeInsets.only(bottom: 12),
@@ -147,19 +171,16 @@ class PdfExportService {
               padding: const pw.EdgeInsets.only(top: 4),
               child: pw.Row(
                 children: imagePaths.take(3).map((path) {
-                  try {
-                    final file = File(path);
-                    if (file.existsSync()) {
-                      final bytes = file.readAsBytesSync();
-                      final image = pw.MemoryImage(bytes);
-                      return pw.Container(
-                        width: 80,
-                        height: 80,
-                        margin: const pw.EdgeInsets.only(right: 6),
-                        child: pw.Image(image, fit: pw.BoxFit.contain),
-                      );
-                    }
-                  } catch (_) {}
+                  final bytes = imageCache[path];
+                  if (bytes != null) {
+                    final image = pw.MemoryImage(bytes);
+                    return pw.Container(
+                      width: 80,
+                      height: 80,
+                      margin: const pw.EdgeInsets.only(right: 6),
+                      child: pw.Image(image, fit: pw.BoxFit.contain),
+                    );
+                  }
                   return pw.SizedBox.shrink();
                 }).toList(),
               ),

@@ -9,6 +9,7 @@ import '../models/folder.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
 import 'bundle_folder_screen.dart';
+import 'card_edit_screen.dart';
 import 'card_list_screen.dart';
 import 'export_screen.dart';
 import 'file_list_screen.dart';
@@ -66,7 +67,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadFolders() async {
     final folders = await DatabaseHelper.instance.getAllFolders();
-    final totalCards = await DatabaseHelper.instance.getTotalCardCount();
+    // 폴더별 card_count 합계로 계산 (별도 COUNT 쿼리 불필요)
+    final totalCards = folders.fold<int>(0, (sum, f) => sum + f.cardCount);
     if (!mounted) return;
     setState(() {
       _folders = _sortFolders(folders);
@@ -97,6 +99,36 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _showFolderPickerForNewCard() async {
+    final nonBundleFolders = _folders.where((f) => !f.isBundle).toList();
+    if (nonBundleFolders.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('폴더를 먼저 만들어주세요.')),
+      );
+      return;
+    }
+    final selected = await showDialog<Folder>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('카드를 추가할 폴더'),
+        children: nonBundleFolders.map((folder) {
+          return SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, folder),
+            child: Text('${folder.name} (${folder.cardCount}장)'),
+          );
+        }).toList(),
+      ),
+    );
+    if (selected == null || !mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CardEditScreen(folderId: selected.id!),
+      ),
+    );
+    _loadFolders();
+  }
+
   Future<void> _showFabBottomSheet() async {
     showModalBottomSheet(
       context: context,
@@ -109,9 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
               title: const Text('새 카드 추가'),
               onTap: () {
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('폴더를 먼저 선택해주세요.')),
-                );
+                _showFolderPickerForNewCard();
               },
             ),
             ListTile(

@@ -186,7 +186,9 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                       final selected = _selectedFolderIds.contains(folder.id);
                       return CheckboxListTile(
                         title: Text(folder.name),
-                        subtitle: Text('${folder.cardCount}장'),
+                        subtitle: Text(available
+                            ? '${folder.cardCount}장'
+                            : '${folder.cardCount}장 · 다른 묶음에 포함됨'),
                         value: selected,
                         enabled: available,
                         onChanged: available

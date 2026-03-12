@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'database/database_helper.dart';
-import 'models/folder.dart';
 import 'screens/card_list_screen.dart';
 import 'services/lock_screen_service.dart';
 import 'services/notification_service.dart';
@@ -32,10 +31,6 @@ void main() async {
   // 알림 권한 요청 + 재스케줄링
   NotificationService.requestPermission().then((_) {
     NotificationService.rescheduleAll();
-    // 테스트 알림 (3초 후) — 확인 후 제거
-    Future.delayed(const Duration(seconds: 3), () {
-      NotificationService.showTestNotification();
-    });
   });
 
   // 알림 탭 → 카드 네비게이션 콜백 등록

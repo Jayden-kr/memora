@@ -68,11 +68,8 @@ class MemkExportService {
     int processed = 0;
 
     if (folderIds != null) {
-      // 선택된 폴더의 카드만
-      int totalCards = 0;
-      for (final folderId in folderIds) {
-        totalCards += await db.countCardsByFolderId(folderId);
-      }
+      // 선택된 폴더의 카드만 (단일 쿼리로 총 수 조회)
+      int totalCards = await db.countCardsByFolderIds(folderIds);
       for (final folderId in folderIds) {
         const batchSize = 500;
         int offset = 0;

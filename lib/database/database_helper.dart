@@ -426,6 +426,17 @@ class DatabaseHelper {
     )) ?? 0;
   }
 
+  /// 여러 폴더의 카드 수를 한번에 조회 (N+1 방지)
+  Future<int> countCardsByFolderIds(List<int> folderIds) async {
+    if (folderIds.isEmpty) return 0;
+    final db = await database;
+    final placeholders = List.filled(folderIds.length, '?').join(',');
+    return Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id IN ($placeholders)',
+      folderIds,
+    )) ?? 0;
+  }
+
   Future<int> moveCard(int cardId, int newFolderId) async {
     final db = await database;
     return await db.update(
@@ -469,6 +480,22 @@ class DatabaseHelper {
       orderBy: 'folder_id, sequence',
     );
     return maps.map((m) => CardModel.fromDb(m)).toList();
+  }
+
+  /// 랜덤 카드 1개 조회 (알림용, 효율적)
+  Future<CardModel?> getRandomCard({int? folderId}) async {
+    final db = await database;
+    final where = folderId != null ? 'folder_id = ?' : null;
+    final whereArgs = folderId != null ? [folderId] : null;
+    final maps = await db.query(
+      AppConstants.tableCards,
+      where: where,
+      whereArgs: whereArgs,
+      orderBy: 'RANDOM()',
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return CardModel.fromDb(maps.first);
   }
 
   /// 전체 카드 수

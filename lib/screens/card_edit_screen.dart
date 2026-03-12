@@ -179,10 +179,14 @@ class _CardEditScreenState extends State<CardEditScreen> {
     }
 
     final now = DateTime.now();
+    final offset = now.timeZoneOffset;
+    final tzSign = offset.isNegative ? '-' : '+';
+    final tzHours = offset.inHours.abs().toString().padLeft(2, '0');
+    final tzMins = (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
     final modifiedStr =
         '${_monthName(now.month)} ${now.day.toString().padLeft(2, '0')}, ${now.year} '
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} '
-        'GMT+09:00';
+        'GMT$tzSign$tzHours:$tzMins';
 
     if (_isEditing) {
       final updated = widget.existingCard!.copyWith(

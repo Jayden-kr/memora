@@ -85,10 +85,17 @@ class _CardListScreenState extends State<CardListScreen> {
       'sort_order_${widget.allCards ? "all" : widget.folder.id}';
 
   Future<void> _initLoad() async {
-    // 저장된 정렬 순서 불러오기
+    // 저장된 정렬 순서 및 설정값 불러오기
     final settings = await DatabaseHelper.instance.getAllSettings();
     final saved = settings[_sortSettingKey];
     if (saved != null) _sortOrder = saved;
+
+    // 설정 화면에서 지정한 기본값 적용
+    final foldSetting = settings[AppConstants.settingAnswerFold];
+    if (foldSetting == 'collapsed') _allAnswersFolded = true;
+
+    final visSetting = settings[AppConstants.settingAnswerVisibility];
+    if (visSetting == 'hidden') _allAnswersHidden = true;
 
     if (_isNotificationMode) {
       await _loadAllAndScrollToTarget();
@@ -179,9 +186,9 @@ class _CardListScreenState extends State<CardListScreen> {
     if (_isNotificationMode) {
       final positions = _itemPositionsListener.itemPositions.value;
       if (positions.isEmpty) return 1;
-      final firstVisible = positions
-          .where((p) => p.itemTrailingEdge > 0)
-          .reduce((a, b) => a.index < b.index ? a : b);
+      final visible = positions.where((p) => p.itemTrailingEdge > 0);
+      if (visible.isEmpty) return 1;
+      final firstVisible = visible.reduce((a, b) => a.index < b.index ? a : b);
       return firstVisible.index + 1;
     }
 
