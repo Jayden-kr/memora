@@ -6,6 +6,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
+import '../services/notification_service.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
 import 'bundle_folder_screen.dart';
@@ -28,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Folder> _folders = [];
   bool _loading = true;
   StreamSubscription<List<SharedMediaFile>>? _intentSub;
+  StreamSubscription<NotificationNavEvent>? _notifSub;
   String _sortMode = 'sequence'; // sequence, name_asc, oldest, newest
   int _totalCardCount = 0;
 
@@ -36,12 +38,49 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadFolders();
     _initSharingIntent();
+    _initNotificationListener();
   }
 
   @override
   void dispose() {
+    _notifSub?.cancel();
     _intentSub?.cancel();
     super.dispose();
+  }
+
+  void _initNotificationListener() {
+    // Stream으로 실시간 알림 탭 이벤트 수신
+    _notifSub = NotificationService.onNotificationTapped.listen((event) {
+      debugPrint('[HOME] notification stream event: folder=${event.folderId} card=${event.cardId}');
+      _navigateToCard(event.folderId, event.cardId);
+    });
+
+    // Cold-start: 앱 시작 시 보류된 이벤트 처리
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = NotificationService.consumePendingEvent();
+      if (pending != null) {
+        debugPrint('[HOME] pending event: folder=${pending.folderId} card=${pending.cardId}');
+        _navigateToCard(pending.folderId, pending.cardId);
+      }
+    });
+  }
+
+  Future<void> _navigateToCard(int folderId, int cardId) async {
+    debugPrint('[HOME] _navigateToCard: folder=$folderId card=$cardId');
+    final folder = await DatabaseHelper.instance.getFolderById(folderId);
+    if (folder == null || !mounted) {
+      debugPrint('[HOME] folder null or not mounted');
+      return;
+    }
+
+    debugPrint('[HOME] pushing CardListScreen for ${folder.name}');
+    if (!mounted) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => CardListScreen(
+        folder: folder,
+        scrollToCardId: cardId,
+      ),
+    ));
   }
 
   void _initSharingIntent() {

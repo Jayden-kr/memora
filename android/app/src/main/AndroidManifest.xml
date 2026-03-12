@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <application
-        android:label="amki_wang"
+        android:label="Memora"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -67,6 +67,17 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Lock screen card overlay for study" />
+        </service>
+
+        <!-- Import/Export Foreground Service -->
+        <service
+            android:name=".ImportExportService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Import/Export file processing with progress notification" />
         </service>
 
         <!-- BOOT_COMPLETED 리시버 -->

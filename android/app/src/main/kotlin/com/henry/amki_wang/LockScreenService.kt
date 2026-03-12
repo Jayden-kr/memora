@@ -4,9 +4,7 @@ import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteDatabase
-import android.graphics.BitmapFactory
-import android.graphics.Color
-import android.graphics.PixelFormat
+import android.graphics.*
 import android.os.*
 import android.provider.Settings
 import android.util.Log
@@ -25,6 +23,10 @@ class LockScreenService : Service() {
     private var screenReceiver: ScreenReceiver? = null
     private var overlayView: View? = null
     private var windowManager: WindowManager? = null
+
+    // Pretendard 폰트
+    private var fontRegular: Typeface? = null
+    private var fontBold: Typeface? = null
 
     private data class CardData(
         val id: Int,
@@ -46,6 +48,13 @@ class LockScreenService : Service() {
     private var reversed: Boolean = false
     private var bgColor: Int = 0xFF1A1A2E.toInt()
 
+    // Coral Orange 테마 색상
+    private val coralPrimary = Color.parseColor("#FF6B6B")
+    private val coralLight = Color.parseColor("#FFA8A8")
+    private val textWhite = Color.parseColor("#F5F5F5")
+    private val textGray = Color.parseColor("#AAAAAA")
+    private val textDimGray = Color.parseColor("#666666")
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -53,6 +62,19 @@ class LockScreenService : Service() {
         Log.d(TAG, "onCreate")
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
+        loadFonts()
+    }
+
+    private fun loadFonts() {
+        try {
+            fontRegular = Typeface.createFromAsset(assets, "fonts/Pretendard-Regular.otf")
+            fontBold = Typeface.createFromAsset(assets, "fonts/Pretendard-Bold.otf")
+            Log.d(TAG, "Pretendard fonts loaded")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load Pretendard fonts, using default", e)
+            fontRegular = Typeface.DEFAULT
+            fontBold = Typeface.DEFAULT_BOLD
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -67,7 +89,6 @@ class LockScreenService : Service() {
                     return START_NOT_STICKY
                 }
                 else -> {
-                    // START_SERVICE 또는 초기 시작
                     loadSettings()
                     val notification = createNotification()
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -125,9 +146,9 @@ class LockScreenService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("암기왕 잠금화면")
+            .setContentTitle("Memora 잠금화면")
             .setContentText("잠금화면 학습 활성화됨")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setSilent(true)
@@ -137,7 +158,9 @@ class LockScreenService : Service() {
     private fun registerScreenReceiver() {
         if (screenReceiver != null) return
         screenReceiver = ScreenReceiver()
-        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
@@ -166,17 +189,37 @@ class LockScreenService : Service() {
         randomOrder = prefs.getBoolean("random_order", true)
         reversed = prefs.getBoolean("reversed", false)
         bgColor = prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
-        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter")
+        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, bg=$bgColor")
+    }
+
+    /**
+     * DB 파일을 찾는다. Flutter path_provider 버전에 따라 경로가 다를 수 있으므로
+     * 여러 경로를 시도한다.
+     */
+    private fun findDbFile(): java.io.File? {
+        val dataDir = applicationInfo.dataDir
+        val candidates = listOf(
+            java.io.File(dataDir, "app_flutter/amki_wang.db"),
+            java.io.File(filesDir, "app_flutter/amki_wang.db"),
+            java.io.File(filesDir, "amki_wang.db"),
+            getDatabasePath("amki_wang.db")
+        )
+        for (candidate in candidates) {
+            Log.d(TAG, "Trying DB path: ${candidate.path} exists=${candidate.exists()}")
+            if (candidate.exists()) return candidate
+        }
+        Log.e(TAG, "DB file not found in any candidate path!")
+        return null
     }
 
     private fun loadCardsFromDb() {
-        // Flutter sqflite stores DB in app_flutter/ (getApplicationDocumentsDirectory), not databases/
-        val dbFile = java.io.File(filesDir, "app_flutter/amki_wang.db")
-        if (!dbFile.exists()) {
-            Log.w(TAG, "DB file not found: ${dbFile.path}")
+        val dbFile = findDbFile()
+        if (dbFile == null) {
             cards = emptyList()
             return
         }
+        Log.d(TAG, "Using DB: ${dbFile.path}")
+
         var db: SQLiteDatabase? = null
         try {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
@@ -234,7 +277,10 @@ class LockScreenService : Service() {
             Log.w(TAG, "No overlay permission")
             return
         }
-        if (overlayView != null) return
+        if (overlayView != null) {
+            Log.d(TAG, "Overlay already showing, skip")
+            return
+        }
 
         loadSettings()
         loadCardsFromDb()
@@ -280,92 +326,195 @@ class LockScreenService : Service() {
             setBackgroundColor(bgColor)
         }
 
-        // 상단 바: 진행률
-        val topBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding((16 * density).toInt(), (48 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
-            gravity = Gravity.CENTER_VERTICAL
+        // ─── Coral 프로그레스 바 ───
+        val progressBar = View(this).apply {
+            tag = "progressBar"
+            setBackgroundColor(coralPrimary)
         }
-        val progressText = TextView(this).apply {
-            tag = "progressText"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-        }
-        topBar.addView(progressText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-        // 카드 영역
-        val cardContainer = FrameLayout(this).apply {
-            tag = "cardContainer"
+        val progressBarBg = FrameLayout(this).apply {
+            tag = "progressBarBg"
+            setBackgroundColor(Color.parseColor("#33FFFFFF"))
+            addView(progressBar, FrameLayout.LayoutParams(0, dp(2)))
         }
 
+        // ─── 카드 영역 ───
         val scrollView = ScrollView(this).apply {
             tag = "cardScroll"
-            setPadding((24 * density).toInt(), (24 * density).toInt(), (24 * density).toInt(), (24 * density).toInt())
+            setPadding(dp(24), dp(10), dp(24), dp(8))
+            isVerticalScrollBarEnabled = false
         }
+
         val cardContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             tag = "cardContent"
         }
+
+        // QUESTION 라벨
         val labelText = TextView(this).apply {
             tag = "labelText"
-            setTextColor(Color.parseColor("#AAAAAA"))
-            textSize = 12f
+            setTextColor(coralPrimary)
+            textSize = 11f
+            typeface = fontBold
+            isAllCaps = true
+            letterSpacing = 0.1f
         }
+
+        // Question 텍스트
         val mainText = TextView(this).apply {
             tag = "mainText"
-            setTextColor(Color.WHITE)
-            textSize = 22f
-            setPadding(0, (16 * density).toInt(), 0, 0)
+            setTextColor(textWhite)
+            textSize = 17f
+            typeface = fontRegular
+            setPadding(0, dp(6), 0, 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
         }
+
+        // 질문 이미지 컨테이너
         val imageContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             tag = "imageContainer"
-            setPadding(0, (24 * density).toInt(), 0, 0)
+            setPadding(0, dp(10), 0, 0)
         }
-        val hintText = TextView(this).apply {
-            tag = "hintText"
-            setTextColor(Color.parseColor("#666666"))
-            textSize = 12f
-            gravity = Gravity.CENTER
-            setPadding(0, (48 * density).toInt(), 0, 0)
+
+        // ─── Answer 구분선 ───
+        val answerDivider = View(this).apply {
+            setBackgroundColor(Color.parseColor("#33FFFFFF"))
         }
+
+        // ANSWER 라벨
+        val answerLabel = TextView(this).apply {
+            tag = "answerLabel"
+            setTextColor(coralPrimary)
+            textSize = 11f
+            typeface = fontBold
+            isAllCaps = true
+            letterSpacing = 0.1f
+        }
+
+        // Answer 텍스트
+        val answerText = TextView(this).apply {
+            tag = "answerText"
+            setTextColor(textWhite)
+            textSize = 17f
+            typeface = fontRegular
+            setPadding(0, dp(6), 0, 0)
+            setLineSpacing(dp(2).toFloat(), 1f)
+        }
+
+        // Answer 이미지 컨테이너
+        val answerImageContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            tag = "answerImageContainer"
+            setPadding(0, dp(10), 0, 0)
+        }
+
         cardContent.addView(labelText)
         cardContent.addView(mainText)
         cardContent.addView(imageContainer)
-        cardContent.addView(hintText)
-        scrollView.addView(cardContent)
-        cardContainer.addView(scrollView, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
-        ))
+        cardContent.addView(answerDivider, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
+            topMargin = dp(16)
+            bottomMargin = dp(12)
+        })
+        // Answer 영역을 감싸는 컨테이너 (좌우 스와이프 → 카드 넘기기)
+        val answerContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            tag = "answerContainer"
+        }
+        answerContainer.addView(answerLabel)
+        answerContainer.addView(answerText)
+        answerContainer.addView(answerImageContainer)
 
-        // 하단: 잠금 해제 안내
-        val unlockBar = TextView(this).apply {
-            tag = "unlockBar"
-            text = "\u2191 위로 스와이프하여 잠금 해제"
-            setTextColor(Color.parseColor("#888888"))
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setPadding(0, (16 * density).toInt(), 0, (32 * density).toInt())
+        val cardGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (e1 == null) return false
+                val diffX = e2.x - e1.x
+                val diffY = e2.y - e1.y
+                if (abs(diffX) > abs(diffY) && abs(diffX) > 100 && abs(velocityX) > 100) {
+                    if (diffX < 0 && currentIndex < cards.size - 1) {
+                        currentIndex++
+                        updateCardDisplay()
+                    } else if (diffX > 0 && currentIndex > 0) {
+                        currentIndex--
+                        updateCardDisplay()
+                    }
+                    return true
+                }
+                return false
+            }
+        })
+        answerContainer.setOnTouchListener { _, event ->
+            cardGesture.onTouchEvent(event)
+            true
         }
 
-        root.addView(topBar, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP
-        ))
-        root.addView(cardContainer, FrameLayout.LayoutParams(
+        cardContent.addView(answerContainer)
+        scrollView.addView(cardContent)
+
+        // ─── 하단: 스와이프 잠금 해제 ───
+        val bottomContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+        }
+
+        val bottomDivider = View(this).apply {
+            setBackgroundColor(coralPrimary)
+        }
+        bottomContainer.addView(bottomDivider, LinearLayout.LayoutParams(dp(40), dp(3)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(8)
+        })
+
+        val swipeHint = TextView(this).apply {
+            text = "좌우로 스와이프하여 잠금 해제"
+            setTextColor(textDimGray)
+            textSize = 11f
+            typeface = fontRegular
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(48))
+        }
+        bottomContainer.addView(swipeHint)
+
+        // 하단 영역 좌우 스와이프 → 잠금 해제
+        val unlockGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (e1 == null) return false
+                val diffX = e2.x - e1.x
+                if (abs(diffX) > 80 && abs(velocityX) > 80) {
+                    dismissOverlay()
+                    return true
+                }
+                return false
+            }
+        })
+        bottomContainer.setOnTouchListener { _, event ->
+            unlockGesture.onTouchEvent(event)
+            true
+        }
+
+        // ─── 조합 ───
+        root.addView(progressBarBg, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, dp(2)
+        ).apply { topMargin = dp(44) })
+
+        root.addView(scrollView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
         ).apply {
-            topMargin = (80 * density).toInt()
-            bottomMargin = (60 * density).toInt()
+            topMargin = dp(48)
+            bottomMargin = dp(76)
         })
-        root.addView(unlockBar, FrameLayout.LayoutParams(
+
+        root.addView(bottomContainer, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM
         ))
 
         setupGestures(root)
-
         return root
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 
     private fun setupGestures(view: View) {
@@ -373,33 +522,21 @@ class LockScreenService : Service() {
             private val SWIPE_THRESHOLD = 100
             private val SWIPE_VELOCITY_THRESHOLD = 100
 
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                showingBack = !showingBack
-                updateCardDisplay()
-                return true
-            }
-
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
                 if (e1 == null) return false
                 val diffX = e2.x - e1.x
                 val diffY = e2.y - e1.y
 
-                if (abs(diffY) > abs(diffX) && diffY < -SWIPE_THRESHOLD && abs(velocityY) > SWIPE_VELOCITY_THRESHOLD) {
-                    dismissOverlay()
-                    return true
-                }
-
+                // 좌우 스와이프 → 카드 넘기기
                 if (abs(diffX) > abs(diffY) && abs(diffX) > SWIPE_THRESHOLD && abs(velocityX) > SWIPE_VELOCITY_THRESHOLD) {
                     if (diffX < 0) {
                         if (currentIndex < cards.size - 1) {
                             currentIndex++
-                            showingBack = false
                             updateCardDisplay()
                         }
                     } else {
                         if (currentIndex > 0) {
                             currentIndex--
-                            showingBack = false
                             updateCardDisplay()
                         }
                     }
@@ -420,55 +557,83 @@ class LockScreenService : Service() {
         if (cards.isEmpty()) return
 
         val card = cards[currentIndex]
-        val isFront = !showingBack
 
-        val text: String
-        val images: List<String>
-        val label: String
-        if (isFront xor reversed) {
-            text = card.question
-            images = card.questionImages
-            label = if (reversed) "정답" else "앞면"
+        // reversed 모드: 질문/답 순서 바꿈
+        val qText: String; val aText: String
+        val qImages: List<String>; val aImages: List<String>
+        val qLabel: String; val aLabel: String
+        if (!reversed) {
+            qText = card.question; aText = card.answer
+            qImages = card.questionImages; aImages = card.answerImages
+            qLabel = "QUESTION"; aLabel = "ANSWER"
         } else {
-            text = card.answer
-            images = card.answerImages
-            label = if (reversed) "질문" else "뒷면"
+            qText = card.answer; aText = card.question
+            qImages = card.answerImages; aImages = card.questionImages
+            qLabel = "ANSWER"; aLabel = "QUESTION"
         }
 
-        root.findViewWithTag<TextView>("progressText")?.text =
-            "${currentIndex + 1} / ${cards.size}"
-        root.findViewWithTag<TextView>("labelText")?.text = label
-        root.findViewWithTag<TextView>("mainText")?.text =
-            if (text.isEmpty()) "(내용 없음)" else text
-        root.findViewWithTag<TextView>("hintText")?.text =
-            "탭하여 ${if (showingBack) "앞면" else "뒷면"} 보기"
-
-        val imageContainer = root.findViewWithTag<LinearLayout>("imageContainer")
-        imageContainer?.removeAllViews()
-        if (images.isNotEmpty()) {
-            val density = resources.displayMetrics.density
-            for (path in images) {
-                val file = java.io.File(path)
-                if (!file.exists()) continue
-                try {
-                    val options = BitmapFactory.Options().apply {
-                        inSampleSize = 2
-                    }
-                    val bitmap = BitmapFactory.decodeFile(path, options) ?: continue
-                    val imageView = ImageView(this).apply {
-                        setImageBitmap(bitmap)
-                        scaleType = ImageView.ScaleType.FIT_CENTER
-                        adjustViewBounds = true
-                        val lp = LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT,
-                            LinearLayout.LayoutParams.WRAP_CONTENT
-                        )
-                        lp.bottomMargin = (12 * density).toInt()
-                        layoutParams = lp
-                    }
-                    imageContainer?.addView(imageView)
-                } catch (_: Exception) { }
+        // 프로그레스 바 업데이트
+        val progressBarBg = root.findViewWithTag<FrameLayout>("progressBarBg")
+        val progressBar = root.findViewWithTag<View>("progressBar")
+        if (progressBarBg != null && progressBar != null) {
+            progressBarBg.post {
+                val totalWidth = progressBarBg.width
+                val progress = if (cards.size > 1) {
+                    (totalWidth * (currentIndex + 1).toFloat() / cards.size).toInt()
+                } else {
+                    totalWidth
+                }
+                progressBar.layoutParams = FrameLayout.LayoutParams(progress, dp(3))
             }
+        }
+
+        // Question 섹션
+        root.findViewWithTag<TextView>("labelText")?.text = qLabel
+        root.findViewWithTag<TextView>("mainText")?.text =
+            if (qText.isEmpty()) "(내용 없음)" else qText
+        loadImages(root.findViewWithTag("imageContainer"), qImages)
+
+        // Answer 섹션
+        root.findViewWithTag<TextView>("answerLabel")?.text = aLabel
+        root.findViewWithTag<TextView>("answerText")?.text =
+            if (aText.isEmpty()) "(내용 없음)" else aText
+        loadImages(root.findViewWithTag("answerImageContainer"), aImages)
+    }
+
+    private fun loadImages(container: LinearLayout?, images: List<String>) {
+        container?.removeAllViews()
+        if (images.isEmpty()) return
+        val screenWidth = resources.displayMetrics.widthPixels
+        for (path in images) {
+            val file = java.io.File(path)
+            if (!file.exists()) continue
+            try {
+                // 이미지 크기 확인
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(path, bounds)
+
+                // 화면 너비 대비 적절한 샘플링 계산
+                var sampleSize = 1
+                val imgWidth = bounds.outWidth
+                while (imgWidth / sampleSize > screenWidth * 2) {
+                    sampleSize *= 2
+                }
+
+                val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                val bitmap = BitmapFactory.decodeFile(path, options) ?: continue
+                val imageView = ImageView(this).apply {
+                    setImageBitmap(bitmap)
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    adjustViewBounds = true
+                    val lp = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                    lp.bottomMargin = dp(8)
+                    layoutParams = lp
+                }
+                container?.addView(imageView)
+            } catch (_: Exception) { }
         }
     }
 

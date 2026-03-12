@@ -122,29 +122,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
 
           // 카드 위치 기억
-          SwitchListTile(
+          ListTile(
             title: const Text('카드 위치 기억'),
-            value: cardPositionMemory == 'true',
-            onChanged: (v) => _setSetting(
-                AppConstants.settingCardPositionMemory, v.toString()),
+            trailing: Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: cardPositionMemory == 'true',
+                onChanged: (v) => _setSetting(
+                    AppConstants.settingCardPositionMemory, v.toString()),
+              ),
+            ),
           ),
           const Divider(),
 
           // 카드 번호 표시
-          SwitchListTile(
+          ListTile(
             title: const Text('카드 번호 표시'),
-            value: cardNumber == 'true',
-            onChanged: (v) =>
-                _setSetting(AppConstants.settingCardNumber, v.toString()),
+            trailing: Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: cardNumber == 'true',
+                onChanged: (v) =>
+                    _setSetting(AppConstants.settingCardNumber, v.toString()),
+              ),
+            ),
           ),
           const Divider(),
 
           // 카드 목록 스크롤바
-          SwitchListTile(
+          ListTile(
             title: const Text('카드 목록 스크롤바'),
-            value: cardScroll == 'true',
-            onChanged: (v) =>
-                _setSetting(AppConstants.settingCardScroll, v.toString()),
+            trailing: Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: cardScroll == 'true',
+                onChanged: (v) =>
+                    _setSetting(AppConstants.settingCardScroll, v.toString()),
+              ),
+            ),
           ),
           const Divider(),
 

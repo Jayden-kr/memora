@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../database/database_helper.dart';
 import '../models/folder.dart';
 import '../services/memk_import_service.dart';
+import '../services/import_export_controller.dart';
 
 class ImportScreen extends StatefulWidget {
   final String filePath;
@@ -17,6 +18,7 @@ enum _ImportStage { loading, folderSelect, importing, done, error }
 
 class _ImportScreenState extends State<ImportScreen> {
   final _importService = MemkImportService();
+  final _controller = ImportExportController.instance;
 
   _ImportStage _stage = _ImportStage.loading;
   List<Map<String, dynamic>> _memkFolders = [];
@@ -27,15 +29,33 @@ class _ImportScreenState extends State<ImportScreen> {
   List<Folder> _localFolders = [];
   final Map<int, int> _folderMapping = {}; // memk folderId → local folderId
 
-  // 진행률
-  ImportProgress _progress = const ImportProgress();
-  ImportResult? _result;
+  // 에러
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_onControllerUpdate);
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerUpdate);
+    super.dispose();
+  }
+
+  void _onControllerUpdate() {
+    if (!mounted) return;
+    setState(() {
+      if (_controller.isRunning && _controller.currentOperation == 'import') {
+        _stage = _ImportStage.importing;
+      } else if (!_controller.isRunning &&
+          _controller.lastImportResult != null &&
+          _stage == _ImportStage.importing) {
+        _stage = _ImportStage.done;
+      }
+    });
   }
 
   Future<void> _loadData() async {
@@ -71,22 +91,12 @@ class _ImportScreenState extends State<ImportScreen> {
     }
 
     try {
-      final result = await _importService.importSelectedFolders(
+      await _controller.startImport(
         filePath: widget.filePath,
         selectedFolderNames: _selectedFolderNames.toList(),
         folderMapping: mapping,
-        onProgress: (progress) {
-          if (mounted) {
-            setState(() => _progress = progress);
-          }
-        },
       );
-      if (mounted) {
-        setState(() {
-          _result = result;
-          _stage = _ImportStage.done;
-        });
-      }
+      // 완료 시 controller listener가 _stage을 done으로 설정
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -155,23 +165,26 @@ class _ImportScreenState extends State<ImportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: _stage != _ImportStage.importing,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Import'),
-          leading: _stage == _ImportStage.importing
-              ? const SizedBox.shrink()
-              : null,
-        ),
-        body: switch (_stage) {
-          _ImportStage.loading => _buildLoading(),
-          _ImportStage.folderSelect => _buildFolderSelect(),
-          _ImportStage.importing => _buildImporting(),
-          _ImportStage.done => _buildDone(),
-          _ImportStage.error => _buildError(),
-        },
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Import'),
+        leading: _stage == _ImportStage.importing
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  // Import 중에도 나갈 수 있음 (백그라운드에서 계속 진행)
+                  Navigator.pop(context);
+                },
+              )
+            : null,
       ),
+      body: switch (_stage) {
+        _ImportStage.loading => _buildLoading(),
+        _ImportStage.folderSelect => _buildFolderSelect(),
+        _ImportStage.importing => _buildImporting(),
+        _ImportStage.done => _buildDone(),
+        _ImportStage.error => _buildError(),
+      },
     );
   }
 
@@ -344,13 +357,14 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Widget _buildImporting() {
-    final cardProgress = _progress.totalCards > 0
-        ? _progress.currentCards / _progress.totalCards
+    final progress = _controller.currentImportProgress;
+    final cardProgress = progress.totalCards > 0
+        ? progress.currentCards / progress.totalCards
         : 0.0;
-    final imageProgress = _progress.totalImages > 0
-        ? _progress.currentImages / _progress.totalImages
+    final imageProgress = progress.totalImages > 0
+        ? progress.currentImages / progress.totalImages
         : 0.0;
-    final progress = _progress.phase == 'images'
+    final totalProgress = progress.phase == 'images'
         ? (cardProgress + imageProgress) / 2
         : cardProgress * 0.5;
 
@@ -360,11 +374,20 @@ class _ImportScreenState extends State<ImportScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            LinearProgressIndicator(value: progress.clamp(0.0, 1.0)),
+            LinearProgressIndicator(
+                value: totalProgress.clamp(0.0, 1.0)),
             const SizedBox(height: 24),
             Text(
-              _progress.message ?? '처리 중...',
+              progress.message ?? '처리 중...',
               style: Theme.of(context).textTheme.bodyLarge,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              '뒤로 가기를 눌러도 백그라운드에서 계속 진행됩니다.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
               textAlign: TextAlign.center,
             ),
           ],
@@ -374,7 +397,10 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Widget _buildDone() {
-    final r = _result!;
+    final r = _controller.lastImportResult;
+    if (r == null) {
+      return _buildError();
+    }
     final minutes = r.duration.inMinutes;
     final seconds = r.duration.inSeconds % 60;
     final timeStr = minutes > 0 ? '$minutes분 $seconds초' : '$seconds초';

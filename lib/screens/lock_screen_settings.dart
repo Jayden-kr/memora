@@ -158,11 +158,16 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       body: ListView(
         children: [
           // 잠금화면 ON/OFF
-          SwitchListTile(
+          ListTile(
             title: const Text('잠금화면 사용'),
             subtitle: const Text('화면이 꺼질 때마다 카드 표시'),
-            value: _enabled,
-            onChanged: _onEnabledChanged,
+            trailing: Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: _enabled,
+                onChanged: _onEnabledChanged,
+              ),
+            ),
           ),
           const Divider(),
 
@@ -268,14 +273,19 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           const Divider(),
 
           // 문제/정답 바꾸기
-          SwitchListTile(
+          ListTile(
             title: const Text('문제/정답 바꾸기'),
             subtitle: const Text('앞면에 정답, 뒷면에 질문 표시'),
-            value: _reversed,
-            onChanged: (v) {
-              setState(() => _reversed = v);
-              _onSettingChanged();
-            },
+            trailing: Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: _reversed,
+                onChanged: (v) {
+                  setState(() => _reversed = v);
+                  _onSettingChanged();
+                },
+              ),
+            ),
           ),
           const Divider(),
 

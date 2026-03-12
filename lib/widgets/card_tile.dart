@@ -138,31 +138,26 @@ class _CardTileState extends State<CardTile>
             if (widget.card.answerImagePaths.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: SizedBox(
-                  height: 60,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    children: widget.card.answerImagePaths.map((path) {
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: Image.file(
-                            File(path),
-                            height: 60,
-                            width: 60,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Container(
-                              height: 60,
-                              width: 60,
-                              color: colorScheme.surfaceContainerHighest,
-                              child: const Icon(Icons.broken_image, size: 20),
-                            ),
+                child: Column(
+                  children: widget.card.answerImagePaths.map((path) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.file(
+                          File(path),
+                          width: double.infinity,
+                          fit: BoxFit.fitWidth,
+                          errorBuilder: (_, _, _) => Container(
+                            height: 80,
+                            width: double.infinity,
+                            color: colorScheme.surfaceContainerHighest,
+                            child: const Icon(Icons.broken_image, size: 28),
                           ),
                         ),
-                      );
-                    }).toList(),
-                  ),
+                      ),
+                    );
+                  }).toList(),
                 ),
               ),
           ] else

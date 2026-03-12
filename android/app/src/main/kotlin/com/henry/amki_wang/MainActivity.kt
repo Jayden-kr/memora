@@ -11,11 +11,62 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.henry.amki_wang/lockscreen"
+    private val IMPORT_EXPORT_CHANNEL = "com.henry.amki_wang/import_export"
     private val TAG = "AmkiWang"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // Import/Export Foreground Service MethodChannel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "startService" -> {
+                            val title = call.argument<String>("title") ?: "처리 중..."
+                            val intent = Intent(this, ImportExportService::class.java)
+                            intent.putExtra("title", title)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            result.success(true)
+                        }
+                        "updateProgress" -> {
+                            val title = call.argument<String>("title") ?: ""
+                            val message = call.argument<String>("message") ?: ""
+                            val progress = call.argument<Int>("progress") ?: 0
+                            val max = call.argument<Int>("max") ?: 0
+                            ImportExportService.updateProgress(this, title, message, progress, max)
+                            result.success(true)
+                        }
+                        "complete" -> {
+                            val title = call.argument<String>("title") ?: "완료"
+                            val message = call.argument<String>("message") ?: ""
+                            // Stop foreground service
+                            val stopIntent = Intent(this, ImportExportService::class.java)
+                            stopIntent.action = "STOP"
+                            startService(stopIntent)
+                            // Show completion notification
+                            ImportExportService.showComplete(this, title, message)
+                            result.success(true)
+                        }
+                        "cancel" -> {
+                            val stopIntent = Intent(this, ImportExportService::class.java)
+                            stopIntent.action = "STOP"
+                            startService(stopIntent)
+                            result.success(true)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "ImportExport MethodChannel error: ${call.method}", e)
+                    result.error("ERROR", e.message, e.stackTraceToString())
+                }
+            }
+
+        // Lock Screen MethodChannel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 try {

@@ -344,13 +344,6 @@ class _CardEditScreenState extends State<CardEditScreen> {
             const SizedBox(height: 8),
             _imageRow(_answerImages, _answerImageRatios),
             const SizedBox(height: 24),
-
-            // 암기 상태
-            SwitchListTile(
-              title: const Text('암기 완료'),
-              value: _finished,
-              onChanged: (v) => setState(() => _finished = v),
-            ),
           ],
         ),
       ),

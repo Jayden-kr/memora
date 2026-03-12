@@ -162,15 +162,32 @@ class _PushNotificationSettingsScreenState
           : ListView(
               children: [
                 // 알림 ON/OFF
-                SwitchListTile(
+                ListTile(
                   title: const Text('알림'),
-                  value: _enabled,
-                  onChanged: (v) {
-                    setState(() => _enabled = v);
-                    DatabaseHelper.instance.upsertSetting(
-                        _settingNotificationEnabled, v.toString());
-                    _scheduleAlarms();
-                  },
+                  trailing: Transform.scale(
+                    scale: 0.8,
+                    child: Switch(
+                      value: _enabled,
+                      onChanged: (v) async {
+                        if (v) {
+                          final granted =
+                              await NotificationService.requestPermission();
+                          if (!granted) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('알림 권한이 필요합니다. 설정에서 허용해주세요.')),
+                            );
+                            return;
+                          }
+                        }
+                        setState(() => _enabled = v);
+                        DatabaseHelper.instance.upsertSetting(
+                            _settingNotificationEnabled, v.toString());
+                        _scheduleAlarms();
+                      },
+                    ),
+                  ),
                 ),
                 const Divider(),
 
@@ -222,9 +239,12 @@ class _PushNotificationSettingsScreenState
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Switch(
-                          value: enabled,
-                          onChanged: (v) => _toggleAlarm(id, v),
+                        Transform.scale(
+                          scale: 0.8,
+                          child: Switch(
+                            value: enabled,
+                            onChanged: (v) => _toggleAlarm(id, v),
+                          ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.delete),
@@ -272,13 +292,18 @@ class _PushNotificationSettingsScreenState
                 const Divider(),
 
                 // 알림음
-                SwitchListTile(
+                ListTile(
                   title: const Text('알림음'),
-                  value: _soundEnabled,
-                  onChanged: (v) {
-                    setState(() => _soundEnabled = v);
-                    _updateGlobalSettings();
-                  },
+                  trailing: Transform.scale(
+                    scale: 0.8,
+                    child: Switch(
+                      value: _soundEnabled,
+                      onChanged: (v) {
+                        setState(() => _soundEnabled = v);
+                        _updateGlobalSettings();
+                      },
+                    ),
+                  ),
                 ),
               ],
             ),

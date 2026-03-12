@@ -12,11 +12,13 @@ import 'card_edit_screen.dart';
 class CardListScreen extends StatefulWidget {
   final Folder folder;
   final bool allCards;
+  final int? scrollToCardId;
 
   const CardListScreen({
     super.key,
     required this.folder,
     this.allCards = false,
+    this.scrollToCardId,
   });
 
   @override
@@ -51,11 +53,35 @@ class _CardListScreenState extends State<CardListScreen> {
   Timer? _debounceTimer;
   String _searchQuery = '';
 
+  // 스크롤 위치 표시
+  bool _showScrollLabel = false;
+  Timer? _scrollLabelTimer;
+
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
-    _loadCards();
+    _loadCards().then((_) => _scrollToInitialCard());
+  }
+
+  void _scrollToInitialCard() {
+    final targetId = widget.scrollToCardId;
+    if (targetId == null) return;
+    final index = _cards.indexWhere((c) => c.id == targetId);
+    if (index < 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      // 카드 타일 대략 높이 ~100
+      final offset = (index * 100.0).clamp(
+        0.0,
+        _scrollController.position.maxScrollExtent,
+      );
+      _scrollController.animateTo(
+        offset,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   @override
@@ -64,6 +90,7 @@ class _CardListScreenState extends State<CardListScreen> {
     _searchController.dispose();
     _searchFocusNode.dispose();
     _debounceTimer?.cancel();
+    _scrollLabelTimer?.cancel();
     super.dispose();
   }
 
@@ -75,6 +102,23 @@ class _CardListScreenState extends State<CardListScreen> {
         _searchQuery.isEmpty) {
       _loadMoreCards();
     }
+    // 스크롤 위치 라벨 표시
+    if (!_showScrollLabel) {
+      setState(() => _showScrollLabel = true);
+    }
+    _scrollLabelTimer?.cancel();
+    _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) setState(() => _showScrollLabel = false);
+    });
+  }
+
+  int get _currentVisibleIndex {
+    if (_cards.isEmpty || !_scrollController.hasClients) return 0;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    if (maxScroll <= 0) return 1;
+    final ratio = (_scrollController.position.pixels / maxScroll)
+        .clamp(0.0, 1.0);
+    return (ratio * (_cards.length - 1)).round() + 1;
   }
 
   Future<void> _loadCards() async {
@@ -405,38 +449,99 @@ class _CardListScreenState extends State<CardListScreen> {
                         ? '검색 결과가 없습니다.'
                         : '카드가 없습니다.'),
                   )
-                : ListView.builder(
-                    controller: _scrollController,
-                    itemCount: _cards.length + (_hasMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index >= _cards.length) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(16),
-                            child: CircularProgressIndicator(),
+                : Stack(
+                    children: [
+                      ScrollbarTheme(
+                        data: ScrollbarThemeData(
+                          thickness: WidgetStateProperty.all(3.0),
+                          radius: const Radius.circular(1.5),
+                          thumbColor: WidgetStateProperty.all(
+                            Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withAlpha(60),
                           ),
-                        );
-                      }
-                      final card = _cards[index];
-                      return CardTile(
-                        card: card,
-                        isFolded: _isCardFolded(card),
-                        isHidden: _allAnswersHidden,
-                        isRevealed: _isCardRevealed(card),
-                        isSelectionMode: _isSelectionMode,
-                        isSelected: _selectedCardIds.contains(card.id),
-                        onQuestionTap: () => _toggleQuestionFold(card),
-                        onAnswerTap: () => _toggleAnswerReveal(card),
-                        onTap: _isSelectionMode
-                            ? () => _toggleCardSelection(card)
-                            : () => _editCard(card),
-                        onLongPress: _isSelectionMode
-                            ? null
-                            : () => _enterSelectionMode(card),
-                        onMenuAction: (action) =>
-                            _handleCardMenu(card, action),
-                      );
-                    },
+                          minThumbLength: 36,
+                        ),
+                        child: Scrollbar(
+                          controller: _scrollController,
+                          thumbVisibility: true,
+                          interactive: true,
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            itemCount: _cards.length + (_hasMore ? 1 : 0),
+                            itemBuilder: (context, index) {
+                              if (index >= _cards.length) {
+                                return const Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(16),
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                );
+                              }
+                              final card = _cards[index];
+                              return CardTile(
+                                card: card,
+                                isFolded: _isCardFolded(card),
+                                isHidden: _allAnswersHidden,
+                                isRevealed: _isCardRevealed(card),
+                                isSelectionMode: _isSelectionMode,
+                                isSelected:
+                                    _selectedCardIds.contains(card.id),
+                                onQuestionTap: () =>
+                                    _toggleQuestionFold(card),
+                                onAnswerTap: () =>
+                                    _toggleAnswerReveal(card),
+                                onTap: _isSelectionMode
+                                    ? () => _toggleCardSelection(card)
+                                    : () => _editCard(card),
+                                onLongPress: _isSelectionMode
+                                    ? null
+                                    : () => _enterSelectionMode(card),
+                                onMenuAction: (action) =>
+                                    _handleCardMenu(card, action),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      // 스크롤 위치 라벨
+                      if (_showScrollLabel && _cards.length > 1)
+                        Positioned(
+                          right: 14,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: AnimatedOpacity(
+                              opacity: _showScrollLabel ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 200),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .inverseSurface,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  '$_currentVisibleIndex / $_totalCount',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onInverseSurface,
+                                      ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
         bottomNavigationBar: _isSelectionMode ? _buildSelectionBar() : null,
         floatingActionButton: _isSelectionMode
