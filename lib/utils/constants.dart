@@ -3,7 +3,7 @@ class AppConstants {
 
   // DB
   static const String dbName = 'amki_wang.db';
-  static const int dbVersion = 2;
+  static const int dbVersion = 3;
 
   // 테이블 이름
   static const String tableCards = 'cards';

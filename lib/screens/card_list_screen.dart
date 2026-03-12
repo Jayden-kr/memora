@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
 import '../models/card.dart';
@@ -27,7 +28,7 @@ class CardListScreen extends StatefulWidget {
 
 class _CardListScreenState extends State<CardListScreen> {
   final List<CardModel> _cards = [];
-  final ScrollController _scrollController = ScrollController();
+  ScrollController _scrollController = ScrollController();
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
@@ -57,30 +58,82 @@ class _CardListScreenState extends State<CardListScreen> {
   bool _showScrollLabel = false;
   Timer? _scrollLabelTimer;
 
+  // scrollToCardId용 하이라이트
+  int? _highlightCardId;
+
+  // scrollable_positioned_list 컨트롤러 (알림 탭 시 사용)
+  final ItemScrollController _itemScrollController = ItemScrollController();
+  final ItemPositionsListener _itemPositionsListener =
+      ItemPositionsListener.create();
+
+  // 대상 카드 인덱스 (스크롤용)
+  int _targetIndex = -1;
+
+  // 알림에서 진입한 모드인지 (ScrollablePositionedList 사용)
+  bool get _isNotificationMode => widget.scrollToCardId != null;
+
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
-    _loadCards().then((_) => _scrollToInitialCard());
+    _itemPositionsListener.itemPositions.addListener(_onItemPositionsChanged);
+    _highlightCardId = widget.scrollToCardId;
+    _initLoad();
   }
 
-  void _scrollToInitialCard() {
-    final targetId = widget.scrollToCardId;
-    if (targetId == null) return;
-    final index = _cards.indexWhere((c) => c.id == targetId);
-    if (index < 0) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) return;
-      // 카드 타일 대략 높이 ~100
-      final offset = (index * 100.0).clamp(
-        0.0,
-        _scrollController.position.maxScrollExtent,
-      );
-      _scrollController.animateTo(
-        offset,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+  String get _sortSettingKey =>
+      'sort_order_${widget.allCards ? "all" : widget.folder.id}';
+
+  Future<void> _initLoad() async {
+    // 저장된 정렬 순서 불러오기
+    final settings = await DatabaseHelper.instance.getAllSettings();
+    final saved = settings[_sortSettingKey];
+    if (saved != null) _sortOrder = saved;
+
+    if (_isNotificationMode) {
+      await _loadAllAndScrollToTarget();
+    } else {
+      await _loadCards();
+    }
+  }
+
+  /// scrollToCardId가 설정된 경우: 전체 카드 로드 후 index 기반 스크롤
+  Future<void> _loadAllAndScrollToTarget() async {
+    final targetId = widget.scrollToCardId!;
+    debugPrint('[CARD_LIST] _loadAllAndScrollToTarget targetId=$targetId');
+
+    _totalCount = await DatabaseHelper.instance
+        .countCardsByFolderId(widget.folder.id!);
+
+    final cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
+      widget.folder.id!,
+      _sortOrder,
+    );
+
+    _targetIndex = cards.indexWhere((c) => c.id == targetId);
+    debugPrint('[CARD_LIST] target index=$_targetIndex / ${cards.length}, '
+        'q="${_targetIndex >= 0 ? cards[_targetIndex].question : "NOT FOUND"}"');
+
+    if (!mounted) return;
+    setState(() {
+      _cards.clear();
+      _cards.addAll(cards);
+      _hasMore = false;
+      _loading = false;
+    });
+
+    // ScrollablePositionedList가 빌드된 후 대상 인덱스로 점프
+    if (_targetIndex >= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_itemScrollController.isAttached) return;
+        debugPrint('[CARD_LIST] jumping to index=$_targetIndex');
+        _itemScrollController.jumpTo(index: _targetIndex);
+      });
+    }
+
+    // 5초 후 하이라이트 해제
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) setState(() => _highlightCardId = null);
     });
   }
 
@@ -102,10 +155,17 @@ class _CardListScreenState extends State<CardListScreen> {
         _searchQuery.isEmpty) {
       _loadMoreCards();
     }
-    // 스크롤 위치 라벨 표시
-    if (!_showScrollLabel) {
-      setState(() => _showScrollLabel = true);
-    }
+    // 스크롤 위치 라벨 실시간 갱신
+    setState(() => _showScrollLabel = true);
+    _scrollLabelTimer?.cancel();
+    _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) setState(() => _showScrollLabel = false);
+    });
+  }
+
+  /// ItemPositionsListener 콜백 (알림 모드용)
+  void _onItemPositionsChanged() {
+    setState(() => _showScrollLabel = true);
     _scrollLabelTimer?.cancel();
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
       if (mounted) setState(() => _showScrollLabel = false);
@@ -113,7 +173,20 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   int get _currentVisibleIndex {
-    if (_cards.isEmpty || !_scrollController.hasClients) return 0;
+    if (_cards.isEmpty) return 0;
+
+    // 알림 모드: ItemPositionsListener에서 가져오기
+    if (_isNotificationMode) {
+      final positions = _itemPositionsListener.itemPositions.value;
+      if (positions.isEmpty) return 1;
+      final firstVisible = positions
+          .where((p) => p.itemTrailingEdge > 0)
+          .reduce((a, b) => a.index < b.index ? a : b);
+      return firstVisible.index + 1;
+    }
+
+    // 일반 모드: ScrollController에서 비율 계산
+    if (!_scrollController.hasClients) return 0;
     final maxScroll = _scrollController.position.maxScrollExtent;
     if (maxScroll <= 0) return 1;
     final ratio = (_scrollController.position.pixels / maxScroll)
@@ -428,6 +501,74 @@ class _CardListScreenState extends State<CardListScreen> {
     return true; // not in hidden mode, always revealed
   }
 
+  // ─── 카드 아이템 빌더 (공통) ───
+
+  Widget _buildCardItem(BuildContext context, int index) {
+    if (index >= _cards.length) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+    final card = _cards[index];
+    final isHighlighted = _highlightCardId == card.id;
+    return CardTile(
+      card: card,
+      isFolded: _isCardFolded(card),
+      isHidden: _allAnswersHidden,
+      isRevealed: _isCardRevealed(card),
+      isSelectionMode: _isSelectionMode,
+      isSelected: _selectedCardIds.contains(card.id),
+      isHighlighted: isHighlighted,
+      searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
+      onQuestionTap: () => _toggleQuestionFold(card),
+      onAnswerTap: () => _toggleAnswerReveal(card),
+      onTap: _isSelectionMode
+          ? () => _toggleCardSelection(card)
+          : () => _editCard(card),
+      onLongPress: _isSelectionMode
+          ? null
+          : () => _enterSelectionMode(card),
+      onMenuAction: (action) => _handleCardMenu(card, action),
+    );
+  }
+
+  /// 알림 진입 모드: ScrollablePositionedList (index 기반 정확한 스크롤)
+  Widget _buildPositionedList() {
+    return ScrollablePositionedList.builder(
+      itemCount: _cards.length,
+      itemBuilder: _buildCardItem,
+      itemScrollController: _itemScrollController,
+      itemPositionsListener: _itemPositionsListener,
+    );
+  }
+
+  /// 일반 모드: ListView.builder + Scrollbar + 무한 스크롤
+  Widget _buildNormalList() {
+    return ScrollbarTheme(
+      data: ScrollbarThemeData(
+        thickness: WidgetStateProperty.all(3.0),
+        radius: const Radius.circular(1.5),
+        thumbColor: WidgetStateProperty.all(
+          Theme.of(context).colorScheme.onSurface.withAlpha(60),
+        ),
+        minThumbLength: 36,
+      ),
+      child: Scrollbar(
+        controller: _scrollController,
+        thumbVisibility: true,
+        interactive: true,
+        child: ListView.builder(
+          controller: _scrollController,
+          itemCount: _cards.length + (_hasMore ? 1 : 0),
+          itemBuilder: _buildCardItem,
+        ),
+      ),
+    );
+  }
+
   // ─── Build ───
 
   @override
@@ -441,108 +582,95 @@ class _CardListScreenState extends State<CardListScreen> {
       },
       child: Scaffold(
         appBar: _isSelectionMode ? _buildSelectionAppBar() : _buildNormalAppBar(),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _cards.isEmpty
-                ? Center(
-                    child: Text(_searchQuery.isNotEmpty
-                        ? '검색 결과가 없습니다.'
-                        : '카드가 없습니다.'),
-                  )
-                : Stack(
-                    children: [
-                      ScrollbarTheme(
-                        data: ScrollbarThemeData(
-                          thickness: WidgetStateProperty.all(3.0),
-                          radius: const Radius.circular(1.5),
-                          thumbColor: WidgetStateProperty.all(
-                            Theme.of(context)
-                                .colorScheme
-                                .onSurface
-                                .withAlpha(60),
-                          ),
-                          minThumbLength: 36,
-                        ),
-                        child: Scrollbar(
-                          controller: _scrollController,
-                          thumbVisibility: true,
-                          interactive: true,
-                          child: ListView.builder(
-                            controller: _scrollController,
-                            itemCount: _cards.length + (_hasMore ? 1 : 0),
-                            itemBuilder: (context, index) {
-                              if (index >= _cards.length) {
-                                return const Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.all(16),
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                );
-                              }
-                              final card = _cards[index];
-                              return CardTile(
-                                card: card,
-                                isFolded: _isCardFolded(card),
-                                isHidden: _allAnswersHidden,
-                                isRevealed: _isCardRevealed(card),
-                                isSelectionMode: _isSelectionMode,
-                                isSelected:
-                                    _selectedCardIds.contains(card.id),
-                                onQuestionTap: () =>
-                                    _toggleQuestionFold(card),
-                                onAnswerTap: () =>
-                                    _toggleAnswerReveal(card),
-                                onTap: _isSelectionMode
-                                    ? () => _toggleCardSelection(card)
-                                    : () => _editCard(card),
-                                onLongPress: _isSelectionMode
-                                    ? null
-                                    : () => _enterSelectionMode(card),
-                                onMenuAction: (action) =>
-                                    _handleCardMenu(card, action),
-                              );
+        body: Column(
+          children: [
+            // 검색바 (상단 고정)
+            if (_isSearching)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: TextField(
+                  controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  decoration: InputDecoration(
+                    hintText: '검색...',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _searchController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 20),
+                            onPressed: () {
+                              _searchController.clear();
+                              _onSearchChanged('');
                             },
-                          ),
-                        ),
-                      ),
-                      // 스크롤 위치 라벨
-                      if (_showScrollLabel && _cards.length > 1)
-                        Positioned(
-                          right: 14,
-                          top: 0,
-                          bottom: 0,
-                          child: Center(
-                            child: AnimatedOpacity(
-                              opacity: _showScrollLabel ? 1.0 : 0.0,
-                              duration: const Duration(milliseconds: 200),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .inverseSurface,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  '$_currentVisibleIndex / $_totalCount',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelSmall
-                                      ?.copyWith(
+                          )
+                        : null,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onChanged: _onSearchChanged,
+                ),
+              ),
+            // 카드 리스트
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _cards.isEmpty
+                      ? Center(
+                          child: Text(_searchQuery.isNotEmpty
+                              ? '검색 결과가 없습니다.'
+                              : '카드가 없습니다.'),
+                        )
+                      : Stack(
+                          children: [
+                            _isNotificationMode
+                                ? _buildPositionedList()
+                                : _buildNormalList(),
+                            // 스크롤 위치 라벨
+                            if (_showScrollLabel && _cards.length > 1)
+                              Positioned(
+                                right: 14,
+                                top: 0,
+                                bottom: 0,
+                                child: Center(
+                                  child: AnimatedOpacity(
+                                    opacity: _showScrollLabel ? 1.0 : 0.0,
+                                    duration:
+                                        const Duration(milliseconds: 200),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
                                         color: Theme.of(context)
                                             .colorScheme
-                                            .onInverseSurface,
+                                            .inverseSurface,
+                                        borderRadius:
+                                            BorderRadius.circular(12),
                                       ),
+                                      child: Text(
+                                        '$_currentVisibleIndex / $_totalCount',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onInverseSurface,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
+                          ],
                         ),
-                    ],
-                  ),
+            ),
+          ],
+        ),
         bottomNavigationBar: _isSelectionMode ? _buildSelectionBar() : null,
         floatingActionButton: _isSelectionMode
             ? null
@@ -565,20 +693,15 @@ class _CardListScreenState extends State<CardListScreen> {
 
   PreferredSizeWidget _buildNormalAppBar() {
     return AppBar(
-      title: _isSearching
-          ? TextField(
-              controller: _searchController,
-              focusNode: _searchFocusNode,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: '검색...',
-                border: InputBorder.none,
-              ),
-              onChanged: _onSearchChanged,
-            )
-          : Text(widget.allCards
-              ? '전체 카드 ($_totalCount)'
-              : '${widget.folder.name} ($_totalCount)'),
+      title: Text(
+        widget.allCards
+            ? '전체 카드 ($_totalCount)'
+            : '${widget.folder.name} ($_totalCount)',
+        style: const TextStyle(
+          fontFamily: 'Pretendard',
+          fontSize: 18,
+        ),
+      ),
       actions: [
         IconButton(
           icon: Icon(_isSearching ? Icons.close : Icons.search),
@@ -592,6 +715,7 @@ class _CardListScreenState extends State<CardListScreen> {
                 _loadCards();
               } else {
                 _isSearching = true;
+                Future.microtask(() => _searchFocusNode.requestFocus());
               }
             });
           },
@@ -606,6 +730,8 @@ class _CardListScreenState extends State<CardListScreen> {
               case 'sort_name_asc':
               case 'sort_random':
                 _sortOrder = value.replaceFirst('sort_', '');
+                DatabaseHelper.instance
+                    .upsertSetting(_sortSettingKey, _sortOrder);
                 _loadCards();
               case 'fold_toggle':
                 setState(() {

@@ -6,7 +6,6 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
-import '../services/notification_service.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
 import 'bundle_folder_screen.dart';
@@ -29,7 +28,6 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Folder> _folders = [];
   bool _loading = true;
   StreamSubscription<List<SharedMediaFile>>? _intentSub;
-  StreamSubscription<NotificationNavEvent>? _notifSub;
   String _sortMode = 'sequence'; // sequence, name_asc, oldest, newest
   int _totalCardCount = 0;
 
@@ -38,49 +36,12 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadFolders();
     _initSharingIntent();
-    _initNotificationListener();
   }
 
   @override
   void dispose() {
-    _notifSub?.cancel();
     _intentSub?.cancel();
     super.dispose();
-  }
-
-  void _initNotificationListener() {
-    // Stream으로 실시간 알림 탭 이벤트 수신
-    _notifSub = NotificationService.onNotificationTapped.listen((event) {
-      debugPrint('[HOME] notification stream event: folder=${event.folderId} card=${event.cardId}');
-      _navigateToCard(event.folderId, event.cardId);
-    });
-
-    // Cold-start: 앱 시작 시 보류된 이벤트 처리
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final pending = NotificationService.consumePendingEvent();
-      if (pending != null) {
-        debugPrint('[HOME] pending event: folder=${pending.folderId} card=${pending.cardId}');
-        _navigateToCard(pending.folderId, pending.cardId);
-      }
-    });
-  }
-
-  Future<void> _navigateToCard(int folderId, int cardId) async {
-    debugPrint('[HOME] _navigateToCard: folder=$folderId card=$cardId');
-    final folder = await DatabaseHelper.instance.getFolderById(folderId);
-    if (folder == null || !mounted) {
-      debugPrint('[HOME] folder null or not mounted');
-      return;
-    }
-
-    debugPrint('[HOME] pushing CardListScreen for ${folder.name}');
-    if (!mounted) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => CardListScreen(
-        folder: folder,
-        scrollToCardId: cardId,
-      ),
-    ));
   }
 
   void _initSharingIntent() {
@@ -415,7 +376,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Memora'),
+        title: const Text('Memora', style: TextStyle(fontSize: 20)),
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.sort),
@@ -455,11 +416,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ? ReorderableListView.builder(
                       itemCount: _folders.length,
                       onReorder: _onReorder,
+                      buildDefaultDragHandles: false,
                       itemBuilder: (context, index) {
                         final folder = _folders[index];
                         return FolderTile(
                           key: ValueKey(folder.id),
                           folder: folder,
+                          reorderIndex: index,
                           onTap: () => _onFolderTap(folder),
                           onLongPress: () => _showFolderOptions(folder),
                         );
@@ -514,24 +477,25 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 Text('Memora',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          color:
-                              Theme.of(context).colorScheme.onPrimaryContainer,
-                        )),
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    )),
                 const SizedBox(height: 4),
                 Text(
                   '카드 $_totalCardCount장 · 폴더 ${_folders.length}개',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color:
-                            Theme.of(context).colorScheme.onPrimaryContainer,
-                      ),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  ),
                 ),
               ],
             ),
           ),
           ListTile(
             leading: const Icon(Icons.style),
-            title: const Text('전체 카드 보기'),
+            title: const Text('전체 카드 보기', style: TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -547,7 +511,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.notifications),
-            title: const Text('카드 푸시 알림'),
+            title: const Text('카드 푸시 알림', style: TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -560,7 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.lock),
-            title: const Text('잠금화면 설정'),
+            title: const Text('잠금화면 설정', style: TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -572,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.settings),
-            title: const Text('설정'),
+            title: const Text('설정', style: TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -587,7 +551,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const Divider(),
           ListTile(
             leading: const Icon(Icons.file_upload),
-            title: const Text('파일 만들기'),
+            title: const Text('파일 만들기', style: TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -599,7 +563,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.list_alt),
-            title: const Text('파일 목록'),
+            title: const Text('파일 목록', style: TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(

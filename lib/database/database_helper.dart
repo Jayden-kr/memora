@@ -172,7 +172,11 @@ class DatabaseHelper {
         enabled       INTEGER DEFAULT 1,
         folder_id     INTEGER,
         days          TEXT,
-        sound_enabled INTEGER DEFAULT 1
+        sound_enabled INTEGER DEFAULT 1,
+        mode          TEXT NOT NULL DEFAULT 'fixed',
+        start_time    TEXT,
+        end_time      TEXT,
+        interval_min  INTEGER
       )
     ''');
 
@@ -210,6 +214,16 @@ class DatabaseHelper {
           sound_enabled INTEGER DEFAULT 1
         )
       ''');
+    }
+    if (oldVersion < 3) {
+      await db.execute(
+          "ALTER TABLE ${AppConstants.tablePushAlarms} ADD COLUMN mode TEXT NOT NULL DEFAULT 'fixed'");
+      await db.execute(
+          'ALTER TABLE ${AppConstants.tablePushAlarms} ADD COLUMN start_time TEXT');
+      await db.execute(
+          'ALTER TABLE ${AppConstants.tablePushAlarms} ADD COLUMN end_time TEXT');
+      await db.execute(
+          'ALTER TABLE ${AppConstants.tablePushAlarms} ADD COLUMN interval_min INTEGER');
     }
   }
 
@@ -662,6 +676,10 @@ class DatabaseHelper {
     int? folderId,
     String? days,
     int soundEnabled = 1,
+    String mode = 'fixed',
+    String? startTime,
+    String? endTime,
+    int? intervalMin,
   }) async {
     final db = await database;
     return await db.insert(AppConstants.tablePushAlarms, {
@@ -670,6 +688,10 @@ class DatabaseHelper {
       'folder_id': folderId,
       'days': days,
       'sound_enabled': soundEnabled,
+      'mode': mode,
+      'start_time': startTime,
+      'end_time': endTime,
+      'interval_min': intervalMin,
     });
   }
 
