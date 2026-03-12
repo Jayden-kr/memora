@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -177,9 +178,9 @@ class MemkExportService {
       }
     }
 
-    // ZIP 인코딩 + 저장
-    final zipBytes = ZipEncoder().encode(archive);
-    await File(outputPath).writeAsBytes(zipBytes);
+    // ZIP 인코딩을 별도 Isolate에서 실행하여 UI 프리징 방지
+    final zipBytes = await compute(_encodeZip, archive);
+    await File(outputPath).writeAsBytes(zipBytes!);
 
     onProgress(const ExportProgress(phase: 'done', message: 'Export 완료'));
   }
@@ -206,4 +207,9 @@ class MemkExportService {
   ArchiveFile _createArchiveFile(String name, List<int> data) {
     return ArchiveFile(name, data.length, data);
   }
+}
+
+/// compute()용 최상위 함수 — ZIP 인코딩을 별도 Isolate에서 실행
+List<int>? _encodeZip(Archive archive) {
+  return ZipEncoder().encode(archive);
 }

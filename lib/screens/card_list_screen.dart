@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -53,9 +54,11 @@ class _CardListScreenState extends State<CardListScreen> {
   final _searchFocusNode = FocusNode();
   Timer? _debounceTimer;
   String _searchQuery = '';
+  int _searchGeneration = 0;
 
-  // 스크롤 위치 표시
-  bool _showScrollLabel = false;
+  // 스크롤 위치 표시 (ValueNotifier로 라벨만 리빌드)
+  /// 0 = 라벨 숨김, 1+ = 현재 보이는 카드 인덱스
+  final _scrollLabelNotifier = ValueNotifier<int>(0);
   Timer? _scrollLabelTimer;
 
   // scrollToCardId용 하이라이트
@@ -146,15 +149,19 @@ class _CardListScreenState extends State<CardListScreen> {
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _itemPositionsListener.itemPositions.removeListener(_onItemPositionsChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
     _debounceTimer?.cancel();
     _scrollLabelTimer?.cancel();
+    _scrollLabelNotifier.dispose();
     super.dispose();
   }
 
   void _onScroll() {
+    if (!_scrollController.hasClients) return;
     if (_scrollController.position.pixels >=
             _scrollController.position.maxScrollExtent - 200 &&
         !_loadingMore &&
@@ -162,20 +169,20 @@ class _CardListScreenState extends State<CardListScreen> {
         _searchQuery.isEmpty) {
       _loadMoreCards();
     }
-    // 스크롤 위치 라벨 실시간 갱신
-    setState(() => _showScrollLabel = true);
+    // 스크롤 위치 라벨 실시간 갱신 (ValueNotifier로 라벨만 리빌드)
+    _scrollLabelNotifier.value = _currentVisibleIndex;
     _scrollLabelTimer?.cancel();
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
-      if (mounted) setState(() => _showScrollLabel = false);
+      _scrollLabelNotifier.value = 0;
     });
   }
 
   /// ItemPositionsListener 콜백 (알림 모드용)
   void _onItemPositionsChanged() {
-    setState(() => _showScrollLabel = true);
+    _scrollLabelNotifier.value = _currentVisibleIndex;
     _scrollLabelTimer?.cancel();
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
-      if (mounted) setState(() => _showScrollLabel = false);
+      _scrollLabelNotifier.value = 0;
     });
   }
 
@@ -193,7 +200,7 @@ class _CardListScreenState extends State<CardListScreen> {
     }
 
     // 일반 모드: ScrollController에서 비율 계산
-    if (!_scrollController.hasClients) return 0;
+    if (!_scrollController.hasClients) return 1;
     final maxScroll = _scrollController.position.maxScrollExtent;
     if (maxScroll <= 0) return 1;
     final ratio = (_scrollController.position.pixels / maxScroll)
@@ -271,6 +278,7 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _performSearch() async {
+    final generation = ++_searchGeneration;
     List<CardModel> results;
     if (widget.allCards) {
       results =
@@ -279,7 +287,8 @@ class _CardListScreenState extends State<CardListScreen> {
       results = await DatabaseHelper.instance
           .searchCards(widget.folder.id!, _searchQuery);
     }
-    if (!mounted) return;
+    // stale 결과 무시 (더 새로운 검색이 시작된 경우)
+    if (!mounted || generation != _searchGeneration) return;
     setState(() {
       _cards.clear();
       _cards.addAll(results);
@@ -298,6 +307,45 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   // ─── Card actions ───
+
+  /// 카드의 모든 파일 경로를 수집 (이미지, handImage, voiceRecord)
+  List<String> _collectCardFilePaths(CardModel card) {
+    final paths = <String>[
+      ...card.questionImagePaths,
+      ...card.answerImagePaths,
+    ];
+    for (final p in [
+      card.questionHandImagePath, card.questionHandImagePath2,
+      card.questionHandImagePath3, card.questionHandImagePath4,
+      card.questionHandImagePath5,
+      card.answerHandImagePath, card.answerHandImagePath2,
+      card.answerHandImagePath3, card.answerHandImagePath4,
+      card.answerHandImagePath5,
+      card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
+      card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
+      card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
+      card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
+      card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
+      card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
+      card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
+      card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
+      card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
+      card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
+    ]) {
+      if (p != null && p.isNotEmpty) paths.add(p);
+    }
+    return paths;
+  }
+
+  /// 파일 경로 리스트의 파일들을 디스크에서 삭제
+  Future<void> _deleteFiles(List<String> paths) async {
+    for (final path in paths) {
+      try {
+        final f = File(path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+  }
 
   Future<void> _deleteCard(CardModel card) async {
     final confirm = await showDialog<bool>(
@@ -319,8 +367,10 @@ class _CardListScreenState extends State<CardListScreen> {
     );
     if (confirm != true) return;
 
+    final filePaths = _collectCardFilePaths(card);
     await DatabaseHelper.instance.deleteCard(card.id!);
-    await DatabaseHelper.instance.updateFolderCardCount(widget.folder.id!);
+    await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
+    await _deleteFiles(filePaths);
     await _loadCards();
   }
 
@@ -332,12 +382,13 @@ class _CardListScreenState extends State<CardListScreen> {
   Future<void> _moveCard(CardModel card) async {
     final folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
+    final sourceFolderId = card.folderId;
     final target = await showDialog<Folder>(
       context: context,
       builder: (ctx) => SimpleDialog(
         title: const Text('폴더 선택'),
         children: folders
-            .where((f) => f.id != widget.folder.id)
+            .where((f) => f.id != sourceFolderId)
             .map((f) => SimpleDialogOption(
                   onPressed: () => Navigator.pop(ctx, f),
                   child: Text('${f.name} (${f.cardCount})'),
@@ -348,7 +399,7 @@ class _CardListScreenState extends State<CardListScreen> {
     if (target == null) return;
 
     await DatabaseHelper.instance.moveCard(card.id!, target.id!);
-    await DatabaseHelper.instance.updateFolderCardCount(widget.folder.id!);
+    await DatabaseHelper.instance.updateFolderCardCount(sourceFolderId);
     await DatabaseHelper.instance.updateFolderCardCount(target.id!);
     await _loadCards();
   }
@@ -436,19 +487,43 @@ class _CardListScreenState extends State<CardListScreen> {
     );
     if (confirm != true) return;
 
-    await DatabaseHelper.instance
-        .deleteCardsBatch(_selectedCardIds.toList());
-    if (!widget.allCards) {
+    // 삭제 전 파일 경로 수집
+    final selectedCards = _cards
+        .where((c) => _selectedCardIds.contains(c.id))
+        .toList();
+    final allFilePaths = <String>[];
+    for (final card in selectedCards) {
+      allFilePaths.addAll(_collectCardFilePaths(card));
+    }
+
+    if (widget.allCards) {
+      // 전체 카드 모드: 선택된 카드들의 폴더 ID를 미리 수집
+      final affectedFolderIds = selectedCards
+          .map((c) => c.folderId)
+          .toSet();
+      await DatabaseHelper.instance
+          .deleteCardsBatch(_selectedCardIds.toList());
+      for (final fid in affectedFolderIds) {
+        await DatabaseHelper.instance.updateFolderCardCount(fid);
+      }
+    } else {
+      await DatabaseHelper.instance
+          .deleteCardsBatch(_selectedCardIds.toList());
       await DatabaseHelper.instance
           .updateFolderCardCount(widget.folder.id!);
     }
+    await _deleteFiles(allFilePaths);
     _exitSelectionMode();
     await _loadCards();
   }
 
   Future<void> _moveSelected() async {
-    final folders = await DatabaseHelper.instance.getNonBundleFolders();
+    var folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
+    // 현재 폴더 보기에서는 현재 폴더를 대상 목록에서 제외
+    if (!widget.allCards) {
+      folders = folders.where((f) => f.id != widget.folder.id).toList();
+    }
     final target = await showDialog<Folder>(
       context: context,
       builder: (ctx) => SimpleDialog(
@@ -461,12 +536,18 @@ class _CardListScreenState extends State<CardListScreen> {
     );
     if (target == null) return;
 
+    // 이동 전에 원본 폴더 ID 수집
+    final sourceFolderIds = _cards
+        .where((c) => _selectedCardIds.contains(c.id))
+        .map((c) => c.folderId)
+        .toSet();
     await DatabaseHelper.instance
         .moveCardsBatch(_selectedCardIds.toList(), target.id!);
-    if (!widget.allCards) {
-      await DatabaseHelper.instance
-          .updateFolderCardCount(widget.folder.id!);
+    // 원본 폴더들 카운트 갱신
+    for (final fid in sourceFolderIds) {
+      await DatabaseHelper.instance.updateFolderCardCount(fid);
     }
+    // 대상 폴더 카운트 갱신
     await DatabaseHelper.instance.updateFolderCardCount(target.id!);
     _exitSelectionMode();
     await _loadCards();
@@ -635,43 +716,46 @@ class _CardListScreenState extends State<CardListScreen> {
                             _isNotificationMode
                                 ? _buildPositionedList()
                                 : _buildNormalList(),
-                            // 스크롤 위치 라벨
-                            if (_showScrollLabel && _cards.length > 1)
-                              Positioned(
-                                right: 14,
-                                top: 0,
-                                bottom: 0,
-                                child: Center(
-                                  child: AnimatedOpacity(
-                                    opacity: _showScrollLabel ? 1.0 : 0.0,
-                                    duration:
-                                        const Duration(milliseconds: 200),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .inverseSurface,
-                                        borderRadius:
-                                            BorderRadius.circular(12),
-                                      ),
-                                      child: Text(
-                                        '$_currentVisibleIndex / $_totalCount',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelSmall
-                                            ?.copyWith(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onInverseSurface,
-                                            ),
+                            // 스크롤 위치 라벨 (ValueListenableBuilder로 라벨만 리빌드)
+                            if (_cards.length > 1)
+                              ValueListenableBuilder<int>(
+                                valueListenable: _scrollLabelNotifier,
+                                builder: (context, visibleIndex, _) {
+                                  if (visibleIndex == 0) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Positioned(
+                                    right: 14,
+                                    top: 0,
+                                    bottom: 0,
+                                    child: Center(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .inverseSurface,
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                        ),
+                                        child: Text(
+                                          '$visibleIndex / $_totalCount',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelSmall
+                                              ?.copyWith(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onInverseSurface,
+                                              ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
+                                  );
+                                },
                               ),
                           ],
                         ),
@@ -679,7 +763,7 @@ class _CardListScreenState extends State<CardListScreen> {
           ],
         ),
         bottomNavigationBar: _isSelectionMode ? _buildSelectionBar() : null,
-        floatingActionButton: _isSelectionMode
+        floatingActionButton: _isSelectionMode || widget.allCards
             ? null
             : FloatingActionButton(
                 onPressed: () async {

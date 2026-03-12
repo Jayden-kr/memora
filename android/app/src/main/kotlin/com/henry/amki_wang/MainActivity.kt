@@ -1,5 +1,6 @@
 package com.henry.amki_wang
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -47,7 +48,15 @@ class MainActivity : FlutterActivity() {
                             // Stop foreground service
                             val stopIntent = Intent(this, ImportExportService::class.java)
                             stopIntent.action = "STOP"
-                            startService(stopIntent)
+                            try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    startForegroundService(stopIntent)
+                                } else {
+                                    startService(stopIntent)
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to send STOP to ImportExportService: ${e.message}")
+                            }
                             // Show completion notification
                             ImportExportService.showComplete(this, title, message)
                             result.success(true)
@@ -55,7 +64,15 @@ class MainActivity : FlutterActivity() {
                         "cancel" -> {
                             val stopIntent = Intent(this, ImportExportService::class.java)
                             stopIntent.action = "STOP"
-                            startService(stopIntent)
+                            try {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    startForegroundService(stopIntent)
+                                } else {
+                                    startService(stopIntent)
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to send STOP to ImportExportService: ${e.message}")
+                            }
                             result.success(true)
                         }
                         else -> result.notImplemented()
@@ -179,6 +196,21 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun isServiceRunning(): Boolean {
+        // SharedPreferences 플래그는 OS kill 시 스테일해질 수 있으므로
+        // 실제 알림 존재 여부로 서비스 실행 상태 확인
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val nm = getSystemService(NotificationManager::class.java)
+            val hasNotification = nm.activeNotifications.any {
+                it.id == LockScreenService.NOTIFICATION_ID
+            }
+            if (hasNotification) return true
+            // 알림 없으면 prefs도 동기화 (OS가 서비스 kill 시 onDestroy 미호출 대비)
+            val prefs = getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
+            if (prefs.getBoolean("service_running", false)) {
+                prefs.edit().putBoolean("service_running", false).apply()
+            }
+            return false
+        }
         val prefs = getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
         return prefs.getBoolean("service_running", false)
     }

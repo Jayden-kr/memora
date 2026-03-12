@@ -93,15 +93,21 @@ class _PushNotificationSettingsScreenState
       final startStr = intervalAlarm['start_time'] as String?;
       final endStr = intervalAlarm['end_time'] as String?;
       final intMin = intervalAlarm['interval_min'] as int?;
-      if (startStr != null) {
+      if (startStr != null && startStr.contains(':')) {
         final sp = startStr.split(':');
-        _intervalStartTime =
-            TimeOfDay(hour: int.parse(sp[0]), minute: int.parse(sp[1]));
+        final h = int.tryParse(sp[0]);
+        final m = sp.length > 1 ? int.tryParse(sp[1]) : null;
+        if (h != null && m != null) {
+          _intervalStartTime = TimeOfDay(hour: h, minute: m);
+        }
       }
-      if (endStr != null) {
+      if (endStr != null && endStr.contains(':')) {
         final ep = endStr.split(':');
-        _intervalEndTime =
-            TimeOfDay(hour: int.parse(ep[0]), minute: int.parse(ep[1]));
+        final h = int.tryParse(ep[0]);
+        final m = ep.length > 1 ? int.tryParse(ep[1]) : null;
+        if (h != null && m != null) {
+          _intervalEndTime = TimeOfDay(hour: h, minute: m);
+        }
       }
       if (intMin != null) {
         _intervalMinController.text = intMin.toString();
@@ -277,24 +283,26 @@ class _PushNotificationSettingsScreenState
         }
         final sp = startTime.split(':');
         final ep = endTime.split(':');
+        if (sp.length < 2 || ep.length < 2) continue;
         await NotificationService.scheduleIntervalNotifications(
           id: id,
-          startHour: int.parse(sp[0]),
-          startMinute: int.parse(sp[1]),
-          endHour: int.parse(ep[0]),
-          endMinute: int.parse(ep[1]),
+          startHour: int.tryParse(sp[0]) ?? 0,
+          startMinute: int.tryParse(sp[1]) ?? 0,
+          endHour: int.tryParse(ep[0]) ?? 0,
+          endMinute: int.tryParse(ep[1]) ?? 0,
           intervalMin: intervalMin,
           days: days,
           folderId: folderId,
           soundEnabled: soundEnabled,
         );
       } else {
-        final timeStr = alarm['time'] as String;
+        final timeStr = alarm['time'] as String? ?? '08:00';
         final parts = timeStr.split(':');
+        if (parts.length < 2) continue;
         await NotificationService.scheduleDailyNotification(
           id: id,
-          hour: int.parse(parts[0]),
-          minute: int.parse(parts[1]),
+          hour: int.tryParse(parts[0]) ?? 0,
+          minute: int.tryParse(parts[1]) ?? 0,
           days: days,
           folderId: folderId,
           soundEnabled: soundEnabled,
@@ -354,6 +362,7 @@ class _PushNotificationSettingsScreenState
                             return;
                           }
                         }
+                        if (!mounted) return;
                         setState(() => _enabled = v);
                         DatabaseHelper.instance.upsertSetting(
                             _settingNotificationEnabled, v.toString());

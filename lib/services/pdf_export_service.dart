@@ -21,7 +21,7 @@ class PdfExportProgress {
 }
 
 class PdfExportService {
-  pw.Font? _koreanFont;
+  static pw.Font? _koreanFont;
 
   Future<pw.Font> _getKoreanFont() async {
     if (_koreanFont != null) return _koreanFont!;
@@ -74,9 +74,10 @@ class PdfExportService {
         message: '${folder.name} 처리 중... (이미지 로딩)',
       ));
 
-      // 모든 이미지를 비동기로 미리 읽기
+      // 모든 이미지를 비동기로 미리 읽기 (앞면 + 뒷면)
       final allImagePaths = <String>[];
       for (final card in cards) {
+        allImagePaths.addAll(card.questionImagePaths);
         allImagePaths.addAll(card.answerImagePaths);
       }
       final imageCache = await _preloadImages(allImagePaths);
@@ -109,6 +110,7 @@ class PdfExportService {
               .map((card) => _buildCardWidget(
                     card.question,
                     card.answer,
+                    card.questionImagePaths,
                     card.answerImagePaths,
                     font,
                     imageCache,
@@ -136,10 +138,33 @@ class PdfExportService {
     ));
   }
 
+  pw.Widget _buildImageRow(
+    List<String> paths,
+    pw.Font font,
+    Map<String, Uint8List> imageCache,
+  ) {
+    return pw.Row(
+      children: paths.take(3).map((path) {
+        final bytes = imageCache[path];
+        if (bytes != null) {
+          final image = pw.MemoryImage(bytes);
+          return pw.Container(
+            width: 80,
+            height: 80,
+            margin: const pw.EdgeInsets.only(right: 6),
+            child: pw.Image(image, fit: pw.BoxFit.contain),
+          );
+        }
+        return pw.SizedBox.shrink();
+      }).toList(),
+    );
+  }
+
   pw.Widget _buildCardWidget(
     String question,
     String answer,
-    List<String> imagePaths,
+    List<String> questionImagePaths,
+    List<String> answerImagePaths,
     pw.Font font,
     Map<String, Uint8List> imageCache,
   ) {
@@ -158,6 +183,11 @@ class PdfExportService {
             style: pw.TextStyle(font: font, fontSize: 12,
                 fontWeight: pw.FontWeight.bold),
           ),
+          if (questionImagePaths.isNotEmpty)
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 4),
+              child: _buildImageRow(questionImagePaths, font, imageCache),
+            ),
           pw.SizedBox(height: 4),
           pw.Divider(color: PdfColors.grey200),
           pw.SizedBox(height: 4),
@@ -166,24 +196,10 @@ class PdfExportService {
               answer,
               style: pw.TextStyle(font: font, fontSize: 11),
             ),
-          if (imagePaths.isNotEmpty)
+          if (answerImagePaths.isNotEmpty)
             pw.Padding(
               padding: const pw.EdgeInsets.only(top: 4),
-              child: pw.Row(
-                children: imagePaths.take(3).map((path) {
-                  final bytes = imageCache[path];
-                  if (bytes != null) {
-                    final image = pw.MemoryImage(bytes);
-                    return pw.Container(
-                      width: 80,
-                      height: 80,
-                      margin: const pw.EdgeInsets.only(right: 6),
-                      child: pw.Image(image, fit: pw.BoxFit.contain),
-                    );
-                  }
-                  return pw.SizedBox.shrink();
-                }).toList(),
-              ),
+              child: _buildImageRow(answerImagePaths, font, imageCache),
             ),
         ],
       ),

@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 
 class LockScreenStartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -15,10 +16,15 @@ class LockScreenStartReceiver : BroadcastReceiver() {
 
             val serviceIntent = Intent(context, LockScreenService::class.java)
             serviceIntent.action = "START_SERVICE"
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+            } catch (e: Exception) {
+                // API 31+ 백그라운드 FGS 시작 제한 (ForegroundServiceStartNotAllowedException)
+                Log.w("LockScreenStartReceiver", "Cannot start FGS from background: ${e.message}")
             }
         }
     }

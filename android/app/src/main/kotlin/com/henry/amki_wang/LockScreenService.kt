@@ -81,7 +81,10 @@ class LockScreenService : Service() {
         Log.d(TAG, "onStartCommand action=${intent?.action}")
         try {
             when (intent?.action) {
-                "SHOW_OVERLAY" -> showOverlay()
+                "SHOW_OVERLAY" -> {
+                    showOverlay()
+                    return START_NOT_STICKY
+                }
                 "STOP_SERVICE" -> {
                     setServiceRunning(false)
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -116,6 +119,8 @@ class LockScreenService : Service() {
         setServiceRunning(false)
         unregisterScreenReceiver()
         dismissOverlay()
+        fontRegular = null
+        fontBold = null
         super.onDestroy()
     }
 
@@ -140,7 +145,7 @@ class LockScreenService : Service() {
 
     private fun createNotification(): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, Class.forName("com.henry.amki_wang.MainActivity"))
+            ?: Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -161,12 +166,17 @@ class LockScreenService : Service() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(screenReceiver, filter)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(screenReceiver, filter)
+            }
+            Log.d(TAG, "ScreenReceiver registered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register ScreenReceiver", e)
+            screenReceiver = null
         }
-        Log.d(TAG, "ScreenReceiver registered")
     }
 
     private fun unregisterScreenReceiver() {
@@ -239,29 +249,29 @@ class LockScreenService : Service() {
             val where = if (whereParts.isNotEmpty()) whereParts.joinToString(" AND ") else null
             val args = if (whereArgs.isNotEmpty()) whereArgs.toTypedArray() else null
 
-            val cursor = db.query("cards", null, where, args, null, null, "sequence ASC")
             val result = mutableListOf<CardData>()
-            while (cursor.moveToNext()) {
-                val qImages = mutableListOf<String>()
-                val aImages = mutableListOf<String>()
-                for (suffix in listOf("", "_2", "_3", "_4", "_5")) {
-                    cursor.getColumnIndex("question_image_path$suffix").let { idx ->
-                        if (idx >= 0) cursor.getString(idx)?.let { qImages.add(it) }
+            db.query("cards", null, where, args, null, null, "sequence ASC").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val qImages = mutableListOf<String>()
+                    val aImages = mutableListOf<String>()
+                    for (suffix in listOf("", "_2", "_3", "_4", "_5")) {
+                        cursor.getColumnIndex("question_image_path$suffix").let { idx ->
+                            if (idx >= 0) cursor.getString(idx)?.let { qImages.add(it) }
+                        }
+                        cursor.getColumnIndex("answer_image_path$suffix").let { idx ->
+                            if (idx >= 0) cursor.getString(idx)?.let { aImages.add(it) }
+                        }
                     }
-                    cursor.getColumnIndex("answer_image_path$suffix").let { idx ->
-                        if (idx >= 0) cursor.getString(idx)?.let { aImages.add(it) }
-                    }
+                    result.add(CardData(
+                        id = cursor.getInt(cursor.getColumnIndexOrThrow("id")),
+                        question = cursor.getString(cursor.getColumnIndexOrThrow("question")) ?: "",
+                        answer = cursor.getString(cursor.getColumnIndexOrThrow("answer")) ?: "",
+                        questionImages = qImages,
+                        answerImages = aImages,
+                        finished = cursor.getInt(cursor.getColumnIndexOrThrow("finished")) == 1
+                    ))
                 }
-                result.add(CardData(
-                    id = cursor.getInt(cursor.getColumnIndexOrThrow("id")),
-                    question = cursor.getString(cursor.getColumnIndexOrThrow("question")) ?: "",
-                    answer = cursor.getString(cursor.getColumnIndexOrThrow("answer")) ?: "",
-                    questionImages = qImages,
-                    answerImages = aImages,
-                    finished = cursor.getInt(cursor.getColumnIndexOrThrow("finished")) == 1
-                ))
             }
-            cursor.close()
             cards = if (randomOrder) result.shuffled() else result
             Log.d(TAG, "Loaded ${cards.size} cards from DB")
         } catch (e: Exception) {
@@ -555,6 +565,7 @@ class LockScreenService : Service() {
     private fun updateCardDisplay() {
         val root = overlayView ?: return
         if (cards.isEmpty()) return
+        if (currentIndex >= cards.size) currentIndex = 0
 
         val card = cards[currentIndex]
 
@@ -583,7 +594,13 @@ class LockScreenService : Service() {
                 } else {
                     totalWidth
                 }
-                progressBar.layoutParams = FrameLayout.LayoutParams(progress, dp(3))
+                val lp = progressBar.layoutParams
+                if (lp != null) {
+                    lp.width = progress
+                    progressBar.layoutParams = lp
+                } else {
+                    progressBar.layoutParams = FrameLayout.LayoutParams(progress, dp(2))
+                }
             }
         }
 
@@ -600,7 +617,26 @@ class LockScreenService : Service() {
         loadImages(root.findViewWithTag("answerImageContainer"), aImages)
     }
 
+    private fun recycleViewBitmaps(view: android.view.View) {
+        if (view is ImageView) {
+            // bitmap.recycle()을 직접 호출하면 비동기 draw 중 Canvas 크래시 위험
+            // setImageDrawable(null)로 참조 해제 후 GC에 위임
+            view.setImageDrawable(null)
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                recycleViewBitmaps(view.getChildAt(i))
+            }
+        }
+    }
+
     private fun loadImages(container: LinearLayout?, images: List<String>) {
+        // 이전 Bitmap 재활용 후 뷰 제거
+        container?.let { c ->
+            for (i in 0 until c.childCount) {
+                recycleViewBitmaps(c.getChildAt(i))
+            }
+        }
         container?.removeAllViews()
         if (images.isEmpty()) return
         val screenWidth = resources.displayMetrics.widthPixels
@@ -639,6 +675,7 @@ class LockScreenService : Service() {
 
     private fun dismissOverlay() {
         overlayView?.let {
+            recycleViewBitmaps(it)
             try {
                 windowManager?.removeView(it)
             } catch (_: Exception) {}

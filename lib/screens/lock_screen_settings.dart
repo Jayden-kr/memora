@@ -22,6 +22,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   bool _reversed = false;
   int _bgColor = 0xFF1A1A2E;
   bool _loading = true;
+  bool _checkingOverlay = false;
 
   static const List<int> _bgColorPresets = [
     0xFF1A1A2E,
@@ -48,7 +49,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // 오버레이 권한 설정 화면에서 돌아왔을 때 재확인
-    if (state == AppLifecycleState.resumed && _enabled) {
+    if (state == AppLifecycleState.resumed && _enabled && !_checkingOverlay) {
       _checkOverlayAndStart();
     }
   }
@@ -58,6 +59,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     // 번들 폴더 제외 (카드를 직접 갖지 않으므로 잠금화면에 부적합)
     final folders = allFolders.where((f) => !f.isBundle).toList();
     final settings = await LockScreenService.getSettings();
+    if (!mounted) return;
 
     setState(() {
       _folders = folders;
@@ -75,6 +77,16 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _checkOverlayAndStart() async {
+    if (_checkingOverlay) return;
+    _checkingOverlay = true;
+    try {
+      await _checkOverlayAndStartImpl();
+    } finally {
+      _checkingOverlay = false;
+    }
+  }
+
+  Future<void> _checkOverlayAndStartImpl() async {
     final canDraw = await LockScreenService.canDrawOverlays();
     if (!canDraw) {
       if (!mounted) return;
@@ -100,6 +112,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         // 돌아오면 didChangeAppLifecycleState에서 재확인
         return;
       } else {
+        if (!mounted) return;
         setState(() => _enabled = false);
         return;
       }
@@ -141,9 +154,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _onSettingChanged() async {
-    if (_enabled) {
-      await _applySettings();
-    }
+    await _applySettings();
   }
 
   @override

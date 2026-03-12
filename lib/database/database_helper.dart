@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -8,13 +11,22 @@ import '../utils/constants.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
-  static Database? _database;
+  static Completer<Database>? _dbCompleter;
 
   DatabaseHelper._init();
 
   Future<Database> get database async {
-    _database ??= await _initDB();
-    return _database!;
+    if (_dbCompleter != null) return _dbCompleter!.future;
+    _dbCompleter = Completer<Database>();
+    try {
+      final db = await _initDB();
+      _dbCompleter!.complete(db);
+    } catch (e) {
+      _dbCompleter!.completeError(e);
+      _dbCompleter = null;
+      rethrow;
+    }
+    return _dbCompleter!.future;
   }
 
   Future<Database> _initDB() async {
@@ -308,6 +320,32 @@ class DatabaseHelper {
     );
   }
 
+  Future<int> updateFolderSequence(int folderId, int sequence) async {
+    final db = await database;
+    return await db.update(
+      AppConstants.tableFolders,
+      {'sequence': sequence},
+      where: 'id = ?',
+      whereArgs: [folderId],
+    );
+  }
+
+  /// 폴더 시퀀스 일괄 업데이트 (트랜잭션 사용)
+  Future<void> updateFolderSequencesBatch(
+      Map<int, int> folderIdToSequence) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      for (final entry in folderIdToSequence.entries) {
+        await txn.update(
+          AppConstants.tableFolders,
+          {'sequence': entry.value},
+          where: 'id = ?',
+          whereArgs: [entry.key],
+        );
+      }
+    });
+  }
+
   Future<int> deleteFolder(int id) async {
     final db = await database;
     return await db.delete(
@@ -528,19 +566,26 @@ class DatabaseHelper {
 
   // ─── Card Search & Batch ───
 
+  /// LIKE 메타문자 이스케이프
+  String _escapeLike(String q) => q
+      .replaceAll('\\', '\\\\')
+      .replaceAll('%', '\\%')
+      .replaceAll('_', '\\_');
+
   /// 검색 (Question 우선순위)
   Future<List<CardModel>> searchCards(int folderId, String query) async {
     final db = await database;
+    final escaped = _escapeLike(query);
     final questionMatches = await db.query(
       AppConstants.tableCards,
-      where: 'folder_id = ? AND question LIKE ?',
-      whereArgs: [folderId, '%$query%'],
+      where: "folder_id = ? AND question LIKE ? ESCAPE '\\'",
+      whereArgs: [folderId, '%$escaped%'],
       orderBy: 'sequence ASC',
     );
     final answerMatches = await db.query(
       AppConstants.tableCards,
-      where: 'folder_id = ? AND answer LIKE ? AND question NOT LIKE ?',
-      whereArgs: [folderId, '%$query%', '%$query%'],
+      where: "folder_id = ? AND answer LIKE ? ESCAPE '\\' AND question NOT LIKE ? ESCAPE '\\'",
+      whereArgs: [folderId, '%$escaped%', '%$escaped%'],
       orderBy: 'sequence ASC',
     );
     return [
@@ -552,16 +597,17 @@ class DatabaseHelper {
   /// 전체 카드 검색 (allCards 모드)
   Future<List<CardModel>> searchAllCards(String query) async {
     final db = await database;
+    final escaped = _escapeLike(query);
     final questionMatches = await db.query(
       AppConstants.tableCards,
-      where: 'question LIKE ?',
-      whereArgs: ['%$query%'],
+      where: "question LIKE ? ESCAPE '\\'",
+      whereArgs: ['%$escaped%'],
       orderBy: 'folder_id, sequence ASC',
     );
     final answerMatches = await db.query(
       AppConstants.tableCards,
-      where: 'answer LIKE ? AND question NOT LIKE ?',
-      whereArgs: ['%$query%', '%$query%'],
+      where: "answer LIKE ? ESCAPE '\\' AND question NOT LIKE ? ESCAPE '\\'",
+      whereArgs: ['%$escaped%', '%$escaped%'],
       orderBy: 'folder_id, sequence ASC',
     );
     return [
@@ -601,13 +647,39 @@ class DatabaseHelper {
     final newUuid =
         '${card.uuid}-copy-${DateTime.now().millisecondsSinceEpoch}';
     final newCard = card.copyWith(
-      id: null,
       uuid: newUuid,
       sequence: maxSeq + 1,
     );
-    final newId = await db.insert(AppConstants.tableCards, newCard.toDb());
+    final dbMap = newCard.toDb();
+    dbMap.remove('id'); // id를 제거하여 autoincrement 사용
+
+    // 이미지/음성 파일을 새 파일로 복사하여 참조 분리
+    await _duplicateFiles(dbMap);
+
+    final newId = await db.insert(AppConstants.tableCards, dbMap);
     await updateFolderCardCount(card.folderId);
     return newId;
+  }
+
+  /// DB 맵의 파일 경로 컬럼들을 새 파일로 복사
+  Future<void> _duplicateFiles(Map<String, dynamic> dbMap) async {
+    final pathKeys = dbMap.keys
+        .where((k) => k.contains('_path') || k.contains('_record_path'))
+        .toList();
+    for (final key in pathKeys) {
+      final path = dbMap[key];
+      if (path is! String || path.isEmpty) continue;
+      try {
+        final file = File(path);
+        if (!await file.exists()) continue;
+        final dir = file.parent.path;
+        final ext = p.extension(path);
+        final ts = DateTime.now().millisecondsSinceEpoch;
+        final newPath = p.join(dir, 'copy_$ts${pathKeys.indexOf(key)}$ext');
+        await file.copy(newPath);
+        dbMap[key] = newPath;
+      } catch (_) {}
+    }
   }
 
   /// 정렬 옵션으로 카드 조회

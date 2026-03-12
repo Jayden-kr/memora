@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -47,21 +48,31 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _initSharingIntent() {
     ReceiveSharingIntent.instance.getInitialMedia().then((files) {
+      if (!mounted) return;
       _handleSharedFiles(files);
     });
     _intentSub = ReceiveSharingIntent.instance
         .getMediaStream()
-        .listen(_handleSharedFiles);
+        .listen((files) {
+      if (mounted) _handleSharedFiles(files);
+    });
   }
 
   void _handleSharedFiles(List<SharedMediaFile> files) {
     if (files.isEmpty) return;
+    if (!mounted) return;
     final memkFile = files.firstWhere(
       (f) => f.path.endsWith('.memk'),
       orElse: () => files.first,
     );
     if (memkFile.path.endsWith('.memk')) {
       _navigateToImport(memkFile.path);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('.memk 파일만 가져올 수 있습니다.')),
+        );
+      }
     }
   }
 
@@ -198,6 +209,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+    controller.dispose();
     if (name == null || name.isEmpty) return;
 
     final existing = await DatabaseHelper.instance.getFolderByName(name);
@@ -287,6 +299,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+    controller.dispose();
     if (newName == null || newName.isEmpty || newName == folder.name) return;
 
     final existing = await DatabaseHelper.instance.getFolderByName(newName);
@@ -299,6 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     await DatabaseHelper.instance.updateFolder(folder.copyWith(name: newName));
+    if (!mounted) return;
     await _loadFolders();
   }
 
@@ -334,7 +348,48 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     }
 
-    await DatabaseHelper.instance.deleteFolder(folder.id!);
+    // 삭제 전 해당 폴더 카드의 이미지 파일 수집
+    if (!folder.isBundle) {
+      final cards = await DatabaseHelper.instance.getCardsByFolderId(folder.id!);
+      final imagePaths = <String>[];
+      for (final card in cards) {
+        imagePaths.addAll(card.questionImagePaths);
+        imagePaths.addAll(card.answerImagePaths);
+        // hand image + voice record 경로도 수집
+        for (final p in [
+          card.questionHandImagePath, card.questionHandImagePath2,
+          card.questionHandImagePath3, card.questionHandImagePath4,
+          card.questionHandImagePath5,
+          card.answerHandImagePath, card.answerHandImagePath2,
+          card.answerHandImagePath3, card.answerHandImagePath4,
+          card.answerHandImagePath5,
+          card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
+          card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
+          card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
+          card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
+          card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
+          card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
+          card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
+          card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
+          card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
+          card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
+        ]) {
+          if (p != null && p.isNotEmpty) imagePaths.add(p);
+        }
+      }
+      // DB 삭제 (CASCADE로 카드도 삭제됨)
+      await DatabaseHelper.instance.deleteFolder(folder.id!);
+      // 디스크에서 이미지 파일 정리
+      for (final path in imagePaths) {
+        try {
+          final f = File(path);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+    } else {
+      await DatabaseHelper.instance.deleteFolder(folder.id!);
+    }
+    if (!mounted) return;
     await _loadFolders();
   }
 
@@ -393,12 +448,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _updateFolderSequences() async {
+    final updates = <int, int>{};
     for (int i = 0; i < _folders.length; i++) {
       final folder = _folders[i];
-      if (folder.sequence != i) {
-        await DatabaseHelper.instance
-            .updateFolder(folder.copyWith(sequence: i));
+      if (folder.sequence != i && folder.id != null) {
+        updates[folder.id!] = i;
       }
+    }
+    if (updates.isNotEmpty) {
+      await DatabaseHelper.instance.updateFolderSequencesBatch(updates);
     }
   }
 

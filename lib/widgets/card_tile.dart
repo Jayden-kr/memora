@@ -40,8 +40,7 @@ class CardTile extends StatefulWidget {
   State<CardTile> createState() => _CardTileState();
 }
 
-class _CardTileState extends State<CardTile>
-    with SingleTickerProviderStateMixin {
+class _CardTileState extends State<CardTile> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -57,7 +56,7 @@ class _CardTileState extends State<CardTile>
             )
           : null,
       child: InkWell(
-        onTap: widget.isSelectionMode ? widget.onTap : null,
+        onTap: widget.onTap,
         onLongPress: widget.onLongPress,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
@@ -163,7 +162,7 @@ class _CardTileState extends State<CardTile>
         text: text.substring(index, index + query.length),
         style: TextStyle(backgroundColor: highlightColor),
       ));
-      start = index + query.length;
+      start = index + (query.length > 0 ? query.length : 1);
     }
 
     return Text.rich(
@@ -201,6 +200,7 @@ class _CardTileState extends State<CardTile>
                           File(path),
                           width: double.infinity,
                           fit: BoxFit.fitWidth,
+                          cacheWidth: 600,
                           errorBuilder: (_, _, _) => Container(
                             height: 80,
                             width: double.infinity,

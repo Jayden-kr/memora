@@ -157,23 +157,23 @@ class CardModel {
     this.modified,
   });
 
-  /// 앞면 이미지 경로 리스트 (non-null만)
+  /// 앞면 이미지 경로 리스트 (non-null, non-empty만)
   List<String> get questionImagePaths => [
         questionImagePath,
         questionImagePath2,
         questionImagePath3,
         questionImagePath4,
         questionImagePath5,
-      ].whereType<String>().toList();
+      ].where((p) => p != null && p.isNotEmpty).cast<String>().toList();
 
-  /// 뒷면 이미지 경로 리스트 (non-null만)
+  /// 뒷면 이미지 경로 리스트 (non-null, non-empty만)
   List<String> get answerImagePaths => [
         answerImagePath,
         answerImagePath2,
         answerImagePath3,
         answerImagePath4,
         answerImagePath5,
-      ].whereType<String>().toList();
+      ].where((p) => p != null && p.isNotEmpty).cast<String>().toList();
 
   /// .memk JSON → Dart
   factory CardModel.fromJson(Map<String, dynamic> json) {
@@ -530,6 +530,8 @@ class CardModel {
     return map;
   }
 
+  static const _absent = Object();
+
   CardModel copyWith({
     int? id,
     String? uuid,
@@ -537,26 +539,26 @@ class CardModel {
     String? folderName,
     String? question,
     String? answer,
-    String? questionImagePath,
-    double? questionImageRatio,
-    String? questionImagePath2,
-    double? questionImageRatio2,
-    String? questionImagePath3,
-    double? questionImageRatio3,
-    String? questionImagePath4,
-    double? questionImageRatio4,
-    String? questionImagePath5,
-    double? questionImageRatio5,
-    String? answerImagePath,
-    double? answerImageRatio,
-    String? answerImagePath2,
-    double? answerImageRatio2,
-    String? answerImagePath3,
-    double? answerImageRatio3,
-    String? answerImagePath4,
-    double? answerImageRatio4,
-    String? answerImagePath5,
-    double? answerImageRatio5,
+    Object? questionImagePath = _absent,
+    Object? questionImageRatio = _absent,
+    Object? questionImagePath2 = _absent,
+    Object? questionImageRatio2 = _absent,
+    Object? questionImagePath3 = _absent,
+    Object? questionImageRatio3 = _absent,
+    Object? questionImagePath4 = _absent,
+    Object? questionImageRatio4 = _absent,
+    Object? questionImagePath5 = _absent,
+    Object? questionImageRatio5 = _absent,
+    Object? answerImagePath = _absent,
+    Object? answerImageRatio = _absent,
+    Object? answerImagePath2 = _absent,
+    Object? answerImageRatio2 = _absent,
+    Object? answerImagePath3 = _absent,
+    Object? answerImageRatio3 = _absent,
+    Object? answerImagePath4 = _absent,
+    Object? answerImageRatio4 = _absent,
+    Object? answerImagePath5 = _absent,
+    Object? answerImageRatio5 = _absent,
     bool? finished,
     bool? starred,
     int? starLevel,
@@ -575,26 +577,26 @@ class CardModel {
       folderName: folderName ?? this.folderName,
       question: question ?? this.question,
       answer: answer ?? this.answer,
-      questionImagePath: questionImagePath ?? this.questionImagePath,
-      questionImageRatio: questionImageRatio ?? this.questionImageRatio,
-      questionImagePath2: questionImagePath2 ?? this.questionImagePath2,
-      questionImageRatio2: questionImageRatio2 ?? this.questionImageRatio2,
-      questionImagePath3: questionImagePath3 ?? this.questionImagePath3,
-      questionImageRatio3: questionImageRatio3 ?? this.questionImageRatio3,
-      questionImagePath4: questionImagePath4 ?? this.questionImagePath4,
-      questionImageRatio4: questionImageRatio4 ?? this.questionImageRatio4,
-      questionImagePath5: questionImagePath5 ?? this.questionImagePath5,
-      questionImageRatio5: questionImageRatio5 ?? this.questionImageRatio5,
-      answerImagePath: answerImagePath ?? this.answerImagePath,
-      answerImageRatio: answerImageRatio ?? this.answerImageRatio,
-      answerImagePath2: answerImagePath2 ?? this.answerImagePath2,
-      answerImageRatio2: answerImageRatio2 ?? this.answerImageRatio2,
-      answerImagePath3: answerImagePath3 ?? this.answerImagePath3,
-      answerImageRatio3: answerImageRatio3 ?? this.answerImageRatio3,
-      answerImagePath4: answerImagePath4 ?? this.answerImagePath4,
-      answerImageRatio4: answerImageRatio4 ?? this.answerImageRatio4,
-      answerImagePath5: answerImagePath5 ?? this.answerImagePath5,
-      answerImageRatio5: answerImageRatio5 ?? this.answerImageRatio5,
+      questionImagePath: identical(questionImagePath, _absent) ? this.questionImagePath : questionImagePath as String?,
+      questionImageRatio: identical(questionImageRatio, _absent) ? this.questionImageRatio : questionImageRatio as double?,
+      questionImagePath2: identical(questionImagePath2, _absent) ? this.questionImagePath2 : questionImagePath2 as String?,
+      questionImageRatio2: identical(questionImageRatio2, _absent) ? this.questionImageRatio2 : questionImageRatio2 as double?,
+      questionImagePath3: identical(questionImagePath3, _absent) ? this.questionImagePath3 : questionImagePath3 as String?,
+      questionImageRatio3: identical(questionImageRatio3, _absent) ? this.questionImageRatio3 : questionImageRatio3 as double?,
+      questionImagePath4: identical(questionImagePath4, _absent) ? this.questionImagePath4 : questionImagePath4 as String?,
+      questionImageRatio4: identical(questionImageRatio4, _absent) ? this.questionImageRatio4 : questionImageRatio4 as double?,
+      questionImagePath5: identical(questionImagePath5, _absent) ? this.questionImagePath5 : questionImagePath5 as String?,
+      questionImageRatio5: identical(questionImageRatio5, _absent) ? this.questionImageRatio5 : questionImageRatio5 as double?,
+      answerImagePath: identical(answerImagePath, _absent) ? this.answerImagePath : answerImagePath as String?,
+      answerImageRatio: identical(answerImageRatio, _absent) ? this.answerImageRatio : answerImageRatio as double?,
+      answerImagePath2: identical(answerImagePath2, _absent) ? this.answerImagePath2 : answerImagePath2 as String?,
+      answerImageRatio2: identical(answerImageRatio2, _absent) ? this.answerImageRatio2 : answerImageRatio2 as double?,
+      answerImagePath3: identical(answerImagePath3, _absent) ? this.answerImagePath3 : answerImagePath3 as String?,
+      answerImageRatio3: identical(answerImageRatio3, _absent) ? this.answerImageRatio3 : answerImageRatio3 as double?,
+      answerImagePath4: identical(answerImagePath4, _absent) ? this.answerImagePath4 : answerImagePath4 as String?,
+      answerImageRatio4: identical(answerImageRatio4, _absent) ? this.answerImageRatio4 : answerImageRatio4 as double?,
+      answerImagePath5: identical(answerImagePath5, _absent) ? this.answerImagePath5 : answerImagePath5 as String?,
+      answerImageRatio5: identical(answerImageRatio5, _absent) ? this.answerImageRatio5 : answerImageRatio5 as double?,
       questionHandImagePath: questionHandImagePath,
       questionHandImagePath2: questionHandImagePath2,
       questionHandImagePath3: questionHandImagePath3,

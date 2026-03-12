@@ -31,7 +31,7 @@ class Folder {
   factory Folder.fromJson(Map<String, dynamic> json) {
     return Folder(
       id: (json['id'] as num?)?.toInt(),
-      name: json['name'] as String,
+      name: json['name'] as String? ?? '',
       cardCount: (json['cardCount'] as num?)?.toInt() ?? 0,
       folderCount: (json['folderCount'] as num?)?.toInt() ?? 0,
       sequence: (json['sequence'] as num?)?.toInt() ?? 0,

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
@@ -237,7 +238,11 @@ class MemkImportService {
         // folderId를 로컬 DB ID로 매핑
         final memkFolderId = (cardJson['folderId'] as num?)?.toInt();
         if (memkFolderId == null) {
-          errors++;
+          skippedCards++;
+          continue;
+        }
+        if (!folderIdMap.containsKey(memkFolderId)) {
+          skippedCards++;
           continue;
         }
         cardJson['folderId'] = folderIdMap[memkFolderId];
@@ -275,7 +280,8 @@ class MemkImportService {
 
     // 남은 배치 처리
     if (batch.isNotEmpty) {
-      await db.insertCardsBatch(batch);
+      await db.insertCardsBatch(batch,
+          conflictAlgorithm: ConflictAlgorithm.replace);
       newCards += batch.length;
       batch.clear();
     }
@@ -323,7 +329,7 @@ class MemkImportService {
       await db.updateFolderCardCount(localFolderId);
     }
 
-    // counter.json 처리
+    // counter.json 처리 — 현재 값보다 높은 경우만 적용
     final counterFile = zipFileIndex[AppConstants.memkCounterJson];
     if (counterFile != null) {
       try {
@@ -331,11 +337,24 @@ class MemkImportService {
             jsonDecode(utf8.decode(counterFile.content as List<int>));
         if (counterJson is List && counterJson.isNotEmpty) {
           final counterData = counterJson[0] as Map<String, dynamic>;
+          final current = await db.getCounter();
           await db.updateCounter({
-            'card_sequence': counterData['card_sequence'] ?? 0,
-            'card_minus_sequence': counterData['card_minus_sequence'] ?? 0,
-            'folder_sequence': counterData['folder_sequence'] ?? 0,
-            'folder_minus_sequence': counterData['folder_minus_sequence'] ?? 0,
+            'card_sequence': max(
+              (current?['card_sequence'] as int?) ?? 0,
+              (counterData['card_sequence'] as int?) ?? 0,
+            ),
+            'card_minus_sequence': max(
+              (current?['card_minus_sequence'] as int?) ?? 0,
+              (counterData['card_minus_sequence'] as int?) ?? 0,
+            ),
+            'folder_sequence': max(
+              (current?['folder_sequence'] as int?) ?? 0,
+              (counterData['folder_sequence'] as int?) ?? 0,
+            ),
+            'folder_minus_sequence': max(
+              (current?['folder_minus_sequence'] as int?) ?? 0,
+              (counterData['folder_minus_sequence'] as int?) ?? 0,
+            ),
           });
         }
       } catch (_) {}

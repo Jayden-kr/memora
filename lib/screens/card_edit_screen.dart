@@ -32,6 +32,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
   final _picker = ImagePicker();
 
   bool _finished = false;
+  bool _saving = false;
   int _currentFolderId = 0;
   List<Folder> _folders = [];
 
@@ -148,27 +149,79 @@ class _CardEditScreenState extends State<CardEditScreen> {
     final picked = await _picker.pickImage(source: source);
     if (picked == null) return;
 
-    final savedPath = await _copyImageToAppDir(picked.path);
+    String? savedPath;
+    try {
+      savedPath = await _copyImageToAppDir(picked.path);
 
-    final bytes = await File(savedPath).readAsBytes();
-    final decoded = await decodeImageFromList(bytes);
-    final ratio = decoded.width / decoded.height;
+      final bytes = await File(savedPath).readAsBytes();
+      final decoded = await decodeImageFromList(bytes);
+      final ratio = decoded.width / decoded.height;
 
-    setState(() {
-      images[emptyIndex] = savedPath;
-      ratios[emptyIndex] = ratio;
-    });
+      setState(() {
+        images[emptyIndex] = savedPath;
+        ratios[emptyIndex] = ratio;
+      });
+    } catch (e) {
+      // 복사된 파일이 있으면 정리
+      if (savedPath != null) {
+        try { await File(savedPath).delete(); } catch (_) {}
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('이미지를 불러올 수 없습니다: $e')),
+      );
+    }
+  }
+
+  /// 원본 카드에 포함된 경로인지 확인
+  bool _isOriginalPath(String path) {
+    if (!_isEditing) return false;
+    final c = widget.existingCard!;
+    return [
+      c.questionImagePath, c.questionImagePath2, c.questionImagePath3,
+      c.questionImagePath4, c.questionImagePath5,
+      c.answerImagePath, c.answerImagePath2, c.answerImagePath3,
+      c.answerImagePath4, c.answerImagePath5,
+    ].contains(path);
   }
 
   void _removeImage(
       List<String?> images, List<double?> ratios, int index) {
+    final path = images[index];
     setState(() {
       images[index] = null;
       ratios[index] = null;
     });
+    // 새로 추가된 이미지(원본 카드에 없는 경로)는 즉시 삭제
+    if (path != null && path.isNotEmpty && !_isOriginalPath(path)) {
+      File(path).delete().catchError((_) {});
+    }
+  }
+
+  /// 저장 시 원본 카드에 있었지만 현재 제거된 이미지 파일을 디스크에서 삭제
+  Future<void> _cleanupRemovedImages() async {
+    if (!_isEditing) return;
+    final original = widget.existingCard!;
+    final originalPaths = <String?>[
+      original.questionImagePath, original.questionImagePath2,
+      original.questionImagePath3, original.questionImagePath4,
+      original.questionImagePath5,
+      original.answerImagePath, original.answerImagePath2,
+      original.answerImagePath3, original.answerImagePath4,
+      original.answerImagePath5,
+    ];
+    final currentPaths = <String?>[
+      ..._questionImages, ..._answerImages,
+    ];
+    for (final path in originalPaths) {
+      if (path != null && path.isNotEmpty && !currentPaths.contains(path)) {
+        try { await File(path).delete(); } catch (_) {}
+      }
+    }
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     final question = _questionController.text.trim();
     final answer = _answerController.text.trim();
     if (question.isEmpty && answer.isEmpty) {
@@ -178,94 +231,105 @@ class _CardEditScreenState extends State<CardEditScreen> {
       return;
     }
 
-    final now = DateTime.now();
-    final offset = now.timeZoneOffset;
-    final tzSign = offset.isNegative ? '-' : '+';
-    final tzHours = offset.inHours.abs().toString().padLeft(2, '0');
-    final tzMins = (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
-    final modifiedStr =
-        '${_monthName(now.month)} ${now.day.toString().padLeft(2, '0')}, ${now.year} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} '
-        'GMT$tzSign$tzHours:$tzMins';
+    setState(() => _saving = true);
 
-    if (_isEditing) {
-      final updated = widget.existingCard!.copyWith(
-        folderId: _currentFolderId,
-        question: question,
-        answer: answer,
-        questionImagePath: _questionImages[0],
-        questionImageRatio: _questionImageRatios[0],
-        questionImagePath2: _questionImages[1],
-        questionImageRatio2: _questionImageRatios[1],
-        questionImagePath3: _questionImages[2],
-        questionImageRatio3: _questionImageRatios[2],
-        questionImagePath4: _questionImages[3],
-        questionImageRatio4: _questionImageRatios[3],
-        questionImagePath5: _questionImages[4],
-        questionImageRatio5: _questionImageRatios[4],
-        answerImagePath: _answerImages[0],
-        answerImageRatio: _answerImageRatios[0],
-        answerImagePath2: _answerImages[1],
-        answerImageRatio2: _answerImageRatios[1],
-        answerImagePath3: _answerImages[2],
-        answerImageRatio3: _answerImageRatios[2],
-        answerImagePath4: _answerImages[3],
-        answerImageRatio4: _answerImageRatios[3],
-        answerImagePath5: _answerImages[4],
-        answerImageRatio5: _answerImageRatios[4],
-        finished: _finished,
-        modified: modifiedStr,
-      );
-      await DatabaseHelper.instance.updateCard(updated);
+    try {
+      final now = DateTime.now();
+      final offset = now.timeZoneOffset;
+      final tzSign = offset.isNegative ? '-' : '+';
+      final tzHours = offset.inHours.abs().toString().padLeft(2, '0');
+      final tzMins =
+          (offset.inMinutes.abs() % 60).toString().padLeft(2, '0');
+      final modifiedStr =
+          '${_monthName(now.month)} ${now.day.toString().padLeft(2, '0')}, ${now.year} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} '
+          'GMT$tzSign$tzHours:$tzMins';
 
-      if (_currentFolderId != widget.folderId) {
-        await DatabaseHelper.instance.moveCard(updated.id!, _currentFolderId);
-        await DatabaseHelper.instance
-            .updateFolderCardCount(widget.folderId);
+      if (_isEditing) {
+        final updated = widget.existingCard!.copyWith(
+          folderId: _currentFolderId,
+          question: question,
+          answer: answer,
+          questionImagePath: _questionImages[0],
+          questionImageRatio: _questionImageRatios[0],
+          questionImagePath2: _questionImages[1],
+          questionImageRatio2: _questionImageRatios[1],
+          questionImagePath3: _questionImages[2],
+          questionImageRatio3: _questionImageRatios[2],
+          questionImagePath4: _questionImages[3],
+          questionImageRatio4: _questionImageRatios[3],
+          questionImagePath5: _questionImages[4],
+          questionImageRatio5: _questionImageRatios[4],
+          answerImagePath: _answerImages[0],
+          answerImageRatio: _answerImageRatios[0],
+          answerImagePath2: _answerImages[1],
+          answerImageRatio2: _answerImageRatios[1],
+          answerImagePath3: _answerImages[2],
+          answerImageRatio3: _answerImageRatios[2],
+          answerImagePath4: _answerImages[3],
+          answerImageRatio4: _answerImageRatios[3],
+          answerImagePath5: _answerImages[4],
+          answerImageRatio5: _answerImageRatios[4],
+          finished: _finished,
+          modified: modifiedStr,
+        );
+        await DatabaseHelper.instance.updateCard(updated);
+        await _cleanupRemovedImages();
+
+        if (_currentFolderId != widget.folderId) {
+          await DatabaseHelper.instance
+              .updateFolderCardCount(widget.folderId);
+          await DatabaseHelper.instance
+              .updateFolderCardCount(_currentFolderId);
+        }
+      } else {
+        final uuid =
+            '${const Uuid().v4()}-app-${DateTime.now().millisecondsSinceEpoch}';
+        final maxSeq =
+            await DatabaseHelper.instance.getMaxSequence(_currentFolderId);
+        final card = CardModel(
+          uuid: uuid,
+          folderId: _currentFolderId,
+          question: question,
+          answer: answer,
+          questionImagePath: _questionImages[0],
+          questionImageRatio: _questionImageRatios[0],
+          questionImagePath2: _questionImages[1],
+          questionImageRatio2: _questionImageRatios[1],
+          questionImagePath3: _questionImages[2],
+          questionImageRatio3: _questionImageRatios[2],
+          questionImagePath4: _questionImages[3],
+          questionImageRatio4: _questionImageRatios[3],
+          questionImagePath5: _questionImages[4],
+          questionImageRatio5: _questionImageRatios[4],
+          answerImagePath: _answerImages[0],
+          answerImageRatio: _answerImageRatios[0],
+          answerImagePath2: _answerImages[1],
+          answerImageRatio2: _answerImageRatios[1],
+          answerImagePath3: _answerImages[2],
+          answerImageRatio3: _answerImageRatios[2],
+          answerImagePath4: _answerImages[3],
+          answerImageRatio4: _answerImageRatios[3],
+          answerImagePath5: _answerImages[4],
+          answerImageRatio5: _answerImageRatios[4],
+          finished: _finished,
+          sequence: maxSeq + 1,
+          modified: modifiedStr,
+        );
+        await DatabaseHelper.instance.insertCard(card);
         await DatabaseHelper.instance
             .updateFolderCardCount(_currentFolderId);
       }
-    } else {
-      final uuid =
-          '${const Uuid().v4()}-app-${DateTime.now().millisecondsSinceEpoch}';
-      final maxSeq =
-          await DatabaseHelper.instance.getMaxSequence(_currentFolderId);
-      final card = CardModel(
-        uuid: uuid,
-        folderId: _currentFolderId,
-        question: question,
-        answer: answer,
-        questionImagePath: _questionImages[0],
-        questionImageRatio: _questionImageRatios[0],
-        questionImagePath2: _questionImages[1],
-        questionImageRatio2: _questionImageRatios[1],
-        questionImagePath3: _questionImages[2],
-        questionImageRatio3: _questionImageRatios[2],
-        questionImagePath4: _questionImages[3],
-        questionImageRatio4: _questionImageRatios[3],
-        questionImagePath5: _questionImages[4],
-        questionImageRatio5: _questionImageRatios[4],
-        answerImagePath: _answerImages[0],
-        answerImageRatio: _answerImageRatios[0],
-        answerImagePath2: _answerImages[1],
-        answerImageRatio2: _answerImageRatios[1],
-        answerImagePath3: _answerImages[2],
-        answerImageRatio3: _answerImageRatios[2],
-        answerImagePath4: _answerImages[3],
-        answerImageRatio4: _answerImageRatios[3],
-        answerImagePath5: _answerImages[4],
-        answerImageRatio5: _answerImageRatios[4],
-        finished: _finished,
-        sequence: maxSeq + 1,
-        modified: modifiedStr,
-      );
-      await DatabaseHelper.instance.insertCard(card);
-      await DatabaseHelper.instance
-          .updateFolderCardCount(_currentFolderId);
-    }
 
-    if (!mounted) return;
-    Navigator.pop(context);
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('저장 실패: $e')),
+      );
+    }
   }
 
   String _monthName(int month) {
@@ -276,14 +340,70 @@ class _CardEditScreenState extends State<CardEditScreen> {
     return months[month - 1];
   }
 
+  bool _listChanged(List<String?> current, List<String?> original) {
+    for (int i = 0; i < current.length && i < original.length; i++) {
+      if (current[i] != original[i]) return true;
+    }
+    return false;
+  }
+
+  bool get _hasChanges {
+    final q = _questionController.text.trim();
+    final a = _answerController.text.trim();
+    if (_isEditing) {
+      final c = widget.existingCard!;
+      return q != c.question || a != c.answer ||
+          _currentFolderId != c.folderId ||
+          _finished != c.finished ||
+          _listChanged(_questionImages, [
+            c.questionImagePath, c.questionImagePath2,
+            c.questionImagePath3, c.questionImagePath4,
+            c.questionImagePath5,
+          ]) ||
+          _listChanged(_answerImages, [
+            c.answerImagePath, c.answerImagePath2,
+            c.answerImagePath3, c.answerImagePath4,
+            c.answerImagePath5,
+          ]);
+    }
+    return q.isNotEmpty || a.isNotEmpty ||
+        _questionImages.any((img) => img != null) ||
+        _answerImages.any((img) => img != null);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: !_hasChanges,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final discard = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('변경사항 삭제'),
+            content: const Text('저장하지 않은 변경사항이 있습니다. 나가시겠습니까?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('취소'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('나가기'),
+              ),
+            ],
+          ),
+        );
+        if (discard == true && context.mounted) {
+          Navigator.pop(context);
+        }
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? '카드 편집' : '새 카드'),
         actions: [
           TextButton(
-            onPressed: _save,
+            onPressed: _saving ? null : _save,
             child: const Text('저장'),
           ),
         ],
@@ -351,6 +471,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 

@@ -14,7 +14,24 @@ class ImportExportService : Service() {
         const val PROGRESS_NOTIFICATION_ID = 2001
         const val COMPLETE_NOTIFICATION_ID = 2002
 
+        private fun ensureChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val manager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                    val channel = NotificationChannel(
+                        CHANNEL_ID, "Import/Export 진행",
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        description = "Import/Export 진행 상태를 표시합니다"
+                        setShowBadge(false)
+                    }
+                    manager.createNotificationChannel(channel)
+                }
+            }
+        }
+
         fun updateProgress(context: Context, title: String, message: String, progress: Int, max: Int) {
+            ensureChannel(context)
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -39,6 +56,7 @@ class ImportExportService : Service() {
         }
 
         fun showComplete(context: Context, title: String, message: String) {
+            ensureChannel(context)
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -62,6 +80,13 @@ class ImportExportService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {}
+        super.onDestroy()
+    }
 
     override fun onCreate() {
         super.onCreate()

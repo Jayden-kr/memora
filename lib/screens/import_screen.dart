@@ -64,6 +64,7 @@ class _ImportScreenState extends State<ImportScreen> {
           await _importService.readFolderList(widget.filePath);
       final localFolders =
           await DatabaseHelper.instance.getNonBundleFolders();
+      if (!mounted) return;
       setState(() {
         _memkFolders = memkFolders;
         _localFolders = localFolders;
@@ -72,6 +73,7 @@ class _ImportScreenState extends State<ImportScreen> {
         _stage = _ImportStage.folderSelect;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _stage = _ImportStage.error;
         _errorMessage = '파일을 읽을 수 없습니다: $e';

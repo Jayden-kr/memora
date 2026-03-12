@@ -75,6 +75,8 @@ class NotificationService {
         return;
       }
     }
+    // 정확한 매칭 실패 시 UTC로 fallback (알림이 안 뜨는 것보다 나음)
+    tz.setLocalLocation(tz.UTC);
   }
 
   static void _onNotificationTap(NotificationResponse response) {
@@ -144,7 +146,19 @@ class NotificationService {
   }
 
   /// 앱 시작 시 저장된 알람을 다시 스케줄링 (카드 내용 갱신)
+  static bool _rescheduling = false;
+
   static Future<void> rescheduleAll() async {
+    if (_rescheduling) return;
+    _rescheduling = true;
+    try {
+      await _rescheduleAllImpl();
+    } finally {
+      _rescheduling = false;
+    }
+  }
+
+  static Future<void> _rescheduleAllImpl() async {
     await cancelAllNotifications();
 
     final settings = await DatabaseHelper.instance.getAllSettings();
@@ -177,24 +191,26 @@ class NotificationService {
 
         final sp = startTime.split(':');
         final ep = endTime.split(':');
+        if (sp.length < 2 || ep.length < 2) continue;
         await scheduleIntervalNotifications(
           id: id,
-          startHour: int.parse(sp[0]),
-          startMinute: int.parse(sp[1]),
-          endHour: int.parse(ep[0]),
-          endMinute: int.parse(ep[1]),
+          startHour: int.tryParse(sp[0]) ?? 0,
+          startMinute: int.tryParse(sp[1]) ?? 0,
+          endHour: int.tryParse(ep[0]) ?? 0,
+          endMinute: int.tryParse(ep[1]) ?? 0,
           intervalMin: intervalMin,
           days: days,
           folderId: folderId,
           soundEnabled: soundEnabled,
         );
       } else {
-        final timeStr = alarm['time'] as String;
+        final timeStr = alarm['time'] as String? ?? '08:00';
         final parts = timeStr.split(':');
+        if (parts.length < 2) continue;
         await scheduleDailyNotification(
           id: id,
-          hour: int.parse(parts[0]),
-          minute: int.parse(parts[1]),
+          hour: int.tryParse(parts[0]) ?? 0,
+          minute: int.tryParse(parts[1]) ?? 0,
           days: days,
           folderId: folderId,
           soundEnabled: soundEnabled,
@@ -402,17 +418,9 @@ class NotificationService {
   }
 
   static Future<void> cancelNotification(int id) async {
-    await _plugin.cancel(id);
-    for (int day = 0; day <= 6; day++) {
-      await _plugin.cancel(id * _dayMultiplier + day);
-    }
-    // 간격 모드 알림 취소 (최대 300 슬롯)
-    for (int slot = 0; slot < 300; slot++) {
-      await _plugin.cancel(id * _intervalMultiplier + slot);
-      for (int day = 0; day <= 6; day++) {
-        await _plugin.cancel(id * _intervalMultiplier + slot * _intervalDayMultiplier + day);
-      }
-    }
+    // 전체 취소 후 나머지 활성 알림만 재스케줄하는 것이 2400+ cancel보다 효율적
+    await _plugin.cancelAll();
+    await rescheduleAll();
   }
 
   static Future<void> cancelAllNotifications() async {

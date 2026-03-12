@@ -1,8 +1,9 @@
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart' show Share, XFile;
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
@@ -53,12 +54,17 @@ class _ExportScreenState extends State<ExportScreen> {
   Future<void> _export() async {
     if (_selectedFolderIds.isEmpty) return;
 
-    final outputDir = await FilePicker.platform.getDirectoryPath();
-    if (outputDir == null) return;
+    // 앱 내부 documents/exports 디렉토리에 저장 (권한 불필요)
+    final appDocDir = await getApplicationDocumentsDirectory();
+    final exportDir = Directory('${appDocDir.path}/exports');
+    if (!await exportDir.exists()) {
+      await exportDir.create(recursive: true);
+    }
 
     final now = DateTime.now();
     final timestamp =
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}'
+        '_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
 
     setState(() {
       _exporting = true;
@@ -67,8 +73,10 @@ class _ExportScreenState extends State<ExportScreen> {
 
     try {
       String outputPath;
+      String fileName;
       if (_fileType == 'memk') {
-        outputPath = p.join(outputDir, 'Memora_$timestamp.memk');
+        fileName = 'Memora_$timestamp.memk';
+        outputPath = p.join(exportDir.path, fileName);
         await MemkExportService().exportMemk(
           outputPath: outputPath,
           folderIds: _selectedFolderIds.toList(),
@@ -83,7 +91,8 @@ class _ExportScreenState extends State<ExportScreen> {
           },
         );
       } else {
-        outputPath = p.join(outputDir, 'Memora_$timestamp.pdf');
+        fileName = 'Memora_$timestamp.pdf';
+        outputPath = p.join(exportDir.path, fileName);
         await PdfExportService().exportPdf(
           outputPath: outputPath,
           folderIds: _selectedFolderIds.toList(),
@@ -104,25 +113,51 @@ class _ExportScreenState extends State<ExportScreen> {
       final fileSize = await file.length();
       try {
         await DatabaseHelper.instance.insertExportedFile(
-          fileName: p.basename(outputPath),
+          fileName: fileName,
           filePath: outputPath,
           fileSize: fileSize,
           fileType: _fileType,
         );
       } catch (dbErr) {
-        // DB 기록 실패 시 파일은 유지하되, 사용자에게 경고
         debugPrint('[EXPORT] DB 기록 실패: $dbErr (파일은 저장됨: $outputPath)');
       }
 
       if (!mounted) return;
       setState(() => _exporting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('내보내기 완료: ${p.basename(outputPath)}')),
+
+      // 완료 다이얼로그 — 공유 옵션 제공
+      final shouldShare = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('내보내기 완료'),
+          content: Text('$fileName\n파일이 생성되었습니다.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('확인'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.share),
+              label: const Text('공유'),
+            ),
+          ],
+        ),
       );
+
+      if (shouldShare == true) {
+        await Share.shareXFiles([XFile(outputPath)]);
+      }
+
+      if (!mounted) return;
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _exporting = false);
+      setState(() {
+        _exporting = false;
+        _progressMessage = '';
+        _progressValue = 0.0;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('내보내기 실패: $e')),
       );
@@ -146,21 +181,23 @@ class _ExportScreenState extends State<ExportScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _exporting
-              ? Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(),
-                      const SizedBox(height: 24),
-                      LinearProgressIndicator(value: _progressValue),
-                      const SizedBox(height: 12),
-                      Text(_progressMessage),
-                      Text(
-                        '${(_progressValue * 100).toInt()}%',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ],
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 24),
+                        LinearProgressIndicator(value: _progressValue),
+                        const SizedBox(height: 12),
+                        Text(_progressMessage),
+                        Text(
+                          '${(_progressValue * 100).toInt()}%',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
                   ),
                 )
               : SingleChildScrollView(
