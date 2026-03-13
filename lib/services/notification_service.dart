@@ -73,16 +73,43 @@ class NotificationService {
   }
 
   static void _setLocalTimezone() {
+    // 1차: 시스템 timezone 이름으로 정확한 IANA timezone 매칭
+    final tzName = DateTime.now().timeZoneName;
+    final locations = tz.timeZoneDatabase.locations;
+    if (locations.containsKey(tzName)) {
+      tz.setLocalLocation(locations[tzName]!);
+      return;
+    }
+
+    // 2차: 잘 알려진 약어 → IANA 매핑 (한국/일본 등 주요 타임존)
+    const abbreviationMap = {
+      'KST': 'Asia/Seoul',
+      'JST': 'Asia/Tokyo',
+      'CST': 'Asia/Shanghai',
+      'IST': 'Asia/Kolkata',
+      'EST': 'America/New_York',
+      'PST': 'America/Los_Angeles',
+      'CET': 'Europe/Berlin',
+      'GMT': 'Europe/London',
+    };
+    final mapped = abbreviationMap[tzName];
+    if (mapped != null && locations.containsKey(mapped)) {
+      tz.setLocalLocation(locations[mapped]!);
+      return;
+    }
+
+    // 3차: UTC offset으로 매칭 (fallback)
     final offset = DateTime.now().timeZoneOffset.inMilliseconds;
-    for (final entry in tz.timeZoneDatabase.locations.entries) {
+    for (final entry in locations.entries) {
       if (entry.value.currentTimeZone.offset == offset) {
         tz.setLocalLocation(entry.value);
         return;
       }
     }
-    // 정확한 매칭 실패 시 UTC로 fallback (알림이 안 뜨는 것보다 나음)
-    debugPrint('[NOTIF] WARNING: timezone offset matching failed '
-        '(offset=${offset}ms), falling back to UTC. '
+
+    // 모두 실패 시 UTC fallback
+    debugPrint('[NOTIF] WARNING: timezone matching failed '
+        '(name=$tzName, offset=${offset}ms), falling back to UTC. '
         'Notifications may fire at wrong times.');
     tz.setLocalLocation(tz.UTC);
   }
@@ -308,6 +335,10 @@ class NotificationService {
     int minute,
     tz.TZDateTime now,
   ) {
+    // Dart DateTime.weekday: 1(월)~7(일). 범위 밖이면 무한 루프 방지
+    if (weekday < DateTime.monday || weekday > DateTime.sunday) {
+      return now;
+    }
     var scheduled = tz.TZDateTime(
       tz.local,
       now.year,
@@ -355,9 +386,13 @@ class NotificationService {
     int? folderId,
     bool soundEnabled = true,
   }) async {
-    // 시간 슬롯 계산
-    final startTotal = startHour * 60 + startMinute;
-    final endTotal = endHour * 60 + endMinute;
+    // 시간 슬롯 계산 (범위 보정)
+    final safeStartHour = startHour.clamp(0, 23);
+    final safeStartMinute = startMinute.clamp(0, 59);
+    final safeEndHour = endHour.clamp(0, 23);
+    final safeEndMinute = endMinute.clamp(0, 59);
+    final startTotal = safeStartHour * 60 + safeStartMinute;
+    final endTotal = safeEndHour * 60 + safeEndMinute;
     if (endTotal <= startTotal || intervalMin < 5) return;
 
     final List<({int hour, int minute})> slots = [];
@@ -426,14 +461,12 @@ class NotificationService {
   /// 특정 알람의 모든 알림 취소 (fixed + interval + per-day 모두)
   /// DB에서 해당 알람이 이미 삭제/비활성화된 후 호출할 것
   static Future<void> cancelAlarm(int id, {Set<int>? days}) async {
-    // 개별 ID 취소보다 전체 취소 + 재스케줄이 효율적이고 확실함
-    await _plugin.cancelAll();
+    // rescheduleAll() 내부에서 cancelAll → 재스케줄을 수행하므로 별도 cancelAll 불필요
     await rescheduleAll();
   }
 
   /// 단일 알림 삭제 후 나머지 재스케줄
   static Future<void> cancelNotification(int id) async {
-    await _plugin.cancelAll();
     await rescheduleAll();
   }
 

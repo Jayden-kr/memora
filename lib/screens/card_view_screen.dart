@@ -46,21 +46,20 @@ class _CardViewScreenState extends State<CardViewScreen> {
     );
     // 편집 후 카드 데이터 갱신
     final updated = await DatabaseHelper.instance.getCardById(_card.id!);
-    if (updated != null && mounted) {
-      // 폴더 변경 시 새 폴더명 조회
-      if (updated.folderId != _card.folderId) {
-        final folder =
-            await DatabaseHelper.instance.getFolderById(updated.folderId);
-        if (mounted) {
-          setState(() {
-            _card = updated;
-            _folderName = folder?.name;
-          });
-          return;
-        }
-      }
-      setState(() => _card = updated);
+    if (!mounted || updated == null) return;
+
+    // 폴더 변경 시 새 폴더명 조회
+    if (updated.folderId != _card.folderId) {
+      final folder =
+          await DatabaseHelper.instance.getFolderById(updated.folderId);
+      if (!mounted) return;
+      setState(() {
+        _card = updated;
+        _folderName = folder?.name;
+      });
+      return;
     }
+    setState(() => _card = updated);
   }
 
   @override

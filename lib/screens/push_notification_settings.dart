@@ -153,8 +153,8 @@ class _PushNotificationSettingsScreenState
   }
 
   Future<void> _deleteFixedAlarm(int id) async {
-    await NotificationService.cancelNotification(id);
     await DatabaseHelper.instance.deletePushAlarm(id);
+    await NotificationService.rescheduleAll();
     await _loadData();
   }
 
@@ -228,8 +228,8 @@ class _PushNotificationSettingsScreenState
 
   Future<void> _deleteIntervalAlarm() async {
     if (_intervalAlarmId == null) return;
-    await NotificationService.cancelNotification(_intervalAlarmId!);
     await DatabaseHelper.instance.deletePushAlarm(_intervalAlarmId!);
+    await NotificationService.rescheduleAll();
     _intervalAlarmId = null;
     _intervalEnabled = true;
     _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
@@ -605,7 +605,7 @@ class _PushNotificationSettingsScreenState
               context: context,
               initialTime: _intervalStartTime,
             );
-            if (t != null) setState(() => _intervalStartTime = t);
+            if (t != null && mounted) setState(() => _intervalStartTime = t);
           },
           child: Text(
             _formatTime(_intervalStartTime),
@@ -623,7 +623,7 @@ class _PushNotificationSettingsScreenState
               context: context,
               initialTime: _intervalEndTime,
             );
-            if (t != null) setState(() => _intervalEndTime = t);
+            if (t != null && mounted) setState(() => _intervalEndTime = t);
           },
           child: Text(
             _formatTime(_intervalEndTime),

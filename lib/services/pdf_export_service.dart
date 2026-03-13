@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
@@ -78,7 +77,9 @@ class PdfExportService {
         message: '${folder.name} 처리 중... ($totalCards장)',
       ));
 
-      // 배치 단위로 카드 로드 + 이미지 캐싱 + PDF 페이지 생성 (메모리 절약)
+      // 배치 단위로 카드 로드 + 이미지 캐싱 → 위젯 리스트 수집 (메모리 절약)
+      // 폴더당 단일 MultiPage → 페이지 번호가 연속으로 표시됨
+      final allCardWidgets = <pw.Widget>[];
       for (int batchStart = 0;
           batchStart < totalCards;
           batchStart += pdfBatchSize) {
@@ -88,7 +89,6 @@ class PdfExportService {
           offset: batchStart,
         );
         if (batch.isEmpty) break;
-        final isFirstBatch = batchStart == 0;
 
         // 이 배치의 이미지만 캐싱
         final batchImagePaths = <String>[];
@@ -98,51 +98,56 @@ class PdfExportService {
         }
         final imageCache = await _preloadImages(batchImagePaths);
 
-        doc.addPage(
-          pw.MultiPage(
-            pageFormat: PdfPageFormat.a4,
-            header: (context) => pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                if (isFirstBatch && context.pageNumber == 1) ...[
-                  pw.Text(
-                    folder.name,
-                    style: pw.TextStyle(font: font, fontSize: 24,
-                        fontWeight: pw.FontWeight.bold),
-                  ),
-                  pw.SizedBox(height: 4),
-                  pw.Text(
-                    '카드 ${cards.length}장',
-                    style: pw.TextStyle(font: font, fontSize: 12,
-                        color: PdfColors.grey600),
-                  ),
-                  pw.Divider(),
-                  pw.SizedBox(height: 8),
-                ],
+        for (final card in batch) {
+          allCardWidgets.add(_buildCardWidget(
+            card.question,
+            card.answer,
+            card.questionImagePaths,
+            card.answerImagePaths,
+            font,
+            imageCache,
+          ));
+        }
+        // imageCache는 스코프를 벗어나며 GC 대상
+        // (MemoryImage 참조는 위젯 트리에 유지됨)
+      }
+
+      if (allCardWidgets.isEmpty) continue;
+
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          header: (context) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              if (context.pageNumber == 1) ...[
+                pw.Text(
+                  folder.name,
+                  style: pw.TextStyle(font: font, fontSize: 24,
+                      fontWeight: pw.FontWeight.bold),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  '카드 $totalCards장',
+                  style: pw.TextStyle(font: font, fontSize: 12,
+                      color: PdfColors.grey600),
+                ),
+                pw.Divider(),
+                pw.SizedBox(height: 8),
               ],
-            ),
-            build: (context) => batch
-                .map((card) => _buildCardWidget(
-                      card.question,
-                      card.answer,
-                      card.questionImagePaths,
-                      card.answerImagePaths,
-                      font,
-                      imageCache,
-                    ))
-                .toList(),
-            footer: (context) => pw.Container(
-              alignment: pw.Alignment.centerRight,
-              child: pw.Text(
-                '${context.pageNumber} / ${context.pagesCount}',
-                style: pw.TextStyle(font: font, fontSize: 9,
-                    color: PdfColors.grey500),
-              ),
+            ],
+          ),
+          build: (context) => allCardWidgets,
+          footer: (context) => pw.Container(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Text(
+              '${context.pageNumber} / ${context.pagesCount}',
+              style: pw.TextStyle(font: font, fontSize: 9,
+                  color: PdfColors.grey500),
             ),
           ),
-        );
-        // imageCache는 스코프를 벗어나며 GC 대상
-      }
+        ),
+      );
     }
 
     final bytes = await doc.save();

@@ -142,10 +142,11 @@ class _CardListScreenState extends State<CardListScreen> {
 
     // ScrollablePositionedList가 빌드된 후 대상 인덱스로 점프
     if (_targetIndex >= 0) {
+      final targetIdx = _targetIndex; // 클로저 캡처 (재호출 시 stale 방지)
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !_itemScrollController.isAttached) return;
-        debugPrint('[CARD_LIST] jumping to index=$_targetIndex');
-        _itemScrollController.jumpTo(index: _targetIndex);
+        debugPrint('[CARD_LIST] jumping to index=$targetIdx');
+        _itemScrollController.jumpTo(index: targetIdx);
       });
     }
 
@@ -852,6 +853,10 @@ class _CardListScreenState extends State<CardListScreen> {
                 _loadCards();
               } else {
                 _isSearching = true;
+                if (_isSelectionMode) {
+                  _isSelectionMode = false;
+                  _selectedCardIds.clear();
+                }
                 Future.microtask(() => _searchFocusNode.requestFocus());
               }
             });

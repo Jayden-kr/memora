@@ -48,9 +48,8 @@ class LockScreenService : Service() {
         val finished: Boolean
     )
 
-    private var cards: List<CardData> = emptyList()
-    private var currentIndex = 0
-    private var showingBack = false
+    @Volatile private var cards: List<CardData> = emptyList()
+    @Volatile private var currentIndex = 0
 
     // 설정
     private var folderIds: List<Int> = emptyList()
@@ -150,7 +149,7 @@ class LockScreenService : Service() {
 
     private fun setServiceRunning(running: Boolean) {
         getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
-            .edit().putBoolean("service_running", running).apply()
+            .edit().putBoolean("service_running", running).commit()
     }
 
     private fun createNotificationChannel() {
@@ -346,7 +345,6 @@ class LockScreenService : Service() {
         if (overlayView != null) return
 
         currentIndex = 0
-        showingBack = false
 
         overlayView = createOverlayLayout()
 
@@ -616,10 +614,11 @@ class LockScreenService : Service() {
 
     private fun updateCardDisplay() {
         val root = overlayView ?: return
-        if (cards.isEmpty()) return
-        if (currentIndex >= cards.size) currentIndex = 0
+        val localCards = cards // @Volatile 로컬 캡처 (스레드 간 재할당 안전)
+        if (localCards.isEmpty()) return
+        if (currentIndex >= localCards.size) currentIndex = 0
 
-        val card = cards[currentIndex]
+        val card = localCards[currentIndex]
 
         // reversed 모드: 질문/답 순서 바꿈
         val qText: String; val aText: String
@@ -641,8 +640,8 @@ class LockScreenService : Service() {
         if (progressBarBg != null && progressBar != null) {
             progressBarBg.post {
                 val totalWidth = progressBarBg.width
-                val progress = if (cards.size > 1) {
-                    (totalWidth * (currentIndex + 1).toFloat() / cards.size).toInt()
+                val progress = if (localCards.size > 1) {
+                    (totalWidth * (currentIndex + 1).toFloat() / localCards.size).toInt()
                 } else {
                     totalWidth
                 }

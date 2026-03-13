@@ -351,34 +351,41 @@ class _HomeScreenState extends State<HomeScreen> {
       await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
     }
 
-    // 삭제 전 해당 폴더 카드의 이미지 파일 수집
+    // 삭제 전 해당 폴더 카드의 이미지 파일 수집 (배치 로드로 OOM 방지)
     if (!folder.isBundle) {
-      final cards = await DatabaseHelper.instance.getCardsByFolderId(folder.id!);
       final imagePaths = <String>[];
-      for (final card in cards) {
-        imagePaths.addAll(card.questionImagePaths);
-        imagePaths.addAll(card.answerImagePaths);
-        // hand image + voice record 경로도 수집
-        for (final p in [
-          card.questionHandImagePath, card.questionHandImagePath2,
-          card.questionHandImagePath3, card.questionHandImagePath4,
-          card.questionHandImagePath5,
-          card.answerHandImagePath, card.answerHandImagePath2,
-          card.answerHandImagePath3, card.answerHandImagePath4,
-          card.answerHandImagePath5,
-          card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
-          card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
-          card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
-          card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
-          card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
-          card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
-          card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
-          card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
-          card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
-          card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
-        ]) {
-          if (p != null && p.isNotEmpty) imagePaths.add(p);
+      const batchSize = 500;
+      int offset = 0;
+      while (true) {
+        final cards = await DatabaseHelper.instance.getCardsByFolderId(
+            folder.id!, limit: batchSize, offset: offset);
+        if (cards.isEmpty) break;
+        for (final card in cards) {
+          imagePaths.addAll(card.questionImagePaths);
+          imagePaths.addAll(card.answerImagePaths);
+          // hand image + voice record 경로도 수집
+          for (final p in [
+            card.questionHandImagePath, card.questionHandImagePath2,
+            card.questionHandImagePath3, card.questionHandImagePath4,
+            card.questionHandImagePath5,
+            card.answerHandImagePath, card.answerHandImagePath2,
+            card.answerHandImagePath3, card.answerHandImagePath4,
+            card.answerHandImagePath5,
+            card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
+            card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
+            card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
+            card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
+            card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
+            card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
+            card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
+            card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
+            card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
+            card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
+          ]) {
+            if (p != null && p.isNotEmpty) imagePaths.add(p);
+          }
         }
+        offset += batchSize;
       }
       // DB 삭제 (CASCADE로 카드도 삭제됨)
       await DatabaseHelper.instance.deleteFolder(folder.id!);
