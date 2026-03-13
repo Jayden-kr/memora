@@ -29,8 +29,10 @@ void main() async {
   _restoreLockScreenService();
 
   // 알림 권한 요청 + 재스케줄링
-  NotificationService.requestPermission().then((_) {
-    NotificationService.rescheduleAll();
+  NotificationService.requestPermission().then((_) async {
+    try {
+      await NotificationService.rescheduleAll();
+    } catch (_) {}
   });
 
   // 알림 탭 → 카드 네비게이션 콜백 등록

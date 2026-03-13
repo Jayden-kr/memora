@@ -17,6 +17,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
   List<Folder> _availableFolders = [];
   Set<int> _selectedFolderIds = {};
   bool _loading = true;
+  bool _saving = false;
 
   bool get _isEditing => widget.existingBundle != null;
 
@@ -65,6 +66,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     final name = _nameController.text.trim();
     if (name.isEmpty) {
       if (!mounted) return;
@@ -73,6 +75,8 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
       );
       return;
     }
+
+    setState(() => _saving = true);
 
     try {
       if (_isEditing) {
@@ -108,6 +112,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
         final existing = await DatabaseHelper.instance.getFolderByName(name);
         if (existing != null) {
           if (!mounted) return;
+          setState(() => _saving = false);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
           );
@@ -139,6 +144,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
       Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
+      setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('에러: $e')),
       );
@@ -152,7 +158,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
         title: Text(_isEditing ? '묶음 폴더 편집' : '묶음 폴더 만들기'),
         actions: [
           TextButton(
-            onPressed: _save,
+            onPressed: _saving ? null : _save,
             child: const Text('저장'),
           ),
         ],

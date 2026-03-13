@@ -25,11 +25,11 @@ class _FileListScreenState extends State<FileListScreen> {
 
   Future<void> _loadFiles() async {
     final files = await DatabaseHelper.instance.getAllExportedFiles();
-    // 실제 파일 존재 여부 체크
+    // 실제 파일 존재 여부 체크 (비동기)
     for (final file in files) {
       final filePath = file['file_path'] as String?;
       if (filePath != null) {
-        file['_exists'] = File(filePath).existsSync();
+        file['_exists'] = await File(filePath).exists();
       } else {
         file['_exists'] = false;
       }

@@ -12,6 +12,7 @@ class CardTile extends StatefulWidget {
   final bool isSelectionMode;
   final bool isSelected;
   final bool isHighlighted;
+  final int? cardNumber;
   final String? searchQuery;
   final VoidCallback? onQuestionTap;
   final VoidCallback? onAnswerTap;
@@ -28,6 +29,7 @@ class CardTile extends StatefulWidget {
     this.isSelectionMode = false,
     this.isSelected = false,
     this.isHighlighted = false,
+    this.cardNumber,
     this.searchQuery,
     this.onQuestionTap,
     this.onAnswerTap,
@@ -64,6 +66,17 @@ class _CardTileState extends State<CardTile> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Card number
+              if (widget.cardNumber != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    '#${widget.cardNumber}',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ),
               // Question row
               Row(
                 children: [
@@ -83,19 +96,55 @@ class _CardTileState extends State<CardTile> {
                     child: GestureDetector(
                       onTap: widget.onQuestionTap,
                       behavior: HitTestBehavior.opaque,
-                      child: _buildHighlightedText(
-                        widget.card.question.isEmpty
-                            ? '(내용 없음)'
-                            : widget.card.question,
-                        widget.searchQuery,
-                        const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        maxLines: widget.isFolded ? 1 : null,
-                        overflow: widget.isFolded
-                            ? TextOverflow.ellipsis
-                            : null,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildHighlightedText(
+                            widget.card.question.isEmpty &&
+                                    widget.card.questionImagePaths.isEmpty
+                                ? '(내용 없음)'
+                                : widget.card.question,
+                            widget.searchQuery,
+                            const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: widget.isFolded ? 1 : null,
+                            overflow: widget.isFolded
+                                ? TextOverflow.ellipsis
+                                : null,
+                          ),
+                          if (!widget.isFolded &&
+                              widget.card.questionImagePaths.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Column(
+                                children:
+                                    widget.card.questionImagePaths.map((path) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.file(
+                                        File(path),
+                                        width: double.infinity,
+                                        fit: BoxFit.fitWidth,
+                                        cacheWidth: 600,
+                                        errorBuilder: (_, _, _) => Container(
+                                          height: 80,
+                                          width: double.infinity,
+                                          color: colorScheme
+                                              .surfaceContainerHighest,
+                                          child: const Icon(Icons.broken_image,
+                                              size: 28),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),

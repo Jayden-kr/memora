@@ -85,7 +85,14 @@ class _PushNotificationSettingsScreenState
           if (parsed != null) _selectedDays.add(parsed);
         }
       }
-      _selectedFolderId = first['folder_id'] as int?;
+      final restoredFolderId = first['folder_id'] as int?;
+      // 삭제된 폴더를 참조하면 DropdownButton assertion 에러 발생 → 검증
+      if (restoredFolderId != null &&
+          folders.any((f) => f.id == restoredFolderId)) {
+        _selectedFolderId = restoredFolderId;
+      } else {
+        _selectedFolderId = null;
+      }
       _soundEnabled = (first['sound_enabled'] as int? ?? 1) == 1;
     }
 
@@ -379,9 +386,9 @@ class _PushNotificationSettingsScreenState
                         }
                         if (!mounted) return;
                         setState(() => _enabled = v);
-                        DatabaseHelper.instance.upsertSetting(
+                        await DatabaseHelper.instance.upsertSetting(
                             _settingNotificationEnabled, v.toString());
-                        _scheduleAll();
+                        await _scheduleAll();
                       },
                     ),
                   ),
@@ -481,6 +488,20 @@ class _PushNotificationSettingsScreenState
                       _updateGlobalSettings();
                     },
                   ),
+                ),
+                const Divider(),
+
+                // 테스트 알림
+                ListTile(
+                  title: const Text('테스트 알림 보내기'),
+                  leading: const Icon(Icons.notifications_active),
+                  onTap: () async {
+                    await NotificationService.showTestNotification();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('테스트 알림을 보냈습니다.')),
+                    );
+                  },
                 ),
                 const Divider(),
 

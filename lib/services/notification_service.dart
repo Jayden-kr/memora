@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -19,10 +17,12 @@ class NotificationService {
 
   // 알림 ID 계산용 상수 (충돌 방지)
   // id는 _maxAlarmId로 모듈로 연산하여 Android 32비트 int 범위 내 유지
-  static const _maxAlarmId = 200;            // 안전 상한: 200 * 10000 = 2,000,000
-  static const _dayMultiplier = 10;          // 고정 알림: id * _dayMultiplier + day(0~6)
-  static const _intervalMultiplier = 10000;  // 간격 알림: id * _intervalMultiplier + slot
-  static const _intervalDayMultiplier = 10;  // 간격+요일: id * _intervalMultiplier + slot * _intervalDayMultiplier + day
+  // 최대 ID: 100000 + 9999 * 10000 + 99 * 10 + 7 ≈ 100M (32비트 int 2.1B 내)
+  static const _maxAlarmId = 10000;           // 안전 상한: autoincrement 10000까지 충돌 없음
+  static const _dayMultiplier = 10;           // 고정 알림: id * _dayMultiplier + day(0~6)
+  static const _intervalBase = 100000;        // 간격 알림 기본 오프셋 (고정 알림 범위 0~99997과 충돌 방지)
+  static const _intervalMultiplier = 10000;   // 간격 알림: _intervalBase + id * _intervalMultiplier + slot
+  static const _intervalDayMultiplier = 10;   // 간격+요일: _intervalBase + id * _intervalMultiplier + slot * _intervalDayMultiplier + day
 
   /// alarm ID를 안전 범위로 정규화
   static int _safeId(int id) => id % _maxAlarmId;
@@ -397,7 +397,7 @@ class NotificationService {
           scheduled = scheduled.add(const Duration(days: 1));
         }
 
-        final notifId = _safeId(id) * _intervalMultiplier + i;
+        final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i;
         await _plugin.zonedSchedule(
           notifId, content.title, content.body, scheduled, notificationDetails,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -411,7 +411,7 @@ class NotificationService {
             dartWeekday, slot.hour, slot.minute, now,
           );
 
-          final notifId = _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + day;
+          final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + day;
           await _plugin.zonedSchedule(
             notifId, content.title, content.body, scheduled, notificationDetails,
             androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,

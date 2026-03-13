@@ -16,7 +16,7 @@ class ImportExportService : Service() {
 
         private fun ensureChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val manager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                val manager = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
                 if (manager.getNotificationChannel(CHANNEL_ID) == null) {
                     val channel = NotificationChannel(
                         CHANNEL_ID, "Import/Export 진행",
@@ -51,7 +51,7 @@ class ImportExportService : Service() {
                 .setProgress(max, progress, max == 0)
                 .build()
 
-            val manager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val manager = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
             manager.notify(PROGRESS_NOTIFICATION_ID, notification)
         }
 
@@ -77,7 +77,7 @@ class ImportExportService : Service() {
                 .setOngoing(false)
                 .build()
 
-            val manager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val manager = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
             manager.notify(COMPLETE_NOTIFICATION_ID, notification)
         }
     }
@@ -157,7 +157,7 @@ class ImportExportService : Service() {
                 description = "Import/Export 진행 상태를 표시합니다"
                 setShowBadge(false)
             }
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val manager = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
             manager.createNotificationChannel(channel)
         }
     }

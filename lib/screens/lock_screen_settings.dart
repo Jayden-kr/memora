@@ -69,7 +69,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       _enabled = settings['enabled'] as bool? ?? false;
       final folderIds = settings['folderIds'];
       if (folderIds is List) {
-        _selectedFolderIds = folderIds.map((e) => e as int).toSet();
+        final validIds = folders.map((f) => f.id).toSet();
+        _selectedFolderIds = folderIds
+            .map((e) => e as int)
+            .where((id) => validIds.contains(id))
+            .toSet();
       }
       _finishedFilter = settings['finishedFilter'] as int? ?? -1;
       _randomOrder = settings['randomOrder'] as bool? ?? true;

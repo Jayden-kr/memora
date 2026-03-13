@@ -62,6 +62,12 @@ class MemkImportService {
   Archive? _cachedArchive;
   String? _cachedFilePath;
 
+  /// 캐시된 Archive 해제 (Import 취소/완료 시 메모리 해제용)
+  void clearCache() {
+    _cachedArchive = null;
+    _cachedFilePath = null;
+  }
+
   /// .memk 경로에서 파일명만 추출
   static String extractFileName(String memkPath) {
     if (memkPath.isEmpty) return '';
@@ -186,11 +192,11 @@ class MemkImportService {
             Folder(
               name: folder.name,
               cardCount: 0, // 나중에 updateFolderCardCount로 갱신
-              folderCount: folder.folderCount,
+              folderCount: 0, // 번들 관계는 import에서 미지원
               sequence: folder.sequence,
               originalSequence: folder.originalSequence,
               modified: folder.modified,
-              parent: folder.parent,
+              parent: false, // parentFolderId 리매핑 미지원이므로 리셋
               isSpecialFolder: folder.isSpecialFolder,
             ),
           );

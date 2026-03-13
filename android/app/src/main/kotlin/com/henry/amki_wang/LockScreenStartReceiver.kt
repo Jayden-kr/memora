@@ -53,7 +53,7 @@ class LockScreenStartReceiver : BroadcastReceiver() {
     }
 
     private fun showRestoreNotification(context: Context) {
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
         // 알림 채널 생성 (API 26+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

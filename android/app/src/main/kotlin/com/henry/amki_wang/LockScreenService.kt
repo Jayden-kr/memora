@@ -139,10 +139,10 @@ class LockScreenService : Service() {
         dismissOverlay()
         fontRegular = null
         fontBold = null
-        bgThread?.let { thread ->
-            thread.quitSafely()
-            try { thread.join(2000) } catch (_: InterruptedException) {}
-        }
+        // 대기 중인 콜백 제거 → 서비스 GC 지연 방지
+        mainHandler.removeCallbacksAndMessages(null)
+        bgHandler?.removeCallbacksAndMessages(null)
+        bgThread?.quitSafely()
         bgThread = null
         bgHandler = null
         super.onDestroy()
@@ -162,7 +162,7 @@ class LockScreenService : Service() {
                 description = "잠금화면 카드 표시 서비스"
                 setShowBadge(false)
             }
-            val nm = getSystemService(NotificationManager::class.java)
+            val nm = getSystemService(NotificationManager::class.java) ?: return
             nm.createNotificationChannel(channel)
         }
     }
@@ -256,7 +256,7 @@ class LockScreenService : Service() {
 
         var db: SQLiteDatabase? = null
         try {
-            db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
+            db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
             val whereParts = mutableListOf<String>()
             val whereArgs = mutableListOf<String>()
 
@@ -307,6 +307,7 @@ class LockScreenService : Service() {
     }
 
     private fun ensureBgThread() {
+        if (!isServiceActive) return
         if (bgThread == null) {
             bgThread = HandlerThread("LockScreenBG").apply { start() }
             bgHandler = Handler(bgThread!!.looper)
@@ -366,11 +367,17 @@ class LockScreenService : Service() {
 
         try {
             windowManager?.addView(overlayView, params)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add overlay view", e)
+            overlayView = null
+            return
+        }
+        try {
             updateCardDisplay()
             Log.d(TAG, "Overlay shown with ${cards.size} cards")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to show overlay", e)
-            overlayView = null
+            Log.e(TAG, "Failed to update card display", e)
+            // View was added, so still functional; don't null out overlayView
         }
     }
 
@@ -699,8 +706,11 @@ class LockScreenService : Service() {
         bgHandler?.post {
             if (!isServiceActive) return@post
             val bitmaps = mutableListOf<Bitmap>()
+            var totalBytes = 0L
+            val maxTotalBytes = 48L * 1024 * 1024  // 48 MB cap for all images
             for (path in images) {
                 if (!isServiceActive) break
+                if (totalBytes >= maxTotalBytes) break
                 val file = java.io.File(path)
                 if (!file.exists()) continue
                 try {
@@ -710,11 +720,21 @@ class LockScreenService : Service() {
                     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) continue
                     var sampleSize = 1
                     val imgWidth = bounds.outWidth
-                    while (imgWidth / sampleSize > screenWidth * 2) {
+                    while (imgWidth / sampleSize > screenWidth) {
                         sampleSize *= 2
                     }
-                    val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-                    BitmapFactory.decodeFile(path, options)?.let { bitmaps.add(it) }
+                    val options = BitmapFactory.Options().apply {
+                        inSampleSize = sampleSize
+                        inPreferredConfig = Bitmap.Config.RGB_565  // 2 bytes/pixel vs 4
+                    }
+                    BitmapFactory.decodeFile(path, options)?.let { bmp ->
+                        totalBytes += bmp.byteCount
+                        if (totalBytes > maxTotalBytes) {
+                            bmp.recycle()
+                        } else {
+                            bitmaps.add(bmp)
+                        }
+                    }
                 } catch (_: Exception) { }
             }
             // 메인 스레드에서 ImageView에 세팅
@@ -743,12 +763,37 @@ class LockScreenService : Service() {
     }
 
     private fun dismissOverlay() {
-        overlayView?.let {
-            recycleViewBitmaps(it)
+        overlayView?.let { view ->
+            // 먼저 drawable 참조 해제 (setImageDrawable(null))
+            val bitmapsToRecycle = collectBitmaps(view)
             try {
-                windowManager?.removeView(it)
+                windowManager?.removeView(view)
             } catch (_: Exception) {}
             overlayView = null
+            // removeView 후 다음 프레임에서 bitmap recycle (draw pipeline 완료 보장)
+            mainHandler.post {
+                bitmapsToRecycle.forEach { bmp ->
+                    if (!bmp.isRecycled) bmp.recycle()
+                }
+            }
         }
+    }
+
+    /** drawable 참조 해제하고, recycle 할 bitmap 목록 반환 */
+    private fun collectBitmaps(view: View): List<Bitmap> {
+        val bitmaps = mutableListOf<Bitmap>()
+        if (view is ImageView) {
+            val drawable = view.drawable
+            view.setImageDrawable(null)
+            if (drawable is android.graphics.drawable.BitmapDrawable) {
+                drawable.bitmap?.let { if (!it.isRecycled) bitmaps.add(it) }
+            }
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                view.getChildAt(i)?.let { bitmaps.addAll(collectBitmaps(it)) }
+            }
+        }
+        return bitmaps
     }
 }

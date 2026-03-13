@@ -37,6 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _setSetting(String key, String value) async {
     await DatabaseHelper.instance.upsertSetting(key, value);
+    if (!mounted) return;
     setState(() => _settings[key] = value);
 
     // 테마 변경 즉시 반영

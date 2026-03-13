@@ -69,21 +69,25 @@ class PdfExportService {
       final folder = await db.getFolderById(folderId);
       if (folder == null) continue;
 
-      final cards = await db.getCardsByFolderId(folderId);
+      final totalCards = await db.countCardsByFolderId(folderId);
 
       processedFolders++;
       onProgress(PdfExportProgress(
         currentFolders: processedFolders,
         totalFolders: folderIds.length,
-        message: '${folder.name} 처리 중... (${cards.length}장)',
+        message: '${folder.name} 처리 중... ($totalCards장)',
       ));
 
-      // 배치 단위로 이미지 캐싱 + PDF 페이지 생성 (메모리 절약)
+      // 배치 단위로 카드 로드 + 이미지 캐싱 + PDF 페이지 생성 (메모리 절약)
       for (int batchStart = 0;
-          batchStart < cards.length;
+          batchStart < totalCards;
           batchStart += pdfBatchSize) {
-        final batchEnd = min(batchStart + pdfBatchSize, cards.length);
-        final batch = cards.sublist(batchStart, batchEnd);
+        final batch = await db.getCardsByFolderId(
+          folderId,
+          limit: pdfBatchSize,
+          offset: batchStart,
+        );
+        if (batch.isEmpty) break;
         final isFirstBatch = batchStart == 0;
 
         // 이 배치의 이미지만 캐싱

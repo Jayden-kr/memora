@@ -197,7 +197,16 @@ class _CardEditScreenState extends State<CardEditScreen> {
     });
     // 새로 추가된 이미지(원본 카드에 없는 경로)는 즉시 삭제
     if (path != null && path.isNotEmpty && !_isOriginalPath(path)) {
-      File(path).delete().catchError((_) {});
+      File(path).delete().ignore();
+    }
+  }
+
+  /// 변경사항 폐기 시 새로 추가된 이미지 파일을 디스크에서 삭제 (orphan 방지)
+  void _cleanupNewImages() {
+    for (final path in [..._questionImages, ..._answerImages]) {
+      if (path != null && path.isNotEmpty && !_isOriginalPath(path)) {
+        File(path).delete().ignore();
+      }
     }
   }
 
@@ -227,7 +236,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
     if (_saving) return;
     final question = _questionController.text.trim();
     final answer = _answerController.text.trim();
-    if (question.isEmpty && answer.isEmpty) {
+    final hasImages = _questionImages.any((img) => img != null) ||
+        _answerImages.any((img) => img != null);
+    if (question.isEmpty && answer.isEmpty && !hasImages) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('앞면 또는 뒷면을 입력하세요.')),
@@ -399,6 +410,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
           ),
         );
         if (discard == true && context.mounted) {
+          _cleanupNewImages();
           Navigator.pop(context);
         }
       },

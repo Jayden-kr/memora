@@ -24,12 +24,14 @@ class CardViewScreen extends StatefulWidget {
 
 class _CardViewScreenState extends State<CardViewScreen> {
   late CardModel _card;
+  String? _folderName;
   bool _answerRevealed = false;
 
   @override
   void initState() {
     super.initState();
     _card = widget.card;
+    _folderName = widget.folderName;
   }
 
   Future<void> _editCard() async {
@@ -45,6 +47,18 @@ class _CardViewScreenState extends State<CardViewScreen> {
     // 편집 후 카드 데이터 갱신
     final updated = await DatabaseHelper.instance.getCardById(_card.id!);
     if (updated != null && mounted) {
+      // 폴더 변경 시 새 폴더명 조회
+      if (updated.folderId != _card.folderId) {
+        final folder =
+            await DatabaseHelper.instance.getFolderById(updated.folderId);
+        if (mounted) {
+          setState(() {
+            _card = updated;
+            _folderName = folder?.name;
+          });
+          return;
+        }
+      }
       setState(() => _card = updated);
     }
   }
@@ -56,7 +70,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.folderName ?? '카드'),
+        title: Text(_folderName ?? '카드'),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit),

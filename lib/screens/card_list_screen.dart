@@ -29,7 +29,7 @@ class CardListScreen extends StatefulWidget {
 
 class _CardListScreenState extends State<CardListScreen> {
   final List<CardModel> _cards = [];
-  ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = ScrollController();
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
@@ -55,6 +55,10 @@ class _CardListScreenState extends State<CardListScreen> {
   Timer? _debounceTimer;
   String _searchQuery = '';
   int _searchGeneration = 0;
+
+  // 설정값
+  bool _showCardNumber = false;
+  bool _showScrollbar = false;
 
   // 스크롤 위치 표시 (ValueNotifier로 라벨만 리빌드)
   /// 0 = 라벨 숨김, 1+ = 현재 보이는 카드 인덱스
@@ -101,6 +105,9 @@ class _CardListScreenState extends State<CardListScreen> {
     final visSetting = settings[AppConstants.settingAnswerVisibility];
     if (visSetting == 'hidden') _allAnswersHidden = true;
 
+    _showCardNumber = settings[AppConstants.settingCardNumber] == 'true';
+    _showScrollbar = settings[AppConstants.settingCardScroll] == 'true';
+
     if (_isNotificationMode) {
       await _loadAllAndScrollToTarget();
     } else {
@@ -146,6 +153,24 @@ class _CardListScreenState extends State<CardListScreen> {
     _highlightTimer?.cancel();
     _highlightTimer = Timer(const Duration(seconds: 5), () {
       if (mounted) setState(() => _highlightCardId = null);
+    });
+  }
+
+  /// 알림 모드에서 카드 편집/삭제 후 전체 카드 리로드 (스크롤 위치 유지)
+  Future<void> _reloadAllCardsForNotificationMode() async {
+    _totalCount = await DatabaseHelper.instance
+        .countCardsByFolderId(widget.folder.id!);
+    final cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
+      widget.folder.id!,
+      _sortOrder,
+    );
+    if (!mounted) return;
+    setState(() {
+      _cards
+        ..clear()
+        ..addAll(cards);
+      _hasMore = false;
+      _loading = false;
     });
   }
 
@@ -212,6 +237,12 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _loadCards() async {
+    // 알림 모드: 전체 카드 리로드 (페이지네이션 없이)
+    if (_isNotificationMode && _searchQuery.isEmpty) {
+      await _reloadAllCardsForNotificationMode();
+      return;
+    }
+
     // 초기 로딩에만 스피너 표시. 리로드 시에는 기존 카드 유지하여 깜빡임 방지
     final isInitialLoad = _cards.isEmpty;
     if (isInitialLoad) {
@@ -624,6 +655,7 @@ class _CardListScreenState extends State<CardListScreen> {
       isSelectionMode: _isSelectionMode,
       isSelected: _selectedCardIds.contains(card.id),
       isHighlighted: isHighlighted,
+      cardNumber: _showCardNumber ? index + 1 : null,
       searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
       onQuestionTap: () => _toggleQuestionFold(card),
       onAnswerTap: () => _toggleAnswerReveal(card),
@@ -660,8 +692,8 @@ class _CardListScreenState extends State<CardListScreen> {
       ),
       child: Scrollbar(
         controller: _scrollController,
-        thumbVisibility: true,
-        interactive: true,
+        thumbVisibility: _showScrollbar,
+        interactive: _showScrollbar,
         child: ListView.builder(
           controller: _scrollController,
           itemCount: _cards.length + (_hasMore ? 1 : 0),

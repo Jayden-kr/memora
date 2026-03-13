@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart' show Share, XFile;
@@ -18,6 +19,9 @@ class ExportScreen extends StatefulWidget {
 }
 
 class _ExportScreenState extends State<ExportScreen> {
+  static const _channel =
+      MethodChannel('com.henry.amki_wang/import_export');
+
   List<Folder> _folders = [];
   final Set<int> _selectedFolderIds = {};
   String _fileType = 'memk'; // 'memk' or 'pdf'
@@ -71,6 +75,11 @@ class _ExportScreenState extends State<ExportScreen> {
       _progressMessage = '준비 중...';
     });
 
+    // Foreground Service 시작 (Android 백그라운드 킬 방지)
+    try {
+      await _channel.invokeMethod('startService', {'title': 'Export 진행 중'});
+    } catch (_) {}
+
     try {
       String outputPath;
       String fileName;
@@ -122,6 +131,14 @@ class _ExportScreenState extends State<ExportScreen> {
         debugPrint('[EXPORT] DB 기록 실패: $dbErr (파일은 저장됨: $outputPath)');
       }
 
+      // Foreground Service 완료
+      try {
+        await _channel.invokeMethod('complete', {
+          'title': 'Export 완료',
+          'message': fileName,
+        });
+      } catch (_) {}
+
       if (!mounted) return;
       setState(() => _exporting = false);
 
@@ -152,6 +169,11 @@ class _ExportScreenState extends State<ExportScreen> {
       if (!mounted) return;
       Navigator.pop(context);
     } catch (e) {
+      // Foreground Service 취소
+      try {
+        await _channel.invokeMethod('cancel');
+      } catch (_) {}
+
       if (!mounted) return;
       setState(() {
         _exporting = false;

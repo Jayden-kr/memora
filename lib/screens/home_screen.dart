@@ -33,6 +33,8 @@ class _HomeScreenState extends State<HomeScreen> {
   String _sortMode = 'sequence'; // sequence, name_asc, oldest, newest
   int _totalCardCount = 0;
 
+  static const _sortModeKey = 'home_sort_mode';
+
   @override
   void initState() {
     super.initState();
@@ -80,8 +82,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final folders = await DatabaseHelper.instance.getAllFolders();
     // 폴더별 card_count 합계로 계산 (별도 COUNT 쿼리 불필요)
     final totalCards = folders.fold<int>(0, (sum, f) => sum + f.cardCount);
+    // 저장된 정렬 모드 복원
+    final settings = await DatabaseHelper.instance.getAllSettings();
+    final savedSort = settings[_sortModeKey];
     if (!mounted) return;
     setState(() {
+      if (savedSort != null) _sortMode = savedSort;
       _folders = _sortFolders(folders);
       _totalCardCount = totalCards;
       _loading = false;
@@ -108,6 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _sortMode = mode;
       _folders = _sortFolders(_folders);
     });
+    DatabaseHelper.instance.upsertSetting(_sortModeKey, mode);
   }
 
   Future<void> _showFolderPickerForNewCard() async {

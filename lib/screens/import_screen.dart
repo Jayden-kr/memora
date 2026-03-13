@@ -42,6 +42,7 @@ class _ImportScreenState extends State<ImportScreen> {
   @override
   void dispose() {
     _controller.removeListener(_onControllerUpdate);
+    _importService.clearCache();
     super.dispose();
   }
 
