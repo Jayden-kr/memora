@@ -175,6 +175,24 @@ class CardModel {
         answerImagePath5,
       ].where((p) => p != null && p.isNotEmpty).cast<String>().toList();
 
+  /// 앞면 이미지 비율 리스트 (경로와 1:1 매칭)
+  List<double?> get questionImageRatios => [
+        questionImageRatio,
+        questionImageRatio2,
+        questionImageRatio3,
+        questionImageRatio4,
+        questionImageRatio5,
+      ];
+
+  /// 뒷면 이미지 비율 리스트 (경로와 1:1 매칭)
+  List<double?> get answerImageRatios => [
+        answerImageRatio,
+        answerImageRatio2,
+        answerImageRatio3,
+        answerImageRatio4,
+        answerImageRatio5,
+      ];
+
   /// .memk JSON → Dart
   factory CardModel.fromJson(Map<String, dynamic> json) {
     return CardModel(

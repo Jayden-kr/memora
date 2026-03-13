@@ -337,7 +337,7 @@ ThemeData(
 - **한글 경로 빌드 이슈**: 반드시 `/tmp/`에 복사 후 빌드. `C:\flutter\` SDK 사용
 - **DB 버전 관리**: 새 테이블/컬럼 추가 시 `dbVersion` 올리고 `onUpgrade`에서 `ALTER TABLE` 사용
 - **.memk 호환성**: 암기짱 .memk 파일을 그대로 가져올 수 있어야 함. JSON 키는 camelCase 유지
-- **페이지네이션**: 카드 리스트는 50개씩 로딩 (`AppConstants.pageSize`), ScrollController로 무한 스크롤
+- **전체 로드**: 카드 리스트는 폴더 진입 시 전체 카드를 한번에 로드 (암기짱 방식). `ScrollablePositionedList`로 정확한 위치 추적 + 실시간 스크롤 라벨
 - **Boolean ↔ Integer**: SQLite에 bool 저장 시 반드시 0/1 int로 변환
 - **mounted 체크**: async 작업 후 `setState()` 전에 반드시 `if (!mounted) return;` 체크
 - **MethodChannel**: `com.henry.amki_wang/lockscreen` 채널로 Flutter ↔ Kotlin 통신

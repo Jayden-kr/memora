@@ -130,6 +130,7 @@ class _CardTileState extends State<CardTile> {
                                         width: double.infinity,
                                         fit: BoxFit.fitWidth,
                                         cacheWidth: 600,
+                                        gaplessPlayback: true,
                                         errorBuilder: (_, _, _) => Container(
                                           height: 80,
                                           width: double.infinity,
@@ -166,14 +167,8 @@ class _CardTileState extends State<CardTile> {
                 ],
               ),
               // Answer area (collapsible)
-              AnimatedCrossFade(
-                firstChild: const SizedBox.shrink(),
-                secondChild: _buildAnswerArea(colorScheme, answerVisible),
-                crossFadeState: widget.isFolded
-                    ? CrossFadeState.showFirst
-                    : CrossFadeState.showSecond,
-                duration: const Duration(milliseconds: 200),
-              ),
+              if (!widget.isFolded)
+                _buildAnswerArea(colorScheme, answerVisible),
             ],
           ),
         ),

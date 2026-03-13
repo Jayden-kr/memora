@@ -189,7 +189,12 @@ class MemkExportService {
     }
 
     // ZIP 인코딩을 별도 Isolate에서 실행하여 UI 프리징 방지
-    final zipBytes = await compute(_encodeZip, archive);
+    // Archive 객체는 Isolate 간 전송 불가 → 직렬화 가능한 리스트로 변환
+    final archiveEntries = <List<dynamic>>[];
+    for (final file in archive.files) {
+      archiveEntries.add([file.name, file.content as List<int>]);
+    }
+    final zipBytes = await compute(_encodeZipFromEntries, archiveEntries);
     if (zipBytes == null) {
       throw Exception('ZIP 인코딩 실패: 아카이브를 압축할 수 없습니다');
     }
@@ -222,7 +227,13 @@ class MemkExportService {
   }
 }
 
-/// compute()용 최상위 함수 — ZIP 인코딩을 별도 Isolate에서 실행
-List<int>? _encodeZip(Archive archive) {
+/// compute()용 최상위 함수 — 직렬화 가능한 엔트리 리스트로부터 ZIP 생성
+List<int>? _encodeZipFromEntries(List<List<dynamic>> entries) {
+  final archive = Archive();
+  for (final entry in entries) {
+    final name = entry[0] as String;
+    final data = entry[1] as List<int>;
+    archive.addFile(ArchiveFile(name, data.length, data));
+  }
   return ZipEncoder().encode(archive);
 }

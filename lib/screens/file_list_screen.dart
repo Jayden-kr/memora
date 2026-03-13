@@ -24,7 +24,9 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _loadFiles() async {
-    final files = await DatabaseHelper.instance.getAllExportedFiles();
+    final rawFiles = await DatabaseHelper.instance.getAllExportedFiles();
+    // sqflite query()는 읽기 전용 Map 반환 → mutable 복사 후 수정
+    final files = rawFiles.map((f) => Map<String, dynamic>.from(f)).toList();
     // 실제 파일 존재 여부 체크 (비동기)
     for (final file in files) {
       final filePath = file['file_path'] as String?;
