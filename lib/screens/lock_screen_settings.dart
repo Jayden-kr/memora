@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
@@ -42,6 +44,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
   @override
   void dispose() {
+    _settingDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -153,8 +156,14 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     }
   }
 
-  Future<void> _onSettingChanged() async {
-    await _applySettings();
+  Timer? _settingDebounce;
+
+  void _onSettingChanged() {
+    // 디바운싱: 빠른 연속 변경 시 마지막 변경만 적용 (500ms)
+    _settingDebounce?.cancel();
+    _settingDebounce = Timer(const Duration(milliseconds: 500), () {
+      _applySettings();
+    });
   }
 
   @override

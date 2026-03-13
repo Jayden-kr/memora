@@ -131,6 +131,7 @@ class _ImportScreenState extends State<ImportScreen> {
 
   Future<void> _createNewLocalFolder() async {
     final controller = TextEditingController();
+    try {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -169,7 +170,11 @@ class _ImportScreenState extends State<ImportScreen> {
     await DatabaseHelper.instance.insertFolder(folder);
     final localFolders =
         await DatabaseHelper.instance.getNonBundleFolders();
+    if (!mounted) return;
     setState(() => _localFolders = localFolders);
+    } finally {
+      controller.dispose();
+    }
   }
 
   @override
@@ -263,22 +268,23 @@ class _ImportScreenState extends State<ImportScreen> {
                   child: Text('가져올 위치',
                       style: Theme.of(context).textTheme.titleMedium),
                 ),
-                RadioGroup<bool>(
-                  groupValue: _useExistingFolder,
-                  onChanged: (v) =>
-                      setState(() => _useExistingFolder = v!),
-                  child: Column(
-                    children: [
-                      RadioListTile<bool>(
-                        title: const Text('새 폴더 자동 생성'),
-                        value: false,
-                      ),
-                      RadioListTile<bool>(
-                        title: const Text('기존 폴더 선택'),
-                        value: true,
-                      ),
-                    ],
-                  ),
+                Column(
+                  children: [
+                    RadioListTile<bool>(
+                      title: const Text('새 폴더 자동 생성'),
+                      value: false,
+                      groupValue: _useExistingFolder,
+                      onChanged: (v) =>
+                          setState(() => _useExistingFolder = v!),
+                    ),
+                    RadioListTile<bool>(
+                      title: const Text('기존 폴더 선택'),
+                      value: true,
+                      groupValue: _useExistingFolder,
+                      onChanged: (v) =>
+                          setState(() => _useExistingFolder = v!),
+                    ),
+                  ],
                 ),
 
                 if (_useExistingFolder) ...[

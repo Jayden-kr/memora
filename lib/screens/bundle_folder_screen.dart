@@ -67,6 +67,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
   Future<void> _save() async {
     final name = _nameController.text.trim();
     if (name.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('묶음 이름을 입력하세요.')),
       );
@@ -89,7 +90,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
         for (final child in oldChildren) {
           if (!_selectedFolderIds.contains(child.id)) {
             await DatabaseHelper.instance
-                .updateFolder(child.copyWith(parentFolderId: 0));
+                .updateFolder(child.copyWith(parentFolderId: null));
           }
         }
 

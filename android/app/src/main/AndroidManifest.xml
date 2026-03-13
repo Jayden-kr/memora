@@ -43,7 +43,6 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:mimeType="application/memk" />
                 <data android:mimeType="application/x-memk" />
-                <data android:mimeType="application/octet-stream" />
             </intent-filter>
             <!-- .memk 파일 확장자로 열기 -->
             <intent-filter>

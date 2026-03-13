@@ -249,23 +249,23 @@ class _ExportScreenState extends State<ExportScreen> {
                         child: Text('파일 형식',
                             style: Theme.of(context).textTheme.titleMedium),
                       ),
-                      RadioGroup<String>(
-                        groupValue: _fileType,
-                        onChanged: (v) => setState(() => _fileType = v!),
-                        child: Column(
-                          children: [
-                            RadioListTile<String>(
-                              title: const Text('.memk'),
-                              subtitle: const Text('암기짱/Memora 호환 백업 파일'),
-                              value: 'memk',
-                            ),
-                            RadioListTile<String>(
-                              title: const Text('PDF'),
-                              subtitle: const Text('인쇄/공유용 문서'),
-                              value: 'pdf',
-                            ),
-                          ],
-                        ),
+                      Column(
+                        children: [
+                          RadioListTile<String>(
+                            title: const Text('.memk'),
+                            subtitle: const Text('암기짱/Memora 호환 백업 파일'),
+                            value: 'memk',
+                            groupValue: _fileType,
+                            onChanged: (v) => setState(() => _fileType = v!),
+                          ),
+                          RadioListTile<String>(
+                            title: const Text('PDF'),
+                            subtitle: const Text('인쇄/공유용 문서'),
+                            value: 'pdf',
+                            groupValue: _fileType,
+                            onChanged: (v) => setState(() => _fileType = v!),
+                          ),
+                        ],
                       ),
                     ],
                   ),

@@ -63,6 +63,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
   // scrollToCardId용 하이라이트
   int? _highlightCardId;
+  Timer? _highlightTimer;
 
   // scrollable_positioned_list 컨트롤러 (알림 탭 시 사용)
   final ItemScrollController _itemScrollController = ItemScrollController();
@@ -141,8 +142,9 @@ class _CardListScreenState extends State<CardListScreen> {
       });
     }
 
-    // 5초 후 하이라이트 해제
-    Future.delayed(const Duration(seconds: 5), () {
+    // 5초 후 하이라이트 해제 (dispose 시 cancel 가능한 Timer 사용)
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(seconds: 5), () {
       if (mounted) setState(() => _highlightCardId = null);
     });
   }
@@ -156,6 +158,7 @@ class _CardListScreenState extends State<CardListScreen> {
     _searchFocusNode.dispose();
     _debounceTimer?.cancel();
     _scrollLabelTimer?.cancel();
+    _highlightTimer?.cancel();
     _scrollLabelNotifier.dispose();
     super.dispose();
   }
@@ -209,11 +212,14 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _loadCards() async {
-    setState(() {
-      _loading = true;
-      _cards.clear();
-      _hasMore = true;
-    });
+    // 초기 로딩에만 스피너 표시. 리로드 시에는 기존 카드 유지하여 깜빡임 방지
+    final isInitialLoad = _cards.isEmpty;
+    if (isInitialLoad) {
+      setState(() {
+        _loading = true;
+      });
+    }
+    _hasMore = true;
 
     if (_searchQuery.isNotEmpty) {
       await _performSearch();
@@ -228,7 +234,9 @@ class _CardListScreenState extends State<CardListScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _cards.addAll(cards);
+        _cards
+          ..clear()
+          ..addAll(cards);
         _hasMore = cards.length >= AppConstants.pageSize;
         _loading = false;
       });
@@ -244,7 +252,9 @@ class _CardListScreenState extends State<CardListScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _cards.addAll(cards);
+        _cards
+          ..clear()
+          ..addAll(cards);
         _hasMore = cards.length >= AppConstants.pageSize;
         _loading = false;
       });
@@ -556,21 +566,25 @@ class _CardListScreenState extends State<CardListScreen> {
   // ─── Answer fold/hide ───
 
   void _toggleQuestionFold(CardModel card) {
+    final cardId = card.id;
+    if (cardId == null) return;
     setState(() {
-      if (_foldedCards.contains(card.id)) {
-        _foldedCards.remove(card.id);
+      if (_foldedCards.contains(cardId)) {
+        _foldedCards.remove(cardId);
       } else {
-        _foldedCards.add(card.id!);
+        _foldedCards.add(cardId);
       }
     });
   }
 
   void _toggleAnswerReveal(CardModel card) {
+    final cardId = card.id;
+    if (cardId == null) return;
     setState(() {
-      if (_revealedCards.contains(card.id)) {
-        _revealedCards.remove(card.id);
+      if (_revealedCards.contains(cardId)) {
+        _revealedCards.remove(cardId);
       } else {
-        _revealedCards.add(card.id!);
+        _revealedCards.add(cardId);
       }
     });
   }

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
@@ -29,8 +30,9 @@ class PdfExportService {
       final fontData =
           await rootBundle.load('assets/fonts/NotoSansKR-Regular.ttf');
       _koreanFont = pw.Font.ttf(fontData);
-    } catch (_) {
-      _koreanFont = pw.Font.helvetica();
+    } catch (e) {
+      throw Exception('한글 폰트 로딩 실패: $e\n'
+          'assets/fonts/NotoSansKR-Regular.ttf 파일이 존재하는지 확인하세요.');
     }
     return _koreanFont!;
   }
@@ -61,6 +63,8 @@ class PdfExportService {
     final doc = pw.Document();
     int processedFolders = 0;
 
+    const pdfBatchSize = 100;
+
     for (final folderId in folderIds) {
       final folder = await db.getFolderById(folderId);
       if (folder == null) continue;
@@ -71,61 +75,70 @@ class PdfExportService {
       onProgress(PdfExportProgress(
         currentFolders: processedFolders,
         totalFolders: folderIds.length,
-        message: '${folder.name} 처리 중... (이미지 로딩)',
+        message: '${folder.name} 처리 중... (${cards.length}장)',
       ));
 
-      // 모든 이미지를 비동기로 미리 읽기 (앞면 + 뒷면)
-      final allImagePaths = <String>[];
-      for (final card in cards) {
-        allImagePaths.addAll(card.questionImagePaths);
-        allImagePaths.addAll(card.answerImagePaths);
-      }
-      final imageCache = await _preloadImages(allImagePaths);
+      // 배치 단위로 이미지 캐싱 + PDF 페이지 생성 (메모리 절약)
+      for (int batchStart = 0;
+          batchStart < cards.length;
+          batchStart += pdfBatchSize) {
+        final batchEnd = min(batchStart + pdfBatchSize, cards.length);
+        final batch = cards.sublist(batchStart, batchEnd);
+        final isFirstBatch = batchStart == 0;
 
-      // MultiPage로 자동 페이지네이션
-      doc.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          header: (context) => pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              if (context.pageNumber == 1) ...[
-                pw.Text(
-                  folder.name,
-                  style: pw.TextStyle(font: font, fontSize: 24,
-                      fontWeight: pw.FontWeight.bold),
-                ),
-                pw.SizedBox(height: 4),
-                pw.Text(
-                  '카드 ${cards.length}장',
-                  style: pw.TextStyle(font: font, fontSize: 12,
-                      color: PdfColors.grey600),
-                ),
-                pw.Divider(),
-                pw.SizedBox(height: 8),
+        // 이 배치의 이미지만 캐싱
+        final batchImagePaths = <String>[];
+        for (final card in batch) {
+          batchImagePaths.addAll(card.questionImagePaths);
+          batchImagePaths.addAll(card.answerImagePaths);
+        }
+        final imageCache = await _preloadImages(batchImagePaths);
+
+        doc.addPage(
+          pw.MultiPage(
+            pageFormat: PdfPageFormat.a4,
+            header: (context) => pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                if (isFirstBatch && context.pageNumber == 1) ...[
+                  pw.Text(
+                    folder.name,
+                    style: pw.TextStyle(font: font, fontSize: 24,
+                        fontWeight: pw.FontWeight.bold),
+                  ),
+                  pw.SizedBox(height: 4),
+                  pw.Text(
+                    '카드 ${cards.length}장',
+                    style: pw.TextStyle(font: font, fontSize: 12,
+                        color: PdfColors.grey600),
+                  ),
+                  pw.Divider(),
+                  pw.SizedBox(height: 8),
+                ],
               ],
-            ],
-          ),
-          build: (context) => cards
-              .map((card) => _buildCardWidget(
-                    card.question,
-                    card.answer,
-                    card.questionImagePaths,
-                    card.answerImagePaths,
-                    font,
-                    imageCache,
-                  ))
-              .toList(),
-          footer: (context) => pw.Container(
-            alignment: pw.Alignment.centerRight,
-            child: pw.Text(
-              '${context.pageNumber} / ${context.pagesCount}',
-              style: pw.TextStyle(font: font, fontSize: 9,
-                  color: PdfColors.grey500),
+            ),
+            build: (context) => batch
+                .map((card) => _buildCardWidget(
+                      card.question,
+                      card.answer,
+                      card.questionImagePaths,
+                      card.answerImagePaths,
+                      font,
+                      imageCache,
+                    ))
+                .toList(),
+            footer: (context) => pw.Container(
+              alignment: pw.Alignment.centerRight,
+              child: pw.Text(
+                '${context.pageNumber} / ${context.pagesCount}',
+                style: pw.TextStyle(font: font, fontSize: 9,
+                    color: PdfColors.grey500),
+              ),
             ),
           ),
-        ),
-      );
+        );
+        // imageCache는 스코프를 벗어나며 GC 대상
+      }
     }
 
     final bytes = await doc.save();
@@ -143,15 +156,16 @@ class PdfExportService {
     pw.Font font,
     Map<String, Uint8List> imageCache,
   ) {
-    return pw.Row(
-      children: paths.take(3).map((path) {
+    return pw.Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: paths.map((path) {
         final bytes = imageCache[path];
         if (bytes != null) {
           final image = pw.MemoryImage(bytes);
           return pw.Container(
             width: 80,
             height: 80,
-            margin: const pw.EdgeInsets.only(right: 6),
             child: pw.Image(image, fit: pw.BoxFit.contain),
           );
         }

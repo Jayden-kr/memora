@@ -25,6 +25,15 @@ class _FileListScreenState extends State<FileListScreen> {
 
   Future<void> _loadFiles() async {
     final files = await DatabaseHelper.instance.getAllExportedFiles();
+    // 실제 파일 존재 여부 체크
+    for (final file in files) {
+      final filePath = file['file_path'] as String?;
+      if (filePath != null) {
+        file['_exists'] = File(filePath).existsSync();
+      } else {
+        file['_exists'] = false;
+      }
+    }
     if (!mounted) return;
     setState(() {
       _files = files;
@@ -190,14 +199,27 @@ class _FileListScreenState extends State<FileListScreen> {
                     final fileType = file['file_type'] as String?;
                     final createdAt = file['created_at'] as String?;
 
+                    final exists = file['_exists'] as bool? ?? true;
+
                     return ListTile(
                       leading: Icon(
                         _fileIcon(fileType),
-                        color: Theme.of(context).colorScheme.primary,
+                        color: exists
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.outline,
                       ),
-                      title: Text(fileName),
+                      title: Text(
+                        fileName,
+                        style: exists
+                            ? null
+                            : TextStyle(
+                                color: Theme.of(context).colorScheme.outline,
+                                decoration: TextDecoration.lineThrough,
+                              ),
+                      ),
                       subtitle: Text(
                         [
+                          if (!exists) '(파일 없음)',
                           _formatFileSize(fileSize),
                           if (createdAt != null)
                             createdAt.length >= 10

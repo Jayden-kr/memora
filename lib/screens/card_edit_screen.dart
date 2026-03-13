@@ -155,8 +155,11 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
       final bytes = await File(savedPath).readAsBytes();
       final decoded = await decodeImageFromList(bytes);
-      final ratio = decoded.width / decoded.height;
+      final ratio = (decoded.width > 0 && decoded.height > 0)
+          ? decoded.width / decoded.height
+          : 1.0;
 
+      if (!mounted) return;
       setState(() {
         images[emptyIndex] = savedPath;
         ratios[emptyIndex] = ratio;
@@ -225,6 +228,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
     final question = _questionController.text.trim();
     final answer = _answerController.text.trim();
     if (question.isEmpty && answer.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('앞면 또는 뒷면을 입력하세요.')),
       );

@@ -57,6 +57,9 @@ class ImportExportService : Service() {
 
         fun showComplete(context: Context, title: String, message: String) {
             ensureChannel(context)
+            // 진행 알림 제거 (이중 알림 방지)
+            val mgr = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+            mgr?.cancel(PROGRESS_NOTIFICATION_ID)
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
@@ -83,7 +86,12 @@ class ImportExportService : Service() {
 
     override fun onDestroy() {
         try {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
         } catch (_: Exception) {}
         super.onDestroy()
     }
@@ -96,7 +104,12 @@ class ImportExportService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "STOP" -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
                 stopSelf()
                 return START_NOT_STICKY
             }

@@ -1,3 +1,6 @@
+/// copyWith에서 nullable 필드를 명시적으로 null로 설정하기 위한 sentinel
+const _absent = Object();
+
 class Folder {
   final int? id;
   final String name;
@@ -118,10 +121,10 @@ class Folder {
     int? folderCount,
     int? sequence,
     int? originalSequence,
-    String? modified,
+    Object? modified = _absent,
     bool? parent,
-    int? parentFolderId,
-    String? parentFolderName,
+    Object? parentFolderId = _absent,
+    Object? parentFolderName = _absent,
     bool? isSpecialFolder,
     bool? isBundle,
   }) {
@@ -132,10 +135,14 @@ class Folder {
       folderCount: folderCount ?? this.folderCount,
       sequence: sequence ?? this.sequence,
       originalSequence: originalSequence ?? this.originalSequence,
-      modified: modified ?? this.modified,
+      modified: modified == _absent ? this.modified : modified as String?,
       parent: parent ?? this.parent,
-      parentFolderId: parentFolderId ?? this.parentFolderId,
-      parentFolderName: parentFolderName ?? this.parentFolderName,
+      parentFolderId: parentFolderId == _absent
+          ? this.parentFolderId
+          : parentFolderId as int?,
+      parentFolderName: parentFolderName == _absent
+          ? this.parentFolderName
+          : parentFolderName as String?,
       isSpecialFolder: isSpecialFolder ?? this.isSpecialFolder,
       isBundle: isBundle ?? this.isBundle,
     );

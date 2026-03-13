@@ -72,6 +72,7 @@ class MemkExportService {
       // 선택된 폴더의 카드만 (단일 쿼리로 총 수 조회)
       int totalCards = await db.countCardsByFolderIds(folderIds);
       for (final folderId in folderIds) {
+        final folderName = folderNameMap[folderId] ?? '';
         const batchSize = 500;
         int offset = 0;
         while (true) {
@@ -80,7 +81,7 @@ class MemkExportService {
           if (cards.isEmpty) break;
           for (final card in cards) {
             final json = card.toJson();
-            json['folderName'] = folderNameMap[card.folderId] ?? '';
+            json['folderName'] = folderName;
             _convertToMemkPaths(json, imageFileNames);
             cardsJsonList.add(json);
             processed++;
@@ -93,6 +94,15 @@ class MemkExportService {
           ));
           offset += batchSize;
           await Future.delayed(Duration.zero);
+        }
+        // 소량 카드 폴더에서도 진행률 갱신 보장
+        if (processed > 0) {
+          onProgress(ExportProgress(
+            phase: 'cards',
+            current: processed,
+            total: totalCards,
+            message: '"$folderName" 완료 ($processed / $totalCards)',
+          ));
         }
       }
     } else {
@@ -180,7 +190,10 @@ class MemkExportService {
 
     // ZIP 인코딩을 별도 Isolate에서 실행하여 UI 프리징 방지
     final zipBytes = await compute(_encodeZip, archive);
-    await File(outputPath).writeAsBytes(zipBytes!);
+    if (zipBytes == null) {
+      throw Exception('ZIP 인코딩 실패: 아카이브를 압축할 수 없습니다');
+    }
+    await File(outputPath).writeAsBytes(zipBytes);
 
     onProgress(const ExportProgress(phase: 'done', message: 'Export 완료'));
   }

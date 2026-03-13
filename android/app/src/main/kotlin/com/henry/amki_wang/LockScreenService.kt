@@ -24,6 +24,17 @@ class LockScreenService : Service() {
     private var overlayView: View? = null
     private var windowManager: WindowManager? = null
 
+    // 서비스 활성 상태 (Handler 콜백에서 체크)
+    @Volatile
+    private var isServiceActive = false
+
+    // 백그라운드 스레드 (DB 쿼리, 이미지 디코딩용)
+    @Volatile
+    private var bgThread: HandlerThread? = null
+    @Volatile
+    private var bgHandler: Handler? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     // Pretendard 폰트
     private var fontRegular: Typeface? = null
     private var fontBold: Typeface? = null
@@ -60,7 +71,8 @@ class LockScreenService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate")
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        isServiceActive = true
+        windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
         createNotificationChannel()
         loadFonts()
     }
@@ -87,7 +99,12 @@ class LockScreenService : Service() {
                 }
                 "STOP_SERVICE" -> {
                     setServiceRunning(false)
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
                     stopSelf()
                     return START_NOT_STICKY
                 }
@@ -116,11 +133,18 @@ class LockScreenService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
+        isServiceActive = false
         setServiceRunning(false)
         unregisterScreenReceiver()
         dismissOverlay()
         fontRegular = null
         fontBold = null
+        bgThread?.let { thread ->
+            thread.quitSafely()
+            try { thread.join(2000) } catch (_: InterruptedException) {}
+        }
+        bgThread = null
+        bgHandler = null
         super.onDestroy()
     }
 
@@ -282,6 +306,13 @@ class LockScreenService : Service() {
         }
     }
 
+    private fun ensureBgThread() {
+        if (bgThread == null) {
+            bgThread = HandlerThread("LockScreenBG").apply { start() }
+            bgHandler = Handler(bgThread!!.looper)
+        }
+    }
+
     private fun showOverlay() {
         if (!Settings.canDrawOverlays(this)) {
             Log.w(TAG, "No overlay permission")
@@ -293,11 +324,25 @@ class LockScreenService : Service() {
         }
 
         loadSettings()
-        loadCardsFromDb()
-        if (cards.isEmpty()) {
-            Log.w(TAG, "No cards to show")
-            return
+
+        // DB 쿼리를 백그라운드 스레드에서 실행하여 ANR 방지
+        ensureBgThread()
+        bgHandler?.post {
+            if (!isServiceActive) return@post
+            loadCardsFromDb()
+            mainHandler.post {
+                if (!isServiceActive) return@post
+                if (cards.isEmpty()) {
+                    Log.w(TAG, "No cards to show")
+                    return@post
+                }
+                showOverlayOnMainThread()
+            }
         }
+    }
+
+    private fun showOverlayOnMainThread() {
+        if (overlayView != null) return
 
         currentIndex = 0
         showingBack = false
@@ -454,8 +499,8 @@ class LockScreenService : Service() {
             }
         })
         answerContainer.setOnTouchListener { _, event ->
+            // fling 인식 시만 소비, 아니면 ScrollView로 전파하여 스크롤 허용
             cardGesture.onTouchEvent(event)
-            true
         }
 
         cardContent.addView(answerContainer)
@@ -619,13 +664,20 @@ class LockScreenService : Service() {
 
     private fun recycleViewBitmaps(view: android.view.View) {
         if (view is ImageView) {
-            // bitmap.recycle()을 직접 호출하면 비동기 draw 중 Canvas 크래시 위험
-            // setImageDrawable(null)로 참조 해제 후 GC에 위임
+            val drawable = view.drawable
             view.setImageDrawable(null)
+            // 메인 스레드에서 drawable 해제 후 recycle — draw 파이프라인에서 제거된 상태이므로 안전
+            if (drawable is android.graphics.drawable.BitmapDrawable) {
+                val bitmap = drawable.bitmap
+                if (bitmap != null && !bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
         }
         if (view is android.view.ViewGroup) {
             for (i in 0 until view.childCount) {
-                recycleViewBitmaps(view.getChildAt(i))
+                val child = view.getChildAt(i) ?: continue
+                recycleViewBitmaps(child)
             }
         }
     }
@@ -638,38 +690,55 @@ class LockScreenService : Service() {
             }
         }
         container?.removeAllViews()
-        if (images.isEmpty()) return
-        val screenWidth = resources.displayMetrics.widthPixels
-        for (path in images) {
-            val file = java.io.File(path)
-            if (!file.exists()) continue
-            try {
-                // 이미지 크기 확인
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(path, bounds)
+        if (images.isEmpty() || container == null) return
+        val screenWidth = maxOf(resources.displayMetrics.widthPixels, 360)
+        val service = this
 
-                // 화면 너비 대비 적절한 샘플링 계산
-                var sampleSize = 1
-                val imgWidth = bounds.outWidth
-                while (imgWidth / sampleSize > screenWidth * 2) {
-                    sampleSize *= 2
+        // 이미지 디코딩을 백그라운드 스레드에서 실행하여 ANR 방지
+        ensureBgThread()
+        bgHandler?.post {
+            if (!isServiceActive) return@post
+            val bitmaps = mutableListOf<Bitmap>()
+            for (path in images) {
+                if (!isServiceActive) break
+                val file = java.io.File(path)
+                if (!file.exists()) continue
+                try {
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(path, bounds)
+                    // 무효한 이미지 dimensions 스킵 (무한루프/크래시 방지)
+                    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) continue
+                    var sampleSize = 1
+                    val imgWidth = bounds.outWidth
+                    while (imgWidth / sampleSize > screenWidth * 2) {
+                        sampleSize *= 2
+                    }
+                    val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                    BitmapFactory.decodeFile(path, options)?.let { bitmaps.add(it) }
+                } catch (_: Exception) { }
+            }
+            // 메인 스레드에서 ImageView에 세팅
+            mainHandler.post {
+                // 서비스 파괴 후 또는 container 제거 후: bitmap 정리
+                if (!isServiceActive || container.parent == null) {
+                    bitmaps.forEach { if (!it.isRecycled) it.recycle() }
+                    return@post
                 }
-
-                val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-                val bitmap = BitmapFactory.decodeFile(path, options) ?: continue
-                val imageView = ImageView(this).apply {
-                    setImageBitmap(bitmap)
-                    scaleType = ImageView.ScaleType.FIT_CENTER
-                    adjustViewBounds = true
-                    val lp = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    )
-                    lp.bottomMargin = dp(8)
-                    layoutParams = lp
+                for (bitmap in bitmaps) {
+                    val imageView = ImageView(service).apply {
+                        setImageBitmap(bitmap)
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        adjustViewBounds = true
+                        val lp = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        )
+                        lp.bottomMargin = dp(8)
+                        layoutParams = lp
+                    }
+                    container.addView(imageView)
                 }
-                container?.addView(imageView)
-            } catch (_: Exception) { }
+            }
         }
     }
 

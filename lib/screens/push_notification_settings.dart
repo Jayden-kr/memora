@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -44,6 +46,7 @@ class _PushNotificationSettingsScreenState
 
   @override
   void dispose() {
+    _globalSettingsDebounce?.cancel();
     _intervalMinController.dispose();
     super.dispose();
   }
@@ -161,6 +164,7 @@ class _PushNotificationSettingsScreenState
   Future<void> _saveIntervalAlarm() async {
     final intervalMin = int.tryParse(_intervalMinController.text);
     if (intervalMin == null || intervalMin < 5) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('간격은 최소 5분이어야 합니다.')),
       );
@@ -171,6 +175,7 @@ class _PushNotificationSettingsScreenState
         _intervalStartTime.hour * 60 + _intervalStartTime.minute;
     final endMinutes = _intervalEndTime.hour * 60 + _intervalEndTime.minute;
     if (endMinutes <= startMinutes) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('종료 시간은 시작 시간보다 이후여야 합니다.')),
       );
@@ -238,7 +243,17 @@ class _PushNotificationSettingsScreenState
 
   // ─── Common ───
 
-  Future<void> _updateGlobalSettings() async {
+  Timer? _globalSettingsDebounce;
+
+  void _updateGlobalSettings() {
+    // 디바운싱: 빠른 연속 변경 시 마지막만 실제 적용 (500ms)
+    _globalSettingsDebounce?.cancel();
+    _globalSettingsDebounce = Timer(const Duration(milliseconds: 500), () {
+      _applyGlobalSettings();
+    });
+  }
+
+  Future<void> _applyGlobalSettings() async {
     final daysStr = _selectedDays.join(',');
     // 모든 알람 (fixed + interval) 업데이트
     final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();

@@ -5,14 +5,14 @@ import '../models/folder.dart';
 class FolderTile extends StatelessWidget {
   final Folder folder;
   final VoidCallback onTap;
-  final VoidCallback onLongPress;
+  final VoidCallback? onLongPress;
   final int? reorderIndex;
 
   const FolderTile({
     super.key,
     required this.folder,
     required this.onTap,
-    required this.onLongPress,
+    this.onLongPress,
     this.reorderIndex,
   });
 

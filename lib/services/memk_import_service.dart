@@ -7,8 +7,6 @@ import 'package:archive/archive.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
-import 'package:sqflite/sqflite.dart';
-
 import '../database/database_helper.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
@@ -60,6 +58,10 @@ class ImportResult {
 }
 
 class MemkImportService {
+  /// 캐시된 Archive (readFolderList → importSelectedFolders 재사용)
+  Archive? _cachedArchive;
+  String? _cachedFilePath;
+
   /// .memk 경로에서 파일명만 추출
   static String extractFileName(String memkPath) {
     if (memkPath.isEmpty) return '';
@@ -72,9 +74,12 @@ class MemkImportService {
   }
 
   /// ZIP에서 folders.json만 읽어 폴더 목록 반환 (UI에서 선택용)
+  /// Archive를 캐싱하여 importSelectedFolders에서 재사용
   Future<List<Map<String, dynamic>>> readFolderList(String filePath) async {
     final bytes = await File(filePath).readAsBytes();
     final archive = await compute(_decodeZip, bytes);
+    _cachedArchive = archive;
+    _cachedFilePath = filePath;
 
     for (final file in archive.files) {
       if (file.name == AppConstants.memkFoldersJson && file.isFile) {
@@ -106,9 +111,16 @@ class MemkImportService {
 
     onProgress(const ImportProgress(phase: 'parsing', message: '파일 분석 중...'));
 
-    // ZIP 디코드 (Isolate에서 처리하여 UI 블로킹 방지)
-    final bytes = await File(filePath).readAsBytes();
-    final archive = await compute(_decodeZip, bytes);
+    // 캐시된 Archive 재사용 (readFolderList에서 이미 디코딩됨)
+    Archive archive;
+    if (_cachedArchive != null && _cachedFilePath == filePath) {
+      archive = _cachedArchive!;
+      _cachedArchive = null;
+      _cachedFilePath = null;
+    } else {
+      final bytes = await File(filePath).readAsBytes();
+      archive = await compute(_decodeZip, bytes);
+    }
 
     // ZIP 파일 인덱스 (이름 → ArchiveFile)
     final zipFileIndex = <String, ArchiveFile>{};
@@ -169,20 +181,29 @@ class MemkImportService {
       } else {
         // 새 폴더 생성 (id를 제거하여 autoincrement 사용)
         final folder = Folder.fromJson(folderData);
-        final newId = await db.insertFolder(
-          Folder(
-            name: folder.name,
-            cardCount: 0, // 나중에 updateFolderCardCount로 갱신
-            folderCount: folder.folderCount,
-            sequence: folder.sequence,
-            originalSequence: folder.originalSequence,
-            modified: folder.modified,
-            parent: folder.parent,
-            isSpecialFolder: folder.isSpecialFolder,
-          ),
-        );
-        folderIdMap[memkFolderId] = newId;
-        newFolders++;
+        try {
+          final newId = await db.insertFolder(
+            Folder(
+              name: folder.name,
+              cardCount: 0, // 나중에 updateFolderCardCount로 갱신
+              folderCount: folder.folderCount,
+              sequence: folder.sequence,
+              originalSequence: folder.originalSequence,
+              modified: folder.modified,
+              parent: folder.parent,
+              isSpecialFolder: folder.isSpecialFolder,
+            ),
+          );
+          folderIdMap[memkFolderId] = newId;
+          newFolders++;
+        } catch (_) {
+          // UNIQUE 제약 충돌 (동시 import 등) — 이미 존재하는 폴더 사용
+          final retryFolder = await db.getFolderByName(name);
+          if (retryFolder != null) {
+            folderIdMap[memkFolderId] = retryFolder.id!;
+            mergedFolders++;
+          }
+        }
       }
     }
 
@@ -256,11 +277,11 @@ class MemkImportService {
         final card = CardModel.fromJson(cardJson);
         batch.add(card);
 
-        // 배치 insert
+        // 배치 insert (UUID 중복은 건너뜀)
         if (batch.length >= AppConstants.importBatchSize) {
-          await db.insertCardsBatch(batch,
-              conflictAlgorithm: ConflictAlgorithm.replace);
-          newCards += batch.length;
+          final result = await db.insertCardsBatch(batch);
+          newCards += result.inserted;
+          skippedCards += result.skipped;
           batch.clear();
 
           onProgress(ImportProgress(
@@ -280,9 +301,9 @@ class MemkImportService {
 
     // 남은 배치 처리
     if (batch.isNotEmpty) {
-      await db.insertCardsBatch(batch,
-          conflictAlgorithm: ConflictAlgorithm.replace);
-      newCards += batch.length;
+      final result = await db.insertCardsBatch(batch);
+      newCards += result.inserted;
+      skippedCards += result.skipped;
       batch.clear();
     }
 
@@ -338,22 +359,28 @@ class MemkImportService {
         if (counterJson is List && counterJson.isNotEmpty) {
           final counterData = counterJson[0] as Map<String, dynamic>;
           final current = await db.getCounter();
+          // snake_case / camelCase 양쪽 키 호환 (암기짱 원본은 camelCase)
+          // num → int 안전 캐스트 (JSON 파싱 결과가 num일 수 있음)
+          int _counterVal(String snakeKey, String camelKey) =>
+              (counterData[snakeKey] as num?)?.toInt() ??
+              (counterData[camelKey] as num?)?.toInt() ??
+              0;
           await db.updateCounter({
             'card_sequence': max(
               (current?['card_sequence'] as int?) ?? 0,
-              (counterData['card_sequence'] as int?) ?? 0,
+              _counterVal('card_sequence', 'cardSequence'),
             ),
             'card_minus_sequence': max(
               (current?['card_minus_sequence'] as int?) ?? 0,
-              (counterData['card_minus_sequence'] as int?) ?? 0,
+              _counterVal('card_minus_sequence', 'cardMinusSequence'),
             ),
             'folder_sequence': max(
               (current?['folder_sequence'] as int?) ?? 0,
-              (counterData['folder_sequence'] as int?) ?? 0,
+              _counterVal('folder_sequence', 'folderSequence'),
             ),
             'folder_minus_sequence': max(
               (current?['folder_minus_sequence'] as int?) ?? 0,
-              (counterData['folder_minus_sequence'] as int?) ?? 0,
+              _counterVal('folder_minus_sequence', 'folderMinusSequence'),
             ),
           });
         }

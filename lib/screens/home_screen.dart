@@ -113,6 +113,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _showFolderPickerForNewCard() async {
     final nonBundleFolders = _folders.where((f) => !f.isBundle).toList();
     if (nonBundleFolders.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('폴더를 먼저 만들어주세요.')),
       );
@@ -339,13 +340,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (confirm != true) return;
 
     if (folder.isBundle) {
-      // 묶음 폴더 삭제 시 하위 폴더의 parentFolderId 해제
-      final children =
-          await DatabaseHelper.instance.getChildFolders(folder.id!);
-      for (final child in children) {
-        await DatabaseHelper.instance
-            .updateFolder(child.copyWith(parentFolderId: 0));
-      }
+      // 묶음 폴더 삭제: 자식 해제 + 삭제를 트랜잭션으로 원자적 실행
+      await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
     }
 
     // 삭제 전 해당 폴더 카드의 이미지 파일 수집
@@ -386,8 +382,6 @@ class _HomeScreenState extends State<HomeScreen> {
           if (await f.exists()) await f.delete();
         } catch (_) {}
       }
-    } else {
-      await DatabaseHelper.instance.deleteFolder(folder.id!);
     }
     if (!mounted) return;
     await _loadFolders();
@@ -417,7 +411,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await _navigateToImport(filePath);
   }
 
-  void _onFolderTap(Folder folder) async {
+  Future<void> _onFolderTap(Folder folder) async {
     if (folder.isBundle) {
       // 묶음 폴더 → 하위 폴더 리스트
       await Navigator.push(
@@ -443,8 +437,11 @@ class _HomeScreenState extends State<HomeScreen> {
       final folder = _folders.removeAt(oldIndex);
       _folders.insert(newIndex, folder);
     });
-    // 시퀀스 업데이트
-    _updateFolderSequences();
+    // DB 시퀀스 업데이트 후 로컬 객체도 동기화
+    _updateFolderSequences().then((_) => _loadFolders()).catchError((e) {
+      debugPrint('[HOME] reorder error: $e');
+      _loadFolders(); // 에러 시에도 DB에서 리로드하여 일관성 유지
+    });
   }
 
   Future<void> _updateFolderSequences() async {
@@ -722,7 +719,6 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
                         );
                         _loadChildren();
                       },
-                      onLongPress: () {},
                     );
                   },
                 ),

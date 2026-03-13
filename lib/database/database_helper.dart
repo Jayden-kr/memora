@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -355,6 +356,26 @@ class DatabaseHelper {
     );
   }
 
+  /// 묶음 폴더 삭제: 자식 폴더 해제 + 묶음 삭제를 원자적으로 실행
+  Future<void> deleteBundleFolder(int bundleId) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      // 자식 폴더의 parent_folder_id 해제
+      await txn.update(
+        AppConstants.tableFolders,
+        {'parent_folder_id': null},
+        where: 'parent_folder_id = ?',
+        whereArgs: [bundleId],
+      );
+      // 묶음 폴더 삭제
+      await txn.delete(
+        AppConstants.tableFolders,
+        where: 'id = ?',
+        whereArgs: [bundleId],
+      );
+    });
+  }
+
   Future<void> updateFolderCardCount(int folderId) async {
     final db = await database;
     final count = Sqflite.firstIntValue(await db.rawQuery(
@@ -494,18 +515,24 @@ class DatabaseHelper {
   }
 
   /// 카드 배치 insert (transaction) — Import 시 사용
-  Future<int> insertCardsBatch(List<CardModel> cards,
-      {ConflictAlgorithm conflictAlgorithm = ConflictAlgorithm.abort}) async {
+  /// 반환: (inserted: 실제 삽입 수, skipped: UUID 중복으로 건너뜀 수)
+  Future<({int inserted, int skipped})> insertCardsBatch(List<CardModel> cards,
+      {ConflictAlgorithm conflictAlgorithm = ConflictAlgorithm.ignore}) async {
     final db = await database;
-    int count = 0;
+    int inserted = 0;
+    int skipped = 0;
     await db.transaction((txn) async {
       for (final card in cards) {
-        await txn.insert(AppConstants.tableCards, card.toDb(),
+        final result = await txn.insert(AppConstants.tableCards, card.toDb(),
             conflictAlgorithm: conflictAlgorithm);
-        count++;
+        if (result > 0) {
+          inserted++;
+        } else {
+          skipped++;
+        }
       }
     });
-    return count;
+    return (inserted: inserted, skipped: skipped);
   }
 
   /// 모든 카드 조회 (export용 — 페이지네이션)
@@ -520,18 +547,29 @@ class DatabaseHelper {
     return maps.map((m) => CardModel.fromDb(m)).toList();
   }
 
-  /// 랜덤 카드 1개 조회 (알림용, 효율적)
+  /// 랜덤 카드 1개 조회 (알림용, 미완료 카드 우선)
   Future<CardModel?> getRandomCard({int? folderId}) async {
     final db = await database;
-    final where = folderId != null ? 'folder_id = ?' : null;
-    final whereArgs = folderId != null ? [folderId] : null;
-    final maps = await db.query(
+    // 미완료 카드 우선 선택, 없으면 전체에서 선택
+    final folderClause = folderId != null ? 'folder_id = ? AND ' : '';
+    final baseArgs = folderId != null ? [folderId] : <Object>[];
+    var maps = await db.query(
       AppConstants.tableCards,
-      where: where,
-      whereArgs: whereArgs,
+      where: '${folderClause}finished = 0',
+      whereArgs: baseArgs,
       orderBy: 'RANDOM()',
       limit: 1,
     );
+    if (maps.isEmpty) {
+      // 미완료 카드 없으면 전체에서 선택
+      maps = await db.query(
+        AppConstants.tableCards,
+        where: folderId != null ? 'folder_id = ?' : null,
+        whereArgs: folderId != null ? [folderId] : null,
+        orderBy: 'RANDOM()',
+        limit: 1,
+      );
+    }
     if (maps.isEmpty) return null;
     return CardModel.fromDb(maps.first);
   }
@@ -572,48 +610,32 @@ class DatabaseHelper {
       .replaceAll('%', '\\%')
       .replaceAll('_', '\\_');
 
-  /// 검색 (Question 우선순위)
+  /// 검색 (Question 매치 우선, 단일 쿼리, 대소문자 무시)
   Future<List<CardModel>> searchCards(int folderId, String query) async {
     final db = await database;
     final escaped = _escapeLike(query);
-    final questionMatches = await db.query(
-      AppConstants.tableCards,
-      where: "folder_id = ? AND question LIKE ? ESCAPE '\\'",
-      whereArgs: [folderId, '%$escaped%'],
-      orderBy: 'sequence ASC',
+    final pattern = '%$escaped%';
+    final results = await db.rawQuery(
+      "SELECT * FROM ${AppConstants.tableCards} "
+      "WHERE folder_id = ? AND (question LIKE ? ESCAPE '\\' COLLATE NOCASE OR answer LIKE ? ESCAPE '\\' COLLATE NOCASE) "
+      "ORDER BY CASE WHEN question LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, sequence ASC",
+      [folderId, pattern, pattern, pattern],
     );
-    final answerMatches = await db.query(
-      AppConstants.tableCards,
-      where: "folder_id = ? AND answer LIKE ? ESCAPE '\\' AND question NOT LIKE ? ESCAPE '\\'",
-      whereArgs: [folderId, '%$escaped%', '%$escaped%'],
-      orderBy: 'sequence ASC',
-    );
-    return [
-      ...questionMatches.map((m) => CardModel.fromDb(m)),
-      ...answerMatches.map((m) => CardModel.fromDb(m)),
-    ];
+    return results.map((m) => CardModel.fromDb(m)).toList();
   }
 
-  /// 전체 카드 검색 (allCards 모드)
+  /// 전체 카드 검색 (allCards 모드, 단일 쿼리, 대소문자 무시)
   Future<List<CardModel>> searchAllCards(String query) async {
     final db = await database;
     final escaped = _escapeLike(query);
-    final questionMatches = await db.query(
-      AppConstants.tableCards,
-      where: "question LIKE ? ESCAPE '\\'",
-      whereArgs: ['%$escaped%'],
-      orderBy: 'folder_id, sequence ASC',
+    final pattern = '%$escaped%';
+    final results = await db.rawQuery(
+      "SELECT * FROM ${AppConstants.tableCards} "
+      "WHERE question LIKE ? ESCAPE '\\' COLLATE NOCASE OR answer LIKE ? ESCAPE '\\' COLLATE NOCASE "
+      "ORDER BY CASE WHEN question LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, folder_id, sequence ASC",
+      [pattern, pattern, pattern],
     );
-    final answerMatches = await db.query(
-      AppConstants.tableCards,
-      where: "answer LIKE ? ESCAPE '\\' AND question NOT LIKE ? ESCAPE '\\'",
-      whereArgs: ['%$escaped%', '%$escaped%'],
-      orderBy: 'folder_id, sequence ASC',
-    );
-    return [
-      ...questionMatches.map((m) => CardModel.fromDb(m)),
-      ...answerMatches.map((m) => CardModel.fromDb(m)),
-    ];
+    return results.map((m) => CardModel.fromDb(m)).toList();
   }
 
   /// 배치 삭제
@@ -662,10 +684,12 @@ class DatabaseHelper {
   }
 
   /// DB 맵의 파일 경로 컬럼들을 새 파일로 복사
+  /// 복사 실패 시 해당 경로를 null로 설정하여 원본과 파일 공유 방지
   Future<void> _duplicateFiles(Map<String, dynamic> dbMap) async {
     final pathKeys = dbMap.keys
         .where((k) => k.contains('_path') || k.contains('_record_path'))
         .toList();
+    var counter = 0;
     for (final key in pathKeys) {
       final path = dbMap[key];
       if (path is! String || path.isEmpty) continue;
@@ -674,11 +698,15 @@ class DatabaseHelper {
         if (!await file.exists()) continue;
         final dir = file.parent.path;
         final ext = p.extension(path);
-        final ts = DateTime.now().millisecondsSinceEpoch;
-        final newPath = p.join(dir, 'copy_$ts${pathKeys.indexOf(key)}$ext');
+        final ts = DateTime.now().microsecondsSinceEpoch;
+        final newPath = p.join(dir, 'copy_${ts}_${counter++}$ext');
         await file.copy(newPath);
         dbMap[key] = newPath;
-      } catch (_) {}
+      } catch (e) {
+        // 복사 실패 시 null로 설정 — 원본과 파일 공유 시 삭제 연쇄 문제 방지
+        debugPrint('[DB] _duplicateFiles copy failed for $key: $e');
+        dbMap[key] = null;
+      }
     }
   }
 

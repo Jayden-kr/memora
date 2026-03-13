@@ -18,9 +18,14 @@ class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
 
   // 알림 ID 계산용 상수 (충돌 방지)
+  // id는 _maxAlarmId로 모듈로 연산하여 Android 32비트 int 범위 내 유지
+  static const _maxAlarmId = 200;            // 안전 상한: 200 * 10000 = 2,000,000
   static const _dayMultiplier = 10;          // 고정 알림: id * _dayMultiplier + day(0~6)
   static const _intervalMultiplier = 10000;  // 간격 알림: id * _intervalMultiplier + slot
   static const _intervalDayMultiplier = 10;  // 간격+요일: id * _intervalMultiplier + slot * _intervalDayMultiplier + day
+
+  /// alarm ID를 안전 범위로 정규화
+  static int _safeId(int id) => id % _maxAlarmId;
 
   /// 알림 탭 → 직접 네비게이션 콜백 (main.dart에서 등록)
   static Future<void> Function(NotificationNavEvent)? onNavigate;
@@ -76,6 +81,9 @@ class NotificationService {
       }
     }
     // 정확한 매칭 실패 시 UTC로 fallback (알림이 안 뜨는 것보다 나음)
+    debugPrint('[NOTIF] WARNING: timezone offset matching failed '
+        '(offset=${offset}ms), falling back to UTC. '
+        'Notifications may fire at wrong times.');
     tz.setLocalLocation(tz.UTC);
   }
 
@@ -255,8 +263,10 @@ class NotificationService {
         scheduled = scheduled.add(const Duration(days: 1));
       }
 
+      // all-days용 ID: safeId * _dayMultiplier + 7 (day 0~6과 충돌 방지)
+      final notifId = _safeId(id) * _dayMultiplier + 7;
       await _plugin.zonedSchedule(
-        id,
+        notifId,
         content.title,
         content.body,
         scheduled,
@@ -277,7 +287,7 @@ class NotificationService {
           now,
         );
 
-        final notifId = id * _dayMultiplier + day;
+        final notifId = _safeId(id) * _dayMultiplier + day;
         await _plugin.zonedSchedule(
           notifId,
           content.title,
@@ -355,6 +365,12 @@ class NotificationService {
       slots.add((hour: m ~/ 60, minute: m % 60));
     }
 
+    // Android exact alarm 제한(~500개) 초과 방지: 슬롯 최대 100개
+    const maxSlots = 100;
+    if (slots.length > maxSlots) {
+      slots.removeRange(maxSlots, slots.length);
+    }
+
     final notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
         'review_notification_channel',
@@ -381,7 +397,7 @@ class NotificationService {
           scheduled = scheduled.add(const Duration(days: 1));
         }
 
-        final notifId = id * _intervalMultiplier + i;
+        final notifId = _safeId(id) * _intervalMultiplier + i;
         await _plugin.zonedSchedule(
           notifId, content.title, content.body, scheduled, notificationDetails,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -395,7 +411,7 @@ class NotificationService {
             dartWeekday, slot.hour, slot.minute, now,
           );
 
-          final notifId = id * _intervalMultiplier + i * _intervalDayMultiplier + day;
+          final notifId = _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + day;
           await _plugin.zonedSchedule(
             notifId, content.title, content.body, scheduled, notificationDetails,
             androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -407,18 +423,16 @@ class NotificationService {
     }
   }
 
+  /// 특정 알람의 모든 알림 취소 (fixed + interval + per-day 모두)
+  /// DB에서 해당 알람이 이미 삭제/비활성화된 후 호출할 것
   static Future<void> cancelAlarm(int id, {Set<int>? days}) async {
-    if (days != null && days.isNotEmpty && days.length < 7) {
-      for (final day in days) {
-        await _plugin.cancel(id * _dayMultiplier + day);
-      }
-    } else {
-      await _plugin.cancel(id);
-    }
+    // 개별 ID 취소보다 전체 취소 + 재스케줄이 효율적이고 확실함
+    await _plugin.cancelAll();
+    await rescheduleAll();
   }
 
+  /// 단일 알림 삭제 후 나머지 재스케줄
   static Future<void> cancelNotification(int id) async {
-    // 전체 취소 후 나머지 활성 알림만 재스케줄하는 것이 2400+ cancel보다 효율적
     await _plugin.cancelAll();
     await rescheduleAll();
   }
