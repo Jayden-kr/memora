@@ -91,10 +91,24 @@ class _ExportScreenState extends State<ExportScreen> {
           folderIds: _selectedFolderIds.toList(),
           onProgress: (progress) {
             if (mounted) {
-              final total = progress.total > 0 ? progress.total : 1;
+              double value;
+              switch (progress.phase) {
+                case 'cards':
+                  final total = progress.total > 0 ? progress.total : 1;
+                  value = 0.05 + (progress.current / total) * 0.65;
+                case 'images':
+                  final total = progress.total > 0 ? progress.total : 1;
+                  value = 0.70 + (progress.current / total) * 0.20;
+                case 'zipping':
+                  value = 0.92;
+                case 'done':
+                  value = 1.0;
+                default:
+                  value = 0.02;
+              }
               setState(() {
                 _progressMessage = progress.message ?? '처리 중...';
-                _progressValue = progress.current / total;
+                _progressValue = value.clamp(0.0, 1.0);
               });
             }
           },

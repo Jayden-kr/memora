@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../database/database_helper.dart';
@@ -145,38 +145,39 @@ class MemkExportService {
       message: 'ZIP 파일 생성 중... (이미지 ${imageFileNames.length}개)',
     ));
 
-    // ZIP 아카이브 생성
-    final archive = Archive();
+    // 스트리밍 ZIP 생성 — ZipFileEncoder는 파일을 디스크에서 직접 스트리밍하므로
+    // 모든 이미지를 메모리에 올리지 않아 OOM 방지
+    final zipEncoder = ZipFileEncoder();
+    zipEncoder.create(outputPath);
 
-    // JSON 파일 추가
-    archive.addFile(_createArchiveFile(
+    // JSON 파일 추가 (소량 데이터 — in-memory OK)
+    zipEncoder.addArchiveFile(_createArchiveFile(
       AppConstants.memkFoldersJson,
       utf8.encode(foldersJsonStr),
     ));
-    archive.addFile(_createArchiveFile(
+    zipEncoder.addArchiveFile(_createArchiveFile(
       AppConstants.memkCardsJson,
       utf8.encode(cardsJsonStr),
     ));
-    archive.addFile(_createArchiveFile(
+    zipEncoder.addArchiveFile(_createArchiveFile(
       AppConstants.memkCounterJson,
       utf8.encode(counterJsonStr),
     ));
-    archive.addFile(_createArchiveFile(
+    zipEncoder.addArchiveFile(_createArchiveFile(
       AppConstants.memkPrefsJson,
       utf8.encode(prefsJsonStr),
     ));
 
-    // 이미지 파일 추가
+    // 이미지 파일 추가 — 디스크에서 스트리밍 (한 번에 한 파일만 메모리 사용)
     final imageDir = '$appDocDir/${AppConstants.imageDir}';
     int imageCount = 0;
     for (final fileName in imageFileNames) {
       final file = File('$imageDir/$fileName');
       if (file.existsSync()) {
-        final data = await file.readAsBytes();
-        archive.addFile(_createArchiveFile(fileName, data));
+        await zipEncoder.addFile(file, fileName);
         imageCount++;
 
-        if (imageCount % 100 == 0) {
+        if (imageCount % 20 == 0) {
           onProgress(ExportProgress(
             phase: 'images',
             current: imageCount,
@@ -188,17 +189,14 @@ class MemkExportService {
       }
     }
 
-    // ZIP 인코딩을 별도 Isolate에서 실행하여 UI 프리징 방지
-    // Archive 객체는 Isolate 간 전송 불가 → 직렬화 가능한 리스트로 변환
-    final archiveEntries = <List<dynamic>>[];
-    for (final file in archive.files) {
-      archiveEntries.add([file.name, file.content as List<int>]);
-    }
-    final zipBytes = await compute(_encodeZipFromEntries, archiveEntries);
-    if (zipBytes == null) {
-      throw Exception('ZIP 인코딩 실패: 아카이브를 압축할 수 없습니다');
-    }
-    await File(outputPath).writeAsBytes(zipBytes);
+    onProgress(ExportProgress(
+      phase: 'zipping',
+      current: 1,
+      total: 1,
+      message: 'ZIP 마무리 중...',
+    ));
+    await Future.delayed(Duration.zero);
+    await zipEncoder.close();
 
     onProgress(const ExportProgress(phase: 'done', message: 'Export 완료'));
   }
@@ -227,13 +225,3 @@ class MemkExportService {
   }
 }
 
-/// compute()용 최상위 함수 — 직렬화 가능한 엔트리 리스트로부터 ZIP 생성
-List<int>? _encodeZipFromEntries(List<List<dynamic>> entries) {
-  final archive = Archive();
-  for (final entry in entries) {
-    final name = entry[0] as String;
-    final data = entry[1] as List<int>;
-    archive.addFile(ArchiveFile(name, data.length, data));
-  }
-  return ZipEncoder().encode(archive);
-}
