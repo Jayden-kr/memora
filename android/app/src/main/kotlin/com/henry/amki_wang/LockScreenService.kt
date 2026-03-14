@@ -174,8 +174,8 @@ class LockScreenService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Memora 잠금화면")
-            .setContentText("잠금화면 학습 활성화됨")
+            .setContentTitle("Memora")
+            .setContentText("잠금화면 학습 활성화")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

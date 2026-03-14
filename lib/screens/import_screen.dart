@@ -1,8 +1,4 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
@@ -91,15 +87,12 @@ class _ImportScreenState extends State<ImportScreen> {
     }
 
     try {
-      // 원본 파일을 앱 temp 디렉토리로 복사 (file_picker/공유 임시 파일 만료 방지)
-      final tempDir = await getTemporaryDirectory();
-      final destPath = p.join(tempDir.path, 'memk_import_temp.memk');
-      await File(widget.filePath).copy(destPath);
-      _stableFilePath = destPath;
+      // file_picker가 이미 캐시에 복사한 파일을 직접 사용 (중복 복사 제거)
+      _stableFilePath = widget.filePath;
 
       // 컨트롤러의 importService 사용 (Archive 캐시 공유)
       final memkFolders =
-          await _controller.importService.readFolderList(destPath);
+          await _controller.importService.readFolderList(widget.filePath);
       final localFolders =
           await DatabaseHelper.instance.getNonBundleFolders();
       if (!mounted) return;
@@ -169,7 +162,6 @@ class _ImportScreenState extends State<ImportScreen> {
 
   Future<void> _createNewLocalFolder() async {
     final controller = TextEditingController();
-    try {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -210,9 +202,6 @@ class _ImportScreenState extends State<ImportScreen> {
         await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     setState(() => _localFolders = localFolders);
-    } finally {
-      controller.dispose();
-    }
   }
 
   @override

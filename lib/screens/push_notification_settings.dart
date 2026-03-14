@@ -19,8 +19,6 @@ class PushNotificationSettingsScreen extends StatefulWidget {
 class _PushNotificationSettingsScreenState
     extends State<PushNotificationSettingsScreen> {
   bool _enabled = true;
-  String _mode = 'fixed'; // 'fixed' or 'interval'
-  List<Map<String, dynamic>> _fixedAlarms = [];
   List<Folder> _folders = [];
   int? _selectedFolderId;
   bool _soundEnabled = true;
@@ -62,15 +60,13 @@ class _PushNotificationSettingsScreenState
       _enabled = enabledStr == 'true';
     }
 
-    // 알람을 모드별로 분리
-    final fixedAlarms = <Map<String, dynamic>>[];
+    // interval 알람 찾기
     Map<String, dynamic>? intervalAlarm;
     for (final alarm in alarms) {
       final mode = alarm['mode'] as String? ?? 'fixed';
       if (mode == 'interval') {
         intervalAlarm = alarm;
-      } else {
-        fixedAlarms.add(alarm);
+        break;
       }
     }
 
@@ -125,45 +121,9 @@ class _PushNotificationSettingsScreenState
     }
 
     setState(() {
-      _fixedAlarms = fixedAlarms;
       _folders = folders;
       _loading = false;
     });
-  }
-
-  // ─── Fixed mode ───
-
-  Future<void> _addFixedAlarm() async {
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-    );
-    if (time == null) return;
-
-    final timeStr =
-        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-    await DatabaseHelper.instance.insertPushAlarm(
-      time: timeStr,
-      folderId: _selectedFolderId,
-      days: _selectedDays.join(','),
-      soundEnabled: _soundEnabled ? 1 : 0,
-    );
-    await _loadData();
-    await _scheduleAll();
-  }
-
-  Future<void> _deleteFixedAlarm(int id) async {
-    await DatabaseHelper.instance.deletePushAlarm(id);
-    await NotificationService.rescheduleAll();
-    await _loadData();
-  }
-
-  Future<void> _toggleFixedAlarm(int id, bool enabled) async {
-    await DatabaseHelper.instance.updatePushAlarm(id, {
-      'enabled': enabled ? 1 : 0,
-    });
-    await _loadData();
-    await _scheduleAll();
   }
 
   // ─── Interval mode ───
@@ -427,37 +387,8 @@ class _PushNotificationSettingsScreenState
                 ),
                 const Divider(),
 
-                // 모드 선택
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                  child: Text('알림 모드',
-                      style: Theme.of(context).textTheme.titleSmall),
-                ),
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(
-                          value: 'fixed',
-                          label: Text('시간 알람'),
-                          icon: Icon(Icons.access_time)),
-                      ButtonSegment(
-                          value: 'interval',
-                          label: Text('간격 반복'),
-                          icon: Icon(Icons.repeat)),
-                    ],
-                    selected: {_mode},
-                    onSelectionChanged: (v) {
-                      setState(() => _mode = v.first);
-                    },
-                  ),
-                ),
-                const Divider(),
-
-                // 모드별 콘텐츠
-                if (_mode == 'fixed') ..._buildFixedModeUI(),
-                if (_mode == 'interval') ..._buildIntervalModeUI(),
+                // 간격 반복 설정
+                ..._buildIntervalModeUI(),
 
                 const Divider(),
 
@@ -522,46 +453,6 @@ class _PushNotificationSettingsScreenState
               ],
             ),
     );
-  }
-
-  List<Widget> _buildFixedModeUI() {
-    return [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        child:
-            Text('시간 알람', style: Theme.of(context).textTheme.titleSmall),
-      ),
-      ..._fixedAlarms.map((alarm) {
-        final id = alarm['id'] as int;
-        final time = alarm['time'] as String;
-        final enabled = (alarm['enabled'] as int? ?? 1) == 1;
-        return ListTile(
-          title:
-              Text(time, style: Theme.of(context).textTheme.titleLarge),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Transform.scale(
-                scale: 0.8,
-                child: Switch(
-                  value: enabled,
-                  onChanged: (v) => _toggleFixedAlarm(id, v),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: () => _deleteFixedAlarm(id),
-              ),
-            ],
-          ),
-        );
-      }),
-      ListTile(
-        leading: const Icon(Icons.add),
-        title: const Text('알람 추가'),
-        onTap: _addFixedAlarm,
-      ),
-    ];
   }
 
   List<Widget> _buildIntervalModeUI() {

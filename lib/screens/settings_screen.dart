@@ -67,14 +67,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _getSetting(AppConstants.settingAnswerFold, 'expanded');
     final answerVisibility =
         _getSetting(AppConstants.settingAnswerVisibility, 'visible');
-    final cardPositionMemory =
-        _getSetting(AppConstants.settingCardPositionMemory, 'false');
     final cardNumber =
         _getSetting(AppConstants.settingCardNumber, 'false');
     final cardScroll =
         _getSetting(AppConstants.settingCardScroll, 'false');
-    final imageQuality =
-        _getSetting(AppConstants.settingImageQuality, 'medium');
     final themeMode =
         _getSetting(AppConstants.settingThemeMode, 'system');
 
@@ -122,20 +118,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const Divider(),
 
-          // 카드 위치 기억
-          ListTile(
-            title: const Text('카드 위치 기억'),
-            trailing: Transform.scale(
-              scale: 0.8,
-              child: Switch(
-                value: cardPositionMemory == 'true',
-                onChanged: (v) => _setSetting(
-                    AppConstants.settingCardPositionMemory, v.toString()),
-              ),
-            ),
-          ),
-          const Divider(),
-
           // 카드 번호 표시
           ListTile(
             title: const Text('카드 번호 표시'),
@@ -160,27 +142,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (v) =>
                     _setSetting(AppConstants.settingCardScroll, v.toString()),
               ),
-            ),
-          ),
-          const Divider(),
-
-          // 이미지 품질
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('이미지 품질',
-                style: Theme.of(context).textTheme.titleSmall),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'high', label: Text('상')),
-                ButtonSegment(value: 'medium', label: Text('중')),
-                ButtonSegment(value: 'low', label: Text('하')),
-              ],
-              selected: {imageQuality},
-              onSelectionChanged: (v) =>
-                  _setSetting(AppConstants.settingImageQuality, v.first),
             ),
           ),
           const Divider(),

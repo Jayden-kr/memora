@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show max;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
@@ -11,11 +12,6 @@ import '../database/database_helper.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
-
-/// Isolate용 ZIP 디코딩 (top-level 함수)
-Archive _decodeZip(List<int> bytes) {
-  return ZipDecoder().decodeBytes(bytes, verify: false);
-}
 
 /// Import 진행 상태
 class ImportProgress {
@@ -81,7 +77,9 @@ class MemkImportService {
   /// Archive를 캐싱하여 importSelectedFolders에서 재사용
   Future<List<Map<String, dynamic>>> readFolderList(String filePath) async {
     final bytes = await File(filePath).readAsBytes();
-    final archive = await compute(_decodeZip, bytes);
+    // 메인 isolate에서 직접 디코딩 (compute 사용 시 isolate 전송 과정에서
+    // 일부 ArchiveFile 항목이 손실되어 이미지 누락 발생)
+    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
     _cachedArchive = archive;
     _cachedFilePath = filePath;
 
@@ -116,6 +114,7 @@ class MemkImportService {
     onProgress(const ImportProgress(phase: 'parsing', message: '파일 분석 중...'));
 
     // 캐시된 Archive 재사용 (readFolderList에서 이미 디코딩됨)
+    // 메모리 절약: zipBytes는 나중에 raw 추출이 필요할 때만 읽음
     Archive archive;
     if (_cachedArchive != null && _cachedFilePath == filePath) {
       archive = _cachedArchive!;
@@ -123,16 +122,29 @@ class MemkImportService {
       _cachedFilePath = null;
     } else {
       final bytes = await File(filePath).readAsBytes();
-      archive = await compute(_decodeZip, bytes);
+      archive = ZipDecoder().decodeBytes(bytes, verify: false);
     }
 
-    // ZIP 파일 인덱스 (이름 → ArchiveFile)
+    // ZIP 파일 인덱스 (이름 → ArchiveFile) + rawZipEntries를 archive에서 빌드
     final zipFileIndex = <String, ArchiveFile>{};
+    final zipFileByBareName = <String, ArchiveFile>{};
+    final rawZipEntries = <String>{};
+    int _archiveTotal = 0;
+    int _archiveFiles = 0;
     for (final file in archive.files) {
+      _archiveTotal++;
       if (file.isFile) {
+        _archiveFiles++;
         zipFileIndex[file.name] = file;
+        rawZipEntries.add(file.name);
+        final bareName = file.name.split('/').last;
+        if (bareName.isNotEmpty) {
+          zipFileByBareName[bareName] = file;
+          rawZipEntries.add(bareName);
+        }
       }
     }
+    debugPrint('[IMPORT] archive entries: $_archiveTotal total, $_archiveFiles files, rawZipEntries=${rawZipEntries.length}');
 
     // folders.json 파싱
     final foldersFile = zipFileIndex[AppConstants.memkFoldersJson];
@@ -281,8 +293,9 @@ class MemkImportService {
           continue;
         }
 
-        // 이미지 경로 변환: memk 경로 → 로컬 경로
-        _convertImagePaths(cardJson, appDocDir, neededImageFiles);
+        // 이미지 경로 변환: memk 경로 → 로컬 경로 (ZIP에 있는 것만)
+        _convertImagePaths(cardJson, appDocDir, neededImageFiles,
+            zipFileIndex, zipFileByBareName, rawZipEntries);
 
         final card = CardModel.fromJson(cardJson);
         batch.add(card);
@@ -324,13 +337,18 @@ class MemkImportService {
       message: '이미지 추출 중...',
     ));
 
-    // 이미지 추출
+    // 이미지 추출 — archive 인덱스에 있는 파일만 (누락분은 뒤에서 raw 추출)
+    debugPrint('[IMPORT] neededImageFiles=${neededImageFiles.length}, newCards=$newCards, skippedCards=$skippedCards');
     int imageCount = 0;
+    int archiveSkipped = 0;
     final totalImages = neededImageFiles.length;
     for (final fileName in neededImageFiles) {
       try {
-        final zipFile = zipFileIndex[fileName];
-        if (zipFile == null) continue;
+        final zipFile = zipFileIndex[fileName] ?? zipFileByBareName[fileName];
+        if (zipFile == null) {
+          archiveSkipped++;
+          continue;
+        }
 
         final localPath = localImagePath(appDocDir, fileName);
         final localFile = File(localPath);
@@ -350,9 +368,37 @@ class MemkImportService {
           ));
           await Future.delayed(Duration.zero);
         }
-      } catch (_) {
-        // 이미지 추출 실패 — 카드 데이터는 이미 저장됨, 이미지만 누락
+      } catch (e) {
+        debugPrint('[IMPORT] image extraction failed: $fileName — $e');
       }
+    }
+    debugPrint('[IMPORT] archive extraction: $imageCount extracted, $archiveSkipped skipped (not in archive index)');
+
+    // archive에서 추출 실패한 이미지를 raw ZIP 파싱으로 추출
+    // archive 객체 참조 해제 → 메모리 확보 후 파일을 다시 읽음
+    final missingOnDisk = <String>{};
+    for (final fileName in neededImageFiles) {
+      final path = localImagePath(appDocDir, fileName);
+      if (!File(path).existsSync()) {
+        missingOnDisk.add(fileName);
+      }
+    }
+    if (missingOnDisk.isNotEmpty) {
+      debugPrint('[IMPORT] ${missingOnDisk.length} images missing after archive extraction, trying raw ZIP extraction');
+      // archive/인덱스 참조 해제하여 메모리 확보
+      zipFileIndex.clear();
+      zipFileByBareName.clear();
+      // GC 기회 제공
+      await Future.delayed(Duration.zero);
+
+      final zipBytes = await File(filePath).readAsBytes();
+      final rawExtracted = await _extractMissingImages(
+        zipBytes: zipBytes,
+        missingFileNames: missingOnDisk,
+        appDocDir: appDocDir,
+      );
+      imageCount += rawExtracted;
+      debugPrint('[IMPORT] raw ZIP extraction recovered $rawExtracted / ${missingOnDisk.length} images');
     }
 
     // 폴더 카드 수 업데이트
@@ -421,12 +467,15 @@ class MemkImportService {
   }
 
   /// JSON 맵의 모든 이미지/음성 경로를 로컬 경로로 변환
+  /// archive 인덱스와 raw ZIP 인덱스를 모두 사용하여 경로 검증
   void _convertImagePaths(
     Map<String, dynamic> cardJson,
     String appDocDir,
     Set<String> neededFiles,
+    Map<String, ArchiveFile> zipFileIndex,
+    Map<String, ArchiveFile> zipFileByBareName,
+    Set<String> rawZipEntries,
   ) {
-    // Path를 포함하는 모든 키를 변환
     for (final key in cardJson.keys.toList()) {
       if (!key.contains('Path')) continue;
       final value = cardJson[key];
@@ -435,8 +484,183 @@ class MemkImportService {
       final fileName = extractFileName(value);
       if (fileName.isEmpty) continue;
 
-      neededFiles.add(fileName);
-      cardJson[key] = localImagePath(appDocDir, fileName);
+      // archive 인덱스 또는 raw ZIP 인덱스에 존재하면 경로 변환
+      if (zipFileIndex.containsKey(fileName) ||
+          zipFileByBareName.containsKey(fileName) ||
+          rawZipEntries.contains(fileName)) {
+        neededFiles.add(fileName);
+        cardJson[key] = localImagePath(appDocDir, fileName);
+      } else {
+        cardJson[key] = '';
+      }
     }
+  }
+
+  /// ZIP 파일의 Central Directory를 직접 파싱하여 모든 파일명을 가져옴
+  /// (Dart archive 패키지가 대용량 ZIP에서 일부 항목을 누락하는 버그 우회)
+  static Set<String> _parseZipEntryNames(Uint8List bytes) {
+    final names = <String>{};
+    // EOCD signature (0x06054b50) 찾기 (파일 끝에서 역방향 검색)
+    int eocdPos = -1;
+    for (int i = bytes.length - 22; i >= 0; i--) {
+      if (bytes[i] == 0x50 && bytes[i + 1] == 0x4b &&
+          bytes[i + 2] == 0x05 && bytes[i + 3] == 0x06) {
+        eocdPos = i;
+        break;
+      }
+    }
+    if (eocdPos < 0) return names;
+
+    // Central Directory offset & size 읽기
+    final bd = ByteData.sublistView(bytes);
+    int cdSize = bd.getUint32(eocdPos + 12, Endian.little);
+    int cdOffset = bd.getUint32(eocdPos + 16, Endian.little);
+    final eocdEntryCount = bd.getUint16(eocdPos + 10, Endian.little);
+    debugPrint('[ZIP_PARSE] bytes.length=${bytes.length} eocdPos=$eocdPos cdOffset=$cdOffset cdSize=$cdSize eocdEntries=$eocdEntryCount');
+
+    // Central Directory 항목 파싱
+    int pos = cdOffset;
+    final cdEnd = cdOffset + cdSize;
+    int parsedCount = 0;
+    while (pos + 46 <= cdEnd && pos + 46 <= bytes.length) {
+      // Central Directory Header signature: 0x02014b50
+      if (bytes[pos] != 0x50 || bytes[pos + 1] != 0x4b ||
+          bytes[pos + 2] != 0x01 || bytes[pos + 3] != 0x02) {
+        debugPrint('[ZIP_PARSE] STOP at entry $parsedCount, pos=$pos, bytes: ${bytes[pos].toRadixString(16)} ${bytes[pos+1].toRadixString(16)} ${bytes[pos+2].toRadixString(16)} ${bytes[pos+3].toRadixString(16)}');
+        break;
+      }
+      final fnameLen = bd.getUint16(pos + 28, Endian.little);
+      final extraLen = bd.getUint16(pos + 30, Endian.little);
+      final commentLen = bd.getUint16(pos + 32, Endian.little);
+
+      if (pos + 46 + fnameLen <= bytes.length && fnameLen > 0) {
+        final fname = utf8.decode(
+            bytes.sublist(pos + 46, pos + 46 + fnameLen),
+            allowMalformed: true);
+        if (!fname.endsWith('/')) {
+          names.add(fname);
+          // bare name도 추가
+          final bareName = fname.split('/').last;
+          if (bareName.isNotEmpty && bareName != fname) {
+            names.add(bareName);
+          }
+        }
+      }
+      pos += 46 + fnameLen + extraLen + commentLen;
+      parsedCount++;
+    }
+    debugPrint('[ZIP_PARSE] parsed $parsedCount / $eocdEntryCount entries, names=${names.length}');
+    return names;
+  }
+
+  /// archive 패키지가 누락한 ZIP 항목을 직접 추출
+  /// Central Directory에서 compSize/compression/localOffset를 읽고
+  /// Local File Header에서 데이터 위치만 계산하여 추출
+  /// (LFH의 compSize는 data descriptor 사용 시 0일 수 있으므로 CD 값 사용)
+  static Future<int> _extractMissingImages({
+    required Uint8List zipBytes,
+    required Set<String> missingFileNames,
+    required String appDocDir,
+  }) async {
+    if (missingFileNames.isEmpty) return 0;
+
+    final bd = ByteData.sublistView(zipBytes);
+    // EOCD 찾기
+    int eocdPos = -1;
+    for (int i = zipBytes.length - 22; i >= 0; i--) {
+      if (zipBytes[i] == 0x50 && zipBytes[i + 1] == 0x4b &&
+          zipBytes[i + 2] == 0x05 && zipBytes[i + 3] == 0x06) {
+        eocdPos = i;
+        break;
+      }
+    }
+    if (eocdPos < 0) return 0;
+
+    int cdSize = bd.getUint32(eocdPos + 12, Endian.little);
+    int cdOffset = bd.getUint32(eocdPos + 16, Endian.little);
+
+    // Central Directory에서 메타데이터 수집 (compSize, compression 포함)
+    final targets = <String, ({int localOffset, int compSize, int compression})>{};
+    int pos = cdOffset;
+    final cdEnd = cdOffset + cdSize;
+    while (pos + 46 <= cdEnd) {
+      if (zipBytes[pos] != 0x50 || zipBytes[pos + 1] != 0x4b ||
+          zipBytes[pos + 2] != 0x01 || zipBytes[pos + 3] != 0x02) {
+        break;
+      }
+      final compression = bd.getUint16(pos + 10, Endian.little);
+      final compSize = bd.getUint32(pos + 20, Endian.little);
+      final fnameLen = bd.getUint16(pos + 28, Endian.little);
+      final extraLen = bd.getUint16(pos + 30, Endian.little);
+      final commentLen = bd.getUint16(pos + 32, Endian.little);
+      final localOffset = bd.getUint32(pos + 42, Endian.little);
+
+      if (fnameLen > 0 && pos + 46 + fnameLen <= zipBytes.length) {
+        final fname = utf8.decode(
+            zipBytes.sublist(pos + 46, pos + 46 + fnameLen),
+            allowMalformed: true);
+        final bareName = fname.split('/').last;
+        if (missingFileNames.contains(fname) ||
+            missingFileNames.contains(bareName)) {
+          final key = bareName.isNotEmpty ? bareName : fname;
+          targets[key] = (
+            localOffset: localOffset,
+            compSize: compSize,
+            compression: compression,
+          );
+        }
+      }
+      pos += 46 + fnameLen + extraLen + commentLen;
+    }
+
+    debugPrint('[IMPORT] _extractMissingImages: ${targets.length} targets found in CD for ${missingFileNames.length} missing files');
+
+    // Local File Header에서 데이터 위치만 계산 (fnameLen, extraLen)
+    // compSize와 compression은 CD에서 가져온 값 사용
+    int extracted = 0;
+    for (final entry in targets.entries) {
+      try {
+        final fileName = entry.key;
+        final t = entry.value;
+        final offset = t.localOffset;
+        if (offset + 30 > zipBytes.length) continue;
+
+        final localSig = bd.getUint32(offset, Endian.little);
+        if (localSig != 0x04034b50) {
+          debugPrint('[IMPORT] bad LFH signature at $offset for $fileName');
+          continue;
+        }
+
+        // LFH에서 가변 길이 필드만 읽기
+        final localFnameLen = bd.getUint16(offset + 26, Endian.little);
+        final localExtraLen = bd.getUint16(offset + 28, Endian.little);
+
+        final dataStart = offset + 30 + localFnameLen + localExtraLen;
+        final compSize = t.compSize;
+        if (dataStart + compSize > zipBytes.length) {
+          debugPrint('[IMPORT] data out of bounds for $fileName: start=$dataStart size=$compSize total=${zipBytes.length}');
+          continue;
+        }
+
+        final compressedData = zipBytes.sublist(dataStart, dataStart + compSize);
+
+        Uint8List fileData;
+        if (t.compression == 8) {
+          // Deflate
+          fileData = Uint8List.fromList(
+              ZLibCodec(raw: true).decode(compressedData));
+        } else {
+          // Store (compression == 0)
+          fileData = Uint8List.fromList(compressedData);
+        }
+
+        final localPath = localImagePath(appDocDir, fileName);
+        await File(localPath).writeAsBytes(fileData);
+        extracted++;
+      } catch (e) {
+        debugPrint('[IMPORT] raw extraction failed: ${entry.key} — $e');
+      }
+    }
+    return extracted;
   }
 }

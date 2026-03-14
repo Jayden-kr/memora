@@ -34,6 +34,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   StreamSubscription<List<SharedMediaFile>>? _intentSub;
   String _sortMode = 'sequence'; // sequence, name_asc, oldest, newest
   int _totalCardCount = 0;
+  bool _isPickingFile = false;
+
+  // 다중 선택
+  final Set<int> _selectedFolderIds = {};
+  bool get _isSelecting => _selectedFolderIds.isNotEmpty;
 
   static const _sortModeKey = 'home_sort_mode';
 
@@ -244,7 +249,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ],
       ),
     );
-    controller.dispose();
     if (name == null || name.isEmpty) return;
 
     final existing = await DatabaseHelper.instance.getFolderByName(name);
@@ -337,7 +341,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ],
       ),
     );
-    controller.dispose();
     if (newName == null || newName.isEmpty || newName == folder.name) return;
 
     final existing = await DatabaseHelper.instance.getFolderByName(newName);
@@ -456,19 +459,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _pickAndImport() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-    );
-    if (result == null || result.files.single.path == null) return;
-    final filePath = result.files.single.path!;
-    if (!filePath.endsWith('.memk')) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('.memk 파일만 선택할 수 있습니다.')),
+    setState(() => _isPickingFile = true);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
       );
-      return;
+      if (result == null || result.files.single.path == null) return;
+      final filePath = result.files.single.path!;
+      if (!filePath.endsWith('.memk')) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('.memk 파일만 선택할 수 있습니다.')),
+        );
+        return;
+      }
+      await _navigateToImport(filePath);
+    } finally {
+      if (mounted) setState(() => _isPickingFile = false);
     }
-    await _navigateToImport(filePath);
   }
 
   Future<void> _onFolderTap(Folder folder) async {
@@ -517,77 +525,354 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Memora', style: TextStyle(fontSize: 20)),
+  // ─── 다중 선택 ───
+
+  void _toggleFolderSelection(int id) {
+    setState(() {
+      if (_selectedFolderIds.contains(id)) {
+        _selectedFolderIds.remove(id);
+      } else {
+        _selectedFolderIds.add(id);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() => _selectedFolderIds.clear());
+  }
+
+  void _selectAllFolders() {
+    setState(() {
+      if (_selectedFolderIds.length == _folders.length) {
+        _selectedFolderIds.clear();
+      } else {
+        _selectedFolderIds.addAll(
+            _folders.where((f) => f.id != null).map((f) => f.id!));
+      }
+    });
+  }
+
+  Future<void> _deleteSelectedFolders() async {
+    final selected =
+        _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
+    if (selected.isEmpty) return;
+
+    final totalCards = selected
+        .where((f) => !f.isBundle)
+        .fold<int>(0, (sum, f) => sum + f.cardCount);
+    final hasBundles = selected.any((f) => f.isBundle);
+
+    String message = '선택한 ${selected.length}개 폴더를 삭제하시겠습니까?';
+    if (totalCards > 0) {
+      message += '\n카드 $totalCards장이 함께 삭제됩니다.';
+    }
+    if (hasBundles) {
+      message += '\n묶음 폴더의 하위 폴더는 삭제되지 않습니다.';
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('폴더 삭제'),
+        content: Text(message),
         actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.sort),
-            tooltip: '정렬',
-            onSelected: _changeSortMode,
-            itemBuilder: (_) => [
-              _sortMenuItem('수동 (드래그)', 'sequence'),
-              _sortMenuItem('가나다순', 'name_asc'),
-              _sortMenuItem('오래된순', 'oldest'),
-              _sortMenuItem('최신순', 'newest'),
-            ],
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
-      drawer: _buildDrawer(),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _folders.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.folder_open,
-                          size: 64,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurfaceVariant
-                              .withValues(alpha: 0.5)),
-                      const SizedBox(height: 16),
-                      Text('폴더가 없습니다.\n+ 버튼으로 추가하세요.',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodyLarge),
+    );
+    if (confirm != true) return;
+
+    _isDeleting = true;
+
+    // Optimistic UI update
+    setState(() {
+      _folders.removeWhere((f) => _selectedFolderIds.contains(f.id));
+      _totalCardCount = _folders.fold<int>(0, (sum, f) => sum + f.cardCount);
+    });
+
+    try {
+      for (final folder in selected) {
+        if (folder.isBundle) {
+          await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
+        } else {
+          // 이미지 파일 수집 후 삭제
+          final imagePaths = <String>[];
+          const batchSize = 500;
+          int offset = 0;
+          while (true) {
+            final cards = await DatabaseHelper.instance
+                .getCardsByFolderId(folder.id!,
+                    limit: batchSize, offset: offset);
+            if (cards.isEmpty) break;
+            for (final card in cards) {
+              imagePaths.addAll(card.questionImagePaths);
+              imagePaths.addAll(card.answerImagePaths);
+              for (final p in [
+                card.questionHandImagePath,
+                card.questionHandImagePath2,
+                card.questionHandImagePath3,
+                card.questionHandImagePath4,
+                card.questionHandImagePath5,
+                card.answerHandImagePath,
+                card.answerHandImagePath2,
+                card.answerHandImagePath3,
+                card.answerHandImagePath4,
+                card.answerHandImagePath5,
+                card.questionVoiceRecordPath,
+                card.questionVoiceRecordPath2,
+                card.questionVoiceRecordPath3,
+                card.questionVoiceRecordPath4,
+                card.questionVoiceRecordPath5,
+                card.questionVoiceRecordPath6,
+                card.questionVoiceRecordPath7,
+                card.questionVoiceRecordPath8,
+                card.questionVoiceRecordPath9,
+                card.questionVoiceRecordPath10,
+                card.answerVoiceRecordPath,
+                card.answerVoiceRecordPath2,
+                card.answerVoiceRecordPath3,
+                card.answerVoiceRecordPath4,
+                card.answerVoiceRecordPath5,
+                card.answerVoiceRecordPath6,
+                card.answerVoiceRecordPath7,
+                card.answerVoiceRecordPath8,
+                card.answerVoiceRecordPath9,
+                card.answerVoiceRecordPath10,
+              ]) {
+                if (p != null && p.isNotEmpty) imagePaths.add(p);
+              }
+            }
+            offset += batchSize;
+          }
+          await DatabaseHelper.instance.deleteFolder(folder.id!);
+          for (final path in imagePaths) {
+            try {
+              final f = File(path);
+              if (await f.exists()) await f.delete();
+            } catch (_) {}
+          }
+        }
+      }
+    } finally {
+      _isDeleting = false;
+    }
+
+    _selectedFolderIds.clear();
+    if (!mounted) return;
+    await _loadFolders();
+  }
+
+  void _exportSelectedFolders() {
+    final nonBundleIds = _folders
+        .where((f) => _selectedFolderIds.contains(f.id) && !f.isBundle)
+        .map((f) => f.id!)
+        .toList();
+    if (nonBundleIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('내보낼 수 있는 폴더가 없습니다.')),
+      );
+      return;
+    }
+    _clearSelection();
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ExportScreen(initialFolderIds: nonBundleIds),
+      ),
+    );
+  }
+
+  Future<void> _renameSelectedFolder() async {
+    final selectedList =
+        _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
+    if (selectedList.length != 1) return;
+    final folder = selectedList.first;
+    _clearSelection();
+    await _renameFolder(folder);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: !_isSelecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _clearSelection();
+      },
+      child: Scaffold(
+        appBar: _isSelecting
+            ? _buildSelectionAppBar()
+            : AppBar(
+                title:
+                    const Text('Memora', style: TextStyle(fontSize: 20)),
+                actions: [
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.sort),
+                    tooltip: '정렬',
+                    onSelected: _changeSortMode,
+                    itemBuilder: (_) => [
+                      _sortMenuItem('수동 (드래그)', 'sequence'),
+                      _sortMenuItem('가나다순', 'name_asc'),
+                      _sortMenuItem('오래된순', 'oldest'),
+                      _sortMenuItem('최신순', 'newest'),
                     ],
                   ),
-                )
-              : _sortMode == 'sequence'
-                  ? ReorderableListView.builder(
-                      itemCount: _folders.length,
-                      onReorder: _onReorder,
-                      buildDefaultDragHandles: false,
-                      itemBuilder: (context, index) {
-                        final folder = _folders[index];
-                        return FolderTile(
-                          key: ValueKey(folder.id),
-                          folder: folder,
-                          reorderIndex: index,
-                          onTap: () => _onFolderTap(folder),
-                          onLongPress: () => _showFolderOptions(folder),
-                        );
-                      },
-                    )
-                  : ListView.builder(
-                      itemCount: _folders.length,
-                      itemBuilder: (context, index) {
-                        final folder = _folders[index];
-                        return FolderTile(
-                          folder: folder,
-                          onTap: () => _onFolderTap(folder),
-                          onLongPress: () => _showFolderOptions(folder),
-                        );
-                      },
-                    ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showFabBottomSheet,
-        child: const Icon(Icons.add),
+                ],
+              ),
+        drawer: _isSelecting ? null : _buildDrawer(),
+        body: Stack(
+          children: [
+            _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _folders.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.folder_open,
+                                size: 64,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant
+                                    .withValues(alpha: 0.5)),
+                            const SizedBox(height: 16),
+                            Text('폴더가 없습니다.\n+ 버튼으로 추가하세요.',
+                                textAlign: TextAlign.center,
+                                style:
+                                    Theme.of(context).textTheme.bodyLarge),
+                          ],
+                        ),
+                      )
+                    : !_isSelecting && _sortMode == 'sequence'
+                        ? ReorderableListView.builder(
+                            itemCount: _folders.length,
+                            onReorder: _onReorder,
+                            buildDefaultDragHandles: false,
+                            itemBuilder: (context, index) {
+                              final folder = _folders[index];
+                              return FolderTile(
+                                key: ValueKey(folder.id),
+                                folder: folder,
+                                reorderIndex: index,
+                                onTap: () => _onFolderTap(folder),
+                                onLongPress: () {
+                                  if (folder.id != null) {
+                                    _toggleFolderSelection(folder.id!);
+                                  }
+                                },
+                              );
+                            },
+                          )
+                        : ListView.builder(
+                            itemCount: _folders.length,
+                            itemBuilder: (context, index) {
+                              final folder = _folders[index];
+                              return FolderTile(
+                                key: ValueKey(folder.id),
+                                folder: folder,
+                                isSelecting: _isSelecting,
+                                isSelected: _selectedFolderIds
+                                    .contains(folder.id),
+                                onTap: _isSelecting
+                                    ? () {
+                                        if (folder.id != null) {
+                                          _toggleFolderSelection(
+                                              folder.id!);
+                                        }
+                                      }
+                                    : () => _onFolderTap(folder),
+                                onLongPress: _isSelecting
+                                    ? null
+                                    : () {
+                                        if (folder.id != null) {
+                                          _toggleFolderSelection(
+                                              folder.id!);
+                                        }
+                                      },
+                              );
+                            },
+                          ),
+            if (_isPickingFile) ...[
+              const ModalBarrier(
+                  dismissible: false, color: Colors.black26),
+              const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('파일 준비 중...'),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        floatingActionButton: _isSelecting
+            ? null
+            : FloatingActionButton(
+                onPressed: _showFabBottomSheet,
+                child: const Icon(Icons.add),
+              ),
       ),
+    );
+  }
+
+  AppBar _buildSelectionAppBar() {
+    final allSelected = _selectedFolderIds.length == _folders.length;
+    final selectedList =
+        _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _clearSelection,
+      ),
+      title: Text('${_selectedFolderIds.length}개 선택'),
+      actions: [
+        IconButton(
+          icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+          tooltip: allSelected ? '전체 해제' : '전체 선택',
+          onPressed: _selectAllFolders,
+        ),
+        IconButton(
+          icon: const Icon(Icons.file_upload),
+          tooltip: '내보내기',
+          onPressed: _exportSelectedFolders,
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete),
+          tooltip: '삭제',
+          onPressed: _deleteSelectedFolders,
+        ),
+        if (selectedList.length == 1)
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'rename') _renameSelectedFolder();
+              if (value == 'edit_bundle') {
+                final folder = selectedList.first;
+                _clearSelection();
+                _navigateToBundleFolder(existing: folder);
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'rename',
+                child: Text('이름 변경'),
+              ),
+              if (selectedList.first.isBundle)
+                const PopupMenuItem(
+                  value: 'edit_bundle',
+                  child: Text('묶음 폴더 편집'),
+                ),
+            ],
+          ),
+      ],
     );
   }
 

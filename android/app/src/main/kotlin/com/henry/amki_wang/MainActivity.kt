@@ -1,11 +1,15 @@
 package com.henry.amki_wang
 
 import android.app.NotificationManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -28,6 +32,8 @@ class MainActivity : FlutterActivity() {
                     when (call.method) {
                         "startService" -> {
                             val title = call.argument<String>("title") ?: "처리 중..."
+                            // 알림을 즉시 표시 (foreground service 시작 전)
+                            ImportExportService.updateProgress(this, title, "준비 중...", 0, 0)
                             val intent = Intent(this, ImportExportService::class.java)
                             intent.putExtra("title", title)
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -77,6 +83,54 @@ class MainActivity : FlutterActivity() {
                                 Log.w(TAG, "Failed to send STOP to ImportExportService: ${e.message}")
                             }
                             result.success(true)
+                        }
+                        "saveToDownloads" -> {
+                            val sourcePath = call.argument<String>("sourcePath")
+                            val fileName = call.argument<String>("fileName")
+                            if (sourcePath == null || fileName == null) {
+                                result.error("ERROR", "sourcePath and fileName required", null)
+                                return@setMethodCallHandler
+                            }
+                            try {
+                                val sourceFile = File(sourcePath)
+                                if (!sourceFile.exists()) {
+                                    result.error("ERROR", "Source file not found", null)
+                                    return@setMethodCallHandler
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    val values = ContentValues().apply {
+                                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                                        put(MediaStore.Downloads.IS_PENDING, 1)
+                                    }
+                                    val uri = contentResolver.insert(
+                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                    )
+                                    if (uri != null) {
+                                        contentResolver.openOutputStream(uri)?.use { output ->
+                                            sourceFile.inputStream().use { input ->
+                                                input.copyTo(output)
+                                            }
+                                        }
+                                        values.clear()
+                                        values.put(MediaStore.Downloads.IS_PENDING, 0)
+                                        contentResolver.update(uri, values, null, null)
+                                        result.success(true)
+                                    } else {
+                                        result.error("ERROR", "Failed to create MediaStore entry", null)
+                                    }
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    val downloadsDir = Environment.getExternalStoragePublicDirectory(
+                                        Environment.DIRECTORY_DOWNLOADS
+                                    )
+                                    val destFile = File(downloadsDir, fileName)
+                                    sourceFile.copyTo(destFile, overwrite = true)
+                                    result.success(true)
+                                }
+                            } catch (e: Exception) {
+                                result.error("ERROR", e.message, e.stackTraceToString())
+                            }
                         }
                         else -> result.notImplemented()
                     }

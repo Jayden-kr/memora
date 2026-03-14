@@ -12,7 +12,9 @@ import '../services/memk_export_service.dart';
 import '../services/pdf_export_service.dart';
 
 class ExportScreen extends StatefulWidget {
-  const ExportScreen({super.key});
+  final List<int>? initialFolderIds;
+
+  const ExportScreen({super.key, this.initialFolderIds});
 
   @override
   State<ExportScreen> createState() => _ExportScreenState();
@@ -41,6 +43,13 @@ class _ExportScreenState extends State<ExportScreen> {
     if (!mounted) return;
     setState(() {
       _folders = folders;
+      if (widget.initialFolderIds != null) {
+        _selectedFolderIds.addAll(
+          widget.initialFolderIds!.where(
+            (id) => folders.any((f) => f.id == id),
+          ),
+        );
+      }
       _loading = false;
     });
   }

@@ -221,49 +221,6 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               )),
           const Divider(),
 
-          // 상태 필터
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('상태 필터',
-                style: Theme.of(context).textTheme.titleSmall),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: const Text('전체'),
-                  selected: _finishedFilter == -1,
-                  onSelected: (s) {
-                    if (!s) return;
-                    setState(() => _finishedFilter = -1);
-                    _onSettingChanged();
-                  },
-                ),
-                ChoiceChip(
-                  label: const Text('암기 중'),
-                  selected: _finishedFilter == 0,
-                  onSelected: (s) {
-                    if (!s) return;
-                    setState(() => _finishedFilter = 0);
-                    _onSettingChanged();
-                  },
-                ),
-                ChoiceChip(
-                  label: const Text('암기 완료'),
-                  selected: _finishedFilter == 1,
-                  onSelected: (s) {
-                    if (!s) return;
-                    setState(() => _finishedFilter = 1);
-                    _onSettingChanged();
-                  },
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
-
           // 카드 순서
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -294,23 +251,6 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                   },
                 ),
               ],
-            ),
-          ),
-          const Divider(),
-
-          // 문제/정답 바꾸기
-          ListTile(
-            title: const Text('문제/정답 바꾸기'),
-            subtitle: const Text('앞면에 정답, 뒷면에 질문 표시'),
-            trailing: Transform.scale(
-              scale: 0.8,
-              child: Switch(
-                value: _reversed,
-                onChanged: (v) {
-                  setState(() => _reversed = v);
-                  _onSettingChanged();
-                },
-              ),
             ),
           ),
           const Divider(),

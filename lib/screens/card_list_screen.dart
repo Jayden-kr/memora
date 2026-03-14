@@ -66,17 +66,28 @@ class _CardListScreenState extends State<CardListScreen> {
   // 스크롤 인디케이터용 fraction (0.0 ~ 1.0)
   final _scrollFractionNotifier = ValueNotifier<double>(0.0);
 
+  // 커스텀 스크롤 썸 드래그 상태
+  final _isDraggingThumb = ValueNotifier<bool>(false);
+
   // scrollToCardId용 하이라이트
   int? _highlightCardId;
   Timer? _highlightTimer;
 
-  // 일반 모드: ListView.builder + ScrollController (바운스 없음)
-  final ScrollController _scrollController = ScrollController();
-
-  // 알림 점프 모드: ScrollablePositionedList (index 기반 정확한 스크롤)
+  // ScrollablePositionedList (index 기반 스크롤 — 전체 모드 공통)
+  // ListView.builder의 pixel 기반 jumpTo는 대량 카드에서 크래시 유발
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
+
+  // 드래그 점프 스로틀링 (프레임당 최대 1회)
+  bool _jumpScheduled = false;
+  int _pendingJumpIndex = -1;
+
+  // 소량 카드용 일반 ScrollController (ScrollablePositionedList는 소량에서 스크롤 불가)
+  final ScrollController _simpleScrollController = ScrollController();
+  static const _smallListThreshold = 30;
+  bool get _useSimpleList =>
+      _cards.length <= _smallListThreshold && !_isNotificationMode;
 
   // 알림에서 진입한 모드인지
   bool get _isNotificationMode => widget.scrollToCardId != null;
@@ -84,7 +95,6 @@ class _CardListScreenState extends State<CardListScreen> {
   @override
   void initState() {
     super.initState();
-    _scrollController.addListener(_onScroll);
     _itemPositionsListener.itemPositions.addListener(_onItemPositionsChanged);
     _highlightCardId = widget.scrollToCardId;
     _initLoad();
@@ -154,36 +164,22 @@ class _CardListScreenState extends State<CardListScreen> {
 
   @override
   void dispose() {
-    _scrollController.removeListener(_onScroll);
-    _scrollController.dispose();
     _itemPositionsListener.itemPositions.removeListener(_onItemPositionsChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _simpleScrollController.dispose();
     _debounceTimer?.cancel();
     _scrollLabelTimer?.cancel();
     _highlightTimer?.cancel();
     _scrollLabelNotifier.dispose();
     _scrollFractionNotifier.dispose();
+    _isDraggingThumb.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (!_scrollController.hasClients) return;
-    _scrollLabelNotifier.value = _currentVisibleIndex;
-    _scrollLabelTimer?.cancel();
-    _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
-      _scrollLabelNotifier.value = 0;
-    });
-    // 인디케이터 fraction 업데이트
-    final maxExtent = _scrollController.position.maxScrollExtent;
-    if (maxExtent > 0) {
-      _scrollFractionNotifier.value =
-          (_scrollController.offset / maxExtent).clamp(0.0, 1.0);
-    }
-  }
-
-  /// ItemPositionsListener 콜백 (알림 모드용)
+  /// ItemPositionsListener 콜백 (스크롤 위치 추적)
   void _onItemPositionsChanged() {
+    if (_isDraggingThumb.value) return;
     _scrollLabelNotifier.value = _currentVisibleIndex;
     _scrollLabelTimer?.cancel();
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
@@ -206,25 +202,13 @@ class _CardListScreenState extends State<CardListScreen> {
 
   int get _currentVisibleIndex {
     if (_cards.isEmpty) return 0;
-
-    // 알림 모드: ItemPositionsListener에서 정확한 인덱스
-    if (_isNotificationMode) {
-      final positions = _itemPositionsListener.itemPositions.value;
-      if (positions.isEmpty) return 1;
-      final visible = positions.where((p) => p.itemTrailingEdge > 0);
-      if (visible.isEmpty) return 1;
-      final firstVisible =
-          visible.reduce((a, b) => a.index < b.index ? a : b);
-      return firstVisible.index + 1;
-    }
-
-    // 일반 모드: 스크롤 비율 기반 (전체 로드이므로 정확)
-    if (!_scrollController.hasClients) return 1;
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    if (maxScroll <= 0) return 1;
-    final ratio =
-        (_scrollController.position.pixels / maxScroll).clamp(0.0, 1.0);
-    return (ratio * (_cards.length - 1)).round() + 1;
+    final positions = _itemPositionsListener.itemPositions.value;
+    if (positions.isEmpty) return 1;
+    final visible = positions.where((p) => p.itemTrailingEdge > 0);
+    if (visible.isEmpty) return 1;
+    final firstVisible =
+        visible.reduce((a, b) => a.index < b.index ? a : b);
+    return firstVisible.index + 1;
   }
 
   /// 카드 이미지를 백그라운드에서 미리 디코딩 (Glide 방식 프리캐시)
@@ -273,6 +257,19 @@ class _CardListScreenState extends State<CardListScreen> {
       return;
     }
 
+    // 스크롤 위치 저장 (리로드 후 복원용)
+    int? savedIndex;
+    if (_cards.isNotEmpty && _searchQuery.isEmpty) {
+      final positions = _itemPositionsListener.itemPositions.value;
+      if (positions.isNotEmpty) {
+        final visible = positions.where((p) => p.itemTrailingEdge > 0);
+        if (visible.isNotEmpty) {
+          savedIndex =
+              visible.reduce((a, b) => a.index < b.index ? a : b).index;
+        }
+      }
+    }
+
     // 초기 로딩에만 스피너 표시. 리로드 시에는 기존 카드 유지하여 깜빡임 방지
     final isInitialLoad = _cards.isEmpty;
     if (isInitialLoad) {
@@ -313,6 +310,15 @@ class _CardListScreenState extends State<CardListScreen> {
       });
     }
     _precacheCardImages();
+    // 스크롤 위치 복원
+    if (savedIndex != null && savedIndex > 0 && _cards.isNotEmpty) {
+      final idx = savedIndex.clamp(0, _cards.length - 1);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _itemScrollController.isAttached) {
+          _itemScrollController.jumpTo(index: idx);
+        }
+      });
+    }
   }
 
   Future<void> _performSearch() async {
@@ -652,28 +658,32 @@ class _CardListScreenState extends State<CardListScreen> {
     );
   }
 
-  /// 알림 진입 모드: ScrollablePositionedList (index 기반 정확한 스크롤)
-  Widget _buildPositionedList() {
+  /// 카드 리스트
+  /// 소량 카드(≤30)는 ListView.builder (ScrollablePositionedList 소량 스크롤 버그 회피)
+  /// 대량 카드는 ScrollablePositionedList (index 기반 점프, 드래그 인디케이터)
+  Widget _buildCardList() {
+    if (_useSimpleList) {
+      final list = ListView.builder(
+        controller: _simpleScrollController,
+        itemCount: _cards.length,
+        itemBuilder: _buildCardItem,
+        physics: const ClampingScrollPhysics(),
+      );
+      if (_showScrollbar) {
+        return Scrollbar(
+          controller: _simpleScrollController,
+          thumbVisibility: true,
+          child: list,
+        );
+      }
+      return list;
+    }
     return ScrollablePositionedList.builder(
       itemCount: _cards.length,
       itemBuilder: _buildCardItem,
       itemScrollController: _itemScrollController,
       itemPositionsListener: _itemPositionsListener,
       physics: const ClampingScrollPhysics(),
-    );
-  }
-
-  /// 일반 모드: ListView.builder (바운스 없음, 전체 로드)
-  Widget _buildNormalList() {
-    return Scrollbar(
-      controller: _scrollController,
-      interactive: true,
-      child: ListView.builder(
-        controller: _scrollController,
-        cacheExtent: 1500,
-        itemCount: _cards.length,
-        itemBuilder: _buildCardItem,
-      ),
     );
   }
 
@@ -733,19 +743,15 @@ class _CardListScreenState extends State<CardListScreen> {
                         )
                       : Stack(
                           children: [
-                            _isNotificationMode
-                                ? _buildPositionedList()
-                                : _buildNormalList(),
-                            // 스크롤 위치 인디케이터 (반투명 탭)
-                            if (_cards.length > 1)
+                            _buildCardList(),
+                            // 스크롤 위치 인디케이터 (대량 카드에서만 — 소량은 ListView 사용)
+                            if (_showScrollbar && !_useSimpleList && _cards.length > 1)
                               Positioned(
                                 right: 0,
                                 top: 0,
                                 bottom: 0,
                                 width: 80,
-                                child: IgnorePointer(
-                                  child: _buildScrollIndicator(),
-                                ),
+                                child: _buildScrollIndicator(),
                               ),
                           ],
                         ),
@@ -772,7 +778,7 @@ class _CardListScreenState extends State<CardListScreen> {
     );
   }
 
-  /// 스크롤 위치 인디케이터 (반투명 탭, 터치 불가 — 표시 전용)
+  /// 스크롤 위치 인디케이터 (드래그로 빠른 이동 지원)
   Widget _buildScrollIndicator() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -780,62 +786,114 @@ class _CardListScreenState extends State<CardListScreen> {
         const indicatorHeight = 28.0;
         final maxOffset = trackHeight - indicatorHeight;
 
-        return ValueListenableBuilder<int>(
-          valueListenable: _scrollLabelNotifier,
-          builder: (context, labelIndex, _) {
-            return AnimatedOpacity(
-              opacity: labelIndex > 0 ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 200),
-              child: ValueListenableBuilder<double>(
-                valueListenable: _scrollFractionNotifier,
-                builder: (context, fraction, _) {
-                  final top =
-                      (fraction * maxOffset).clamp(0.0, maxOffset);
-                  final currentIndex = _cards.isEmpty
-                      ? 0
-                      : (fraction * (_cards.length - 1)).round() + 1;
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragStart: (details) {
+            _isDraggingThumb.value = true;
+            _scrollLabelTimer?.cancel();
+            _jumpToFraction(
+                details.localPosition.dy, trackHeight, indicatorHeight);
+          },
+          onVerticalDragUpdate: (details) {
+            _jumpToFraction(
+                details.localPosition.dy, trackHeight, indicatorHeight);
+          },
+          onVerticalDragEnd: (_) {
+            _isDraggingThumb.value = false;
+            _scrollLabelTimer?.cancel();
+            _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
+              _scrollLabelNotifier.value = 0;
+            });
+          },
+          child: ValueListenableBuilder<int>(
+            valueListenable: _scrollLabelNotifier,
+            builder: (context, labelIndex, _) {
+              return ValueListenableBuilder<bool>(
+                valueListenable: _isDraggingThumb,
+                builder: (context, isDragging, _) {
+                  return AnimatedOpacity(
+                    opacity: (labelIndex > 0 || isDragging) ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: _scrollFractionNotifier,
+                      builder: (context, fraction, _) {
+                        final top =
+                            (fraction * maxOffset).clamp(0.0, maxOffset);
+                        final currentIndex = _cards.isEmpty
+                            ? 0
+                            : (fraction * (_cards.length - 1)).round() + 1;
 
-                  return Stack(
-                    children: [
-                      Positioned(
-                        top: top,
-                        right: 0,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .primary
-                                .withValues(alpha: 0.25),
-                            borderRadius: const BorderRadius.only(
-                              topLeft: Radius.circular(14),
-                              bottomLeft: Radius.circular(14),
+                        return Stack(
+                          children: [
+                            Positioned(
+                              top: top,
+                              right: 0,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primary
+                                      .withValues(alpha: 0.25),
+                                  borderRadius: const BorderRadius.only(
+                                    topLeft: Radius.circular(14),
+                                    bottomLeft: Radius.circular(14),
+                                  ),
+                                ),
+                                child: Text(
+                                  '$currentIndex/${_cards.length}',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontFamily: 'Pretendard',
+                                    fontWeight: FontWeight.w600,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withValues(alpha: 0.7),
+                                  ),
+                                ),
+                              ),
                             ),
-                          ),
-                          child: Text(
-                            '$currentIndex/${_cards.length}',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontFamily: 'Pretendard',
-                              fontWeight: FontWeight.w600,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.7),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                          ],
+                        );
+                      },
+                    ),
                   );
                 },
-              ),
-            );
-          },
+              );
+            },
+          ),
         );
       },
     );
+  }
+
+  /// 드래그 시 스크롤 위치 점프 (프레임당 1회 스로틀링)
+  void _jumpToFraction(
+      double localY, double trackHeight, double indicatorHeight) {
+    final fraction = ((localY - indicatorHeight / 2) /
+            (trackHeight - indicatorHeight))
+        .clamp(0.0, 1.0);
+    _scrollFractionNotifier.value = fraction;
+
+    final currentIndex = _cards.isEmpty
+        ? 0
+        : (fraction * (_cards.length - 1)).round() + 1;
+    _scrollLabelNotifier.value = currentIndex;
+
+    if (_cards.isEmpty || !_itemScrollController.isAttached) return;
+
+    _pendingJumpIndex = (fraction * (_cards.length - 1)).round();
+
+    if (!_jumpScheduled) {
+      _jumpScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _jumpScheduled = false;
+        if (!mounted || !_itemScrollController.isAttached) return;
+        _itemScrollController.jumpTo(index: _pendingJumpIndex);
+      });
+    }
   }
 
   PreferredSizeWidget _buildNormalAppBar() {

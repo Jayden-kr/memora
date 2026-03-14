@@ -7,6 +7,8 @@ class FolderTile extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final int? reorderIndex;
+  final bool isSelecting;
+  final bool isSelected;
 
   const FolderTile({
     super.key,
@@ -14,6 +16,8 @@ class FolderTile extends StatelessWidget {
     required this.onTap,
     this.onLongPress,
     this.reorderIndex,
+    this.isSelecting = false,
+    this.isSelected = false,
   });
 
   @override
@@ -24,12 +28,17 @@ class FolderTile extends StatelessWidget {
     );
 
     return ListTile(
-      leading: reorderIndex != null
-          ? ReorderableDragStartListener(
-              index: reorderIndex!,
-              child: icon,
+      leading: isSelecting
+          ? Checkbox(
+              value: isSelected,
+              onChanged: (_) => onTap(),
             )
-          : icon,
+          : reorderIndex != null
+              ? ReorderableDragStartListener(
+                  index: reorderIndex!,
+                  child: icon,
+                )
+              : icon,
       title: Text(folder.name),
       subtitle: folder.isBundle
           ? Text('묶음 폴더',
@@ -43,6 +52,7 @@ class FolderTile extends StatelessWidget {
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
       ),
+      selected: isSelected,
       onTap: onTap,
       onLongPress: onLongPress,
     );

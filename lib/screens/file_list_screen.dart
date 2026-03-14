@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart' show Share, XFile;
 
 import '../database/database_helper.dart';
@@ -14,6 +15,9 @@ class FileListScreen extends StatefulWidget {
 }
 
 class _FileListScreenState extends State<FileListScreen> {
+  static const _channel =
+      MethodChannel('com.henry.amki_wang/import_export');
+
   List<Map<String, dynamic>> _files = [];
   bool _loading = true;
 
@@ -139,8 +143,67 @@ class _FileListScreenState extends State<FileListScreen> {
     _loadFiles();
   }
 
-  Future<void> _shareFile(Map<String, dynamic> file) async {
+  Future<void> _renameFile(Map<String, dynamic> file) async {
+    final oldName = file['file_name'] as String;
     final filePath = file['file_path'] as String;
+    final ext = oldName.contains('.') ? '.${oldName.split('.').last}' : '';
+    final nameWithoutExt = ext.isNotEmpty
+        ? oldName.substring(0, oldName.length - ext.length)
+        : oldName;
+
+    final controller = TextEditingController(text: nameWithoutExt);
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: nameWithoutExt.length,
+    );
+
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('파일 이름 변경'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(suffixText: ext),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('변경'),
+          ),
+        ],
+      ),
+    );
+    if (newName == null || newName.isEmpty || newName == nameWithoutExt) return;
+
+    final newFileName = '$newName$ext';
+    final dir = File(filePath).parent.path;
+    final newFilePath = '$dir/$newFileName';
+
+    // 디스크에서 실제 파일 이름 변경
+    final f = File(filePath);
+    if (await f.exists()) {
+      await f.rename(newFilePath);
+    }
+
+    // DB 레코드 업데이트
+    await DatabaseHelper.instance.renameExportedFile(
+      file['id'] as int,
+      newFileName,
+      newFilePath,
+    );
+
+    await _loadFiles();
+  }
+
+  Future<void> _saveToDevice(Map<String, dynamic> file) async {
+    final filePath = file['file_path'] as String;
+    final fileName = file['file_name'] as String;
     final f = File(filePath);
     if (!await f.exists()) {
       if (!mounted) return;
@@ -150,7 +213,36 @@ class _FileListScreenState extends State<FileListScreen> {
       return;
     }
 
-    await Share.shareXFiles([XFile(filePath)]);
+    try {
+      await _channel.invokeMethod('saveToDownloads', {
+        'sourcePath': filePath,
+        'fileName': fileName,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('다운로드 폴더에 저장됨: $fileName')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('저장 실패: $e')),
+      );
+    }
+  }
+
+  Future<void> _shareFile(Map<String, dynamic> file) async {
+    final filePath = file['file_path'] as String;
+    final fileName = file['file_name'] as String;
+    final f = File(filePath);
+    if (!await f.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('파일을 찾을 수 없습니다.')),
+      );
+      return;
+    }
+
+    await Share.shareXFiles([XFile(filePath, name: fileName)]);
   }
 
   void _showFileOptions(Map<String, dynamic> file) {
@@ -160,6 +252,22 @@ class _FileListScreenState extends State<FileListScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ListTile(
+              leading: const Icon(Icons.edit),
+              title: const Text('이름 변경', style: TextStyle(fontSize: 14)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _renameFile(file);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.download),
+              title: const Text('기기에 저장', style: TextStyle(fontSize: 14)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _saveToDevice(file);
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.share),
               title: const Text('공유', style: TextStyle(fontSize: 14)),
@@ -262,8 +370,9 @@ class _FileListScreenState extends State<FileListScreen> {
     final xFiles = <XFile>[];
     for (final file in selected) {
       final filePath = file['file_path'] as String;
+      final fileName = file['file_name'] as String;
       if (await File(filePath).exists()) {
-        xFiles.add(XFile(filePath));
+        xFiles.add(XFile(filePath, name: fileName));
       }
     }
     if (xFiles.isEmpty) {
@@ -274,6 +383,27 @@ class _FileListScreenState extends State<FileListScreen> {
       return;
     }
     await Share.shareXFiles(xFiles);
+  }
+
+  Future<void> _saveSelectedToDevice() async {
+    final selected = _selectedFiles;
+    int saved = 0;
+    for (final file in selected) {
+      final filePath = file['file_path'] as String;
+      final fileName = file['file_name'] as String;
+      if (!await File(filePath).exists()) continue;
+      try {
+        await _channel.invokeMethod('saveToDownloads', {
+          'sourcePath': filePath,
+          'fileName': fileName,
+        });
+        saved++;
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$saved개 파일을 다운로드 폴더에 저장했습니다.')),
+    );
   }
 
   Future<void> _restoreSelected() async {
@@ -401,6 +531,11 @@ class _FileListScreenState extends State<FileListScreen> {
               : Icons.select_all),
           tooltip: allSelected ? '전체 해제' : '전체 선택',
           onPressed: _selectAll,
+        ),
+        IconButton(
+          icon: const Icon(Icons.download),
+          tooltip: '기기에 저장',
+          onPressed: _saveSelectedToDevice,
         ),
         IconButton(
           icon: const Icon(Icons.share),

@@ -514,7 +514,32 @@ class DatabaseHelper {
     )) ?? 0;
   }
 
+  /// 이미지/음성 경로 컬럼 목록 (import 시 복구용)
+  static const _pathColumns = [
+    'question_image_path', 'question_image_path_2', 'question_image_path_3',
+    'question_image_path_4', 'question_image_path_5',
+    'answer_image_path', 'answer_image_path_2', 'answer_image_path_3',
+    'answer_image_path_4', 'answer_image_path_5',
+    'question_hand_image_path', 'question_hand_image_path_2',
+    'question_hand_image_path_3', 'question_hand_image_path_4',
+    'question_hand_image_path_5',
+    'answer_hand_image_path', 'answer_hand_image_path_2',
+    'answer_hand_image_path_3', 'answer_hand_image_path_4',
+    'answer_hand_image_path_5',
+    'question_voice_record_path', 'question_voice_record_path_2',
+    'question_voice_record_path_3', 'question_voice_record_path_4',
+    'question_voice_record_path_5', 'question_voice_record_path_6',
+    'question_voice_record_path_7', 'question_voice_record_path_8',
+    'question_voice_record_path_9', 'question_voice_record_path_10',
+    'answer_voice_record_path', 'answer_voice_record_path_2',
+    'answer_voice_record_path_3', 'answer_voice_record_path_4',
+    'answer_voice_record_path_5', 'answer_voice_record_path_6',
+    'answer_voice_record_path_7', 'answer_voice_record_path_8',
+    'answer_voice_record_path_9', 'answer_voice_record_path_10',
+  ];
+
   /// 카드 배치 insert (transaction) — Import 시 사용
+  /// UUID 중복 카드는 비어있는 이미지 경로를 복구 (재import 시 깨진 이미지 수정)
   /// 반환: (inserted: 실제 삽입 수, skipped: UUID 중복으로 건너뜀 수)
   Future<({int inserted, int skipped})> insertCardsBatch(List<CardModel> cards,
       {ConflictAlgorithm conflictAlgorithm = ConflictAlgorithm.ignore}) async {
@@ -523,12 +548,40 @@ class DatabaseHelper {
     int skipped = 0;
     await db.transaction((txn) async {
       for (final card in cards) {
-        final result = await txn.insert(AppConstants.tableCards, card.toDb(),
+        final dbMap = card.toDb();
+        final result = await txn.insert(AppConstants.tableCards, dbMap,
             conflictAlgorithm: conflictAlgorithm);
         if (result > 0) {
           inserted++;
         } else {
           skipped++;
+          // UUID 중복 — 비어있는 이미지 경로 복구
+          final uuid = dbMap['uuid'] as String?;
+          if (uuid == null || uuid.isEmpty) continue;
+          final existing = await txn.query(
+            AppConstants.tableCards,
+            columns: ['id', ..._pathColumns],
+            where: 'uuid = ?',
+            whereArgs: [uuid],
+            limit: 1,
+          );
+          if (existing.isEmpty) continue;
+          final updates = <String, dynamic>{};
+          for (final col in _pathColumns) {
+            final existingVal = existing.first[col] as String? ?? '';
+            final newVal = dbMap[col] as String? ?? '';
+            if (existingVal.isEmpty && newVal.isNotEmpty) {
+              updates[col] = newVal;
+            }
+          }
+          if (updates.isNotEmpty) {
+            await txn.update(
+              AppConstants.tableCards,
+              updates,
+              where: 'id = ?',
+              whereArgs: [existing.first['id']],
+            );
+          }
         }
       }
     });
@@ -786,6 +839,16 @@ class DatabaseHelper {
     );
   }
 
+  Future<void> renameExportedFile(int id, String newFileName, String newFilePath) async {
+    final db = await database;
+    await db.update(
+      AppConstants.tableExportedFiles,
+      {'file_name': newFileName, 'file_path': newFilePath},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<int> deleteExportedFile(int id) async {
     final db = await database;
     return await db.delete(
@@ -844,5 +907,66 @@ class DatabaseHelper {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  /// 존재하지 않는 이미지/음성 파일 경로를 DB에서 일괄 제거
+  /// 앱 시작 시 1회 실행하여 깨진 이미지 참조를 정리
+  Future<int> cleanupBrokenImagePaths() async {
+    final db = await database;
+
+    // 이미지/음성 경로를 포함하는 모든 컬럼
+    const pathColumns = [
+      'question_image_path', 'question_image_path_2', 'question_image_path_3',
+      'question_image_path_4', 'question_image_path_5',
+      'answer_image_path', 'answer_image_path_2', 'answer_image_path_3',
+      'answer_image_path_4', 'answer_image_path_5',
+      'question_hand_image_path', 'question_hand_image_path_2',
+      'question_hand_image_path_3', 'question_hand_image_path_4',
+      'question_hand_image_path_5',
+      'answer_hand_image_path', 'answer_hand_image_path_2',
+      'answer_hand_image_path_3', 'answer_hand_image_path_4',
+      'answer_hand_image_path_5',
+      'question_voice_record_path', 'question_voice_record_path_2',
+      'question_voice_record_path_3', 'question_voice_record_path_4',
+      'question_voice_record_path_5', 'question_voice_record_path_6',
+      'question_voice_record_path_7', 'question_voice_record_path_8',
+      'question_voice_record_path_9', 'question_voice_record_path_10',
+      'answer_voice_record_path', 'answer_voice_record_path_2',
+      'answer_voice_record_path_3', 'answer_voice_record_path_4',
+      'answer_voice_record_path_5', 'answer_voice_record_path_6',
+      'answer_voice_record_path_7', 'answer_voice_record_path_8',
+      'answer_voice_record_path_9', 'answer_voice_record_path_10',
+    ];
+
+    // 경로가 비어있지 않은 카드만 조회 (OR 조건)
+    final whereClauses =
+        pathColumns.map((c) => "($c IS NOT NULL AND $c != '')").join(' OR ');
+    final rows = await db.query(
+      AppConstants.tableCards,
+      columns: ['id', ...pathColumns],
+      where: whereClauses,
+    );
+
+    int cleaned = 0;
+    for (final row in rows) {
+      final updates = <String, dynamic>{};
+      for (final col in pathColumns) {
+        final path = row[col] as String?;
+        if (path == null || path.isEmpty) continue;
+        if (!File(path).existsSync()) {
+          updates[col] = '';
+          cleaned++;
+        }
+      }
+      if (updates.isNotEmpty) {
+        await db.update(
+          AppConstants.tableCards,
+          updates,
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+      }
+    }
+    return cleaned;
   }
 }
