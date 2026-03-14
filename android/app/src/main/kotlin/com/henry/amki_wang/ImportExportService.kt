@@ -34,6 +34,7 @@ class ImportExportService : Service() {
             ensureChannel(context)
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("navigate_to_import", true)
             }
             val pendingIntent = PendingIntent.getActivity(
                 context, 0, intent,
@@ -120,6 +121,7 @@ class ImportExportService : Service() {
             this, 0,
             Intent(this, MainActivity::class.java).apply {
                 this.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("navigate_to_import", true)
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )

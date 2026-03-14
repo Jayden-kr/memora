@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
@@ -7,8 +11,16 @@ import '../services/import_export_controller.dart';
 
 class ImportScreen extends StatefulWidget {
   final String filePath;
+  final bool progressOnly;
 
-  const ImportScreen({required this.filePath, super.key});
+  /// 현재 ImportScreen이 열려 있는지 추적 (알림 탭 중복 방지)
+  static bool isOpen = false;
+
+  const ImportScreen({
+    required this.filePath,
+    this.progressOnly = false,
+    super.key,
+  });
 
   @override
   State<ImportScreen> createState() => _ImportScreenState();
@@ -17,10 +29,10 @@ class ImportScreen extends StatefulWidget {
 enum _ImportStage { loading, folderSelect, importing, done, error }
 
 class _ImportScreenState extends State<ImportScreen> {
-  final _importService = MemkImportService();
   final _controller = ImportExportController.instance;
 
   _ImportStage _stage = _ImportStage.loading;
+  String? _stableFilePath; // 안정적 접근을 위한 임시 복사본 경로
   List<Map<String, dynamic>> _memkFolders = [];
   final Set<String> _selectedFolderNames = {};
 
@@ -35,14 +47,19 @@ class _ImportScreenState extends State<ImportScreen> {
   @override
   void initState() {
     super.initState();
+    ImportScreen.isOpen = true;
     _controller.addListener(_onControllerUpdate);
     _loadData();
   }
 
   @override
   void dispose() {
+    ImportScreen.isOpen = false;
     _controller.removeListener(_onControllerUpdate);
-    _importService.clearCache();
+    // Import 미시작 시 캐시 메모리 해제 (import 시작 후에는 이미 소비됨)
+    if (_stage != _ImportStage.importing) {
+      _controller.importService.clearCache();
+    }
     super.dispose();
   }
 
@@ -60,9 +77,29 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Future<void> _loadData() async {
+    // 알림 탭으로 열린 경우: 파일 분석 없이 현재 컨트롤러 상태 표시
+    if (widget.progressOnly) {
+      if (_controller.isRunning && _controller.currentOperation == 'import') {
+        setState(() => _stage = _ImportStage.importing);
+      } else if (_controller.lastImportResult != null) {
+        setState(() => _stage = _ImportStage.done);
+      } else {
+        // Import 상태 없음 — 홈으로 돌아감
+        if (mounted) Navigator.pop(context);
+      }
+      return;
+    }
+
     try {
+      // 원본 파일을 앱 temp 디렉토리로 복사 (file_picker/공유 임시 파일 만료 방지)
+      final tempDir = await getTemporaryDirectory();
+      final destPath = p.join(tempDir.path, 'memk_import_temp.memk');
+      await File(widget.filePath).copy(destPath);
+      _stableFilePath = destPath;
+
+      // 컨트롤러의 importService 사용 (Archive 캐시 공유)
       final memkFolders =
-          await _importService.readFolderList(widget.filePath);
+          await _controller.importService.readFolderList(destPath);
       final localFolders =
           await DatabaseHelper.instance.getNonBundleFolders();
       if (!mounted) return;
@@ -102,7 +139,7 @@ class _ImportScreenState extends State<ImportScreen> {
 
     try {
       await _controller.startImport(
-        filePath: widget.filePath,
+        filePath: _stableFilePath ?? widget.filePath,
         selectedFolderNames: _selectedFolderNames.toList(),
         folderMapping: mapping,
       );
@@ -438,7 +475,6 @@ class _ImportScreenState extends State<ImportScreen> {
             _resultRow('신규 폴더', '${r.newFolders}개'),
             _resultRow('병합 폴더', '${r.mergedFolders}개'),
             _resultRow('이미지', '${r.images}장'),
-            if (r.errors > 0) _resultRow('에러', '${r.errors}건'),
             _resultRow('소요 시간', timeStr),
             const SizedBox(height: 32),
             FilledButton(

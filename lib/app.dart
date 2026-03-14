@@ -9,6 +9,10 @@ final ValueNotifier<ThemeMode> themeModeNotifier =
 /// 전역 네비게이터 키 (알림 탭 시 화면 이동용)
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+/// 전역 RouteObserver (RouteAware 위젯에서 화면 복귀 감지용)
+final RouteObserver<ModalRoute<void>> routeObserver =
+    RouteObserver<ModalRoute<void>>();
+
 class MemoraApp extends StatelessWidget {
   const MemoraApp({super.key});
 
@@ -20,6 +24,7 @@ class MemoraApp extends StatelessWidget {
         return MaterialApp(
           title: 'Memora',
           navigatorKey: navigatorKey,
+          navigatorObservers: [routeObserver],
           theme: ThemeData(
             colorSchemeSeed: const Color(0xFFFF6B6B),
             useMaterial3: true,

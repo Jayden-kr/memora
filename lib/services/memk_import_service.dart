@@ -43,7 +43,6 @@ class ImportResult {
   final int newFolders;
   final int mergedFolders;
   final int images;
-  final int errors;
   final Duration duration;
 
   const ImportResult({
@@ -52,7 +51,6 @@ class ImportResult {
     this.newFolders = 0,
     this.mergedFolders = 0,
     this.images = 0,
-    this.errors = 0,
     this.duration = Duration.zero,
   });
 }
@@ -147,10 +145,7 @@ class MemkImportService {
           jsonDecode(utf8.decode(foldersFile.content as List<int>))
               as List<dynamic>;
     } catch (e) {
-      return ImportResult(
-        errors: 1,
-        duration: stopwatch.elapsed,
-      );
+      return ImportResult(duration: stopwatch.elapsed);
     }
 
     // 선택된 폴더만 필터 + 폴더 ID 매핑
@@ -233,7 +228,6 @@ class MemkImportService {
       return ImportResult(
         newFolders: newFolders,
         mergedFolders: mergedFolders,
-        errors: 1,
         duration: stopwatch.elapsed,
       );
     }
@@ -251,7 +245,6 @@ class MemkImportService {
     final totalCards = selectedCards.length;
     int newCards = 0;
     int skippedCards = 0;
-    int errors = 0;
 
     // 필요한 이미지 파일명 수집
     final neededImageFiles = <String>{};
@@ -277,6 +270,17 @@ class MemkImportService {
         // id 제거하여 autoincrement 사용 (UUID로 중복 관리)
         cardJson.remove('id');
 
+        // uuid 방어적 처리: null/비문자열 → 건너뜀
+        if (cardJson['uuid'] == null) {
+          skippedCards++;
+          continue;
+        }
+        cardJson['uuid'] = cardJson['uuid'].toString();
+        if ((cardJson['uuid'] as String).isEmpty) {
+          skippedCards++;
+          continue;
+        }
+
         // 이미지 경로 변환: memk 경로 → 로컬 경로
         _convertImagePaths(cardJson, appDocDir, neededImageFiles);
 
@@ -300,8 +304,8 @@ class MemkImportService {
           // UI 갱신 기회
           await Future.delayed(Duration.zero);
         }
-      } catch (e) {
-        errors++;
+      } catch (_) {
+        skippedCards++;
       }
     }
 
@@ -346,8 +350,8 @@ class MemkImportService {
           ));
           await Future.delayed(Duration.zero);
         }
-      } catch (e) {
-        errors++;
+      } catch (_) {
+        // 이미지 추출 실패 — 카드 데이터는 이미 저장됨, 이미지만 누락
       }
     }
 
@@ -401,7 +405,6 @@ class MemkImportService {
       newFolders: newFolders,
       mergedFolders: mergedFolders,
       images: imageCount,
-      errors: errors,
       duration: stopwatch.elapsed,
     );
 

@@ -63,6 +63,9 @@ class _CardListScreenState extends State<CardListScreen> {
   final _scrollLabelNotifier = ValueNotifier<int>(0);
   Timer? _scrollLabelTimer;
 
+  // 스크롤 인디케이터용 fraction (0.0 ~ 1.0)
+  final _scrollFractionNotifier = ValueNotifier<double>(0.0);
+
   // scrollToCardId용 하이라이트
   int? _highlightCardId;
   Timer? _highlightTimer;
@@ -160,6 +163,7 @@ class _CardListScreenState extends State<CardListScreen> {
     _scrollLabelTimer?.cancel();
     _highlightTimer?.cancel();
     _scrollLabelNotifier.dispose();
+    _scrollFractionNotifier.dispose();
     super.dispose();
   }
 
@@ -170,6 +174,12 @@ class _CardListScreenState extends State<CardListScreen> {
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
       _scrollLabelNotifier.value = 0;
     });
+    // 인디케이터 fraction 업데이트
+    final maxExtent = _scrollController.position.maxScrollExtent;
+    if (maxExtent > 0) {
+      _scrollFractionNotifier.value =
+          (_scrollController.offset / maxExtent).clamp(0.0, 1.0);
+    }
   }
 
   /// ItemPositionsListener 콜백 (알림 모드용)
@@ -179,6 +189,19 @@ class _CardListScreenState extends State<CardListScreen> {
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
       _scrollLabelNotifier.value = 0;
     });
+    // 인디케이터 fraction 업데이트
+    if (_cards.isNotEmpty) {
+      final positions = _itemPositionsListener.itemPositions.value;
+      if (positions.isNotEmpty) {
+        final visible = positions.where((p) => p.itemTrailingEdge > 0);
+        if (visible.isNotEmpty) {
+          final firstIndex =
+              visible.reduce((a, b) => a.index < b.index ? a : b).index;
+          _scrollFractionNotifier.value =
+              (firstIndex / (_cards.length - 1)).clamp(0.0, 1.0);
+        }
+      }
+    }
   }
 
   int get _currentVisibleIndex {
@@ -640,27 +663,16 @@ class _CardListScreenState extends State<CardListScreen> {
     );
   }
 
-  /// 일반 모드: ListView.builder + Scrollbar (바운스 없음, 전체 로드)
+  /// 일반 모드: ListView.builder (바운스 없음, 전체 로드)
   Widget _buildNormalList() {
-    return ScrollbarTheme(
-      data: ScrollbarThemeData(
-        thickness: WidgetStateProperty.all(3.0),
-        radius: const Radius.circular(1.5),
-        thumbColor: WidgetStateProperty.all(
-          Theme.of(context).colorScheme.onSurface.withAlpha(60),
-        ),
-        minThumbLength: 36,
-      ),
-      child: Scrollbar(
+    return Scrollbar(
+      controller: _scrollController,
+      interactive: true,
+      child: ListView.builder(
         controller: _scrollController,
-        thumbVisibility: _showScrollbar,
-        interactive: _showScrollbar,
-        child: ListView.builder(
-          controller: _scrollController,
-          cacheExtent: 1500,
-          itemCount: _cards.length,
-          itemBuilder: _buildCardItem,
-        ),
+        cacheExtent: 1500,
+        itemCount: _cards.length,
+        itemBuilder: _buildCardItem,
       ),
     );
   }
@@ -724,46 +736,16 @@ class _CardListScreenState extends State<CardListScreen> {
                             _isNotificationMode
                                 ? _buildPositionedList()
                                 : _buildNormalList(),
-                            // 스크롤 위치 라벨 (ValueListenableBuilder로 라벨만 리빌드)
+                            // 스크롤 위치 인디케이터 (반투명 탭)
                             if (_cards.length > 1)
-                              ValueListenableBuilder<int>(
-                                valueListenable: _scrollLabelNotifier,
-                                builder: (context, visibleIndex, _) {
-                                  if (visibleIndex == 0) {
-                                    return const SizedBox.shrink();
-                                  }
-                                  return Positioned(
-                                    right: 14,
-                                    top: 0,
-                                    bottom: 0,
-                                    child: Center(
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .inverseSurface,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          '$visibleIndex / $_totalCount',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .labelSmall
-                                              ?.copyWith(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .onInverseSurface,
-                                              ),
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
+                                width: 80,
+                                child: IgnorePointer(
+                                  child: _buildScrollIndicator(),
+                                ),
                               ),
                           ],
                         ),
@@ -787,6 +769,72 @@ class _CardListScreenState extends State<CardListScreen> {
                 child: const Icon(Icons.add),
               ),
       ),
+    );
+  }
+
+  /// 스크롤 위치 인디케이터 (반투명 탭, 터치 불가 — 표시 전용)
+  Widget _buildScrollIndicator() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final trackHeight = constraints.maxHeight;
+        const indicatorHeight = 28.0;
+        final maxOffset = trackHeight - indicatorHeight;
+
+        return ValueListenableBuilder<int>(
+          valueListenable: _scrollLabelNotifier,
+          builder: (context, labelIndex, _) {
+            return AnimatedOpacity(
+              opacity: labelIndex > 0 ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: ValueListenableBuilder<double>(
+                valueListenable: _scrollFractionNotifier,
+                builder: (context, fraction, _) {
+                  final top =
+                      (fraction * maxOffset).clamp(0.0, maxOffset);
+                  final currentIndex = _cards.isEmpty
+                      ? 0
+                      : (fraction * (_cards.length - 1)).round() + 1;
+
+                  return Stack(
+                    children: [
+                      Positioned(
+                        top: top,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primary
+                                .withValues(alpha: 0.25),
+                            borderRadius: const BorderRadius.only(
+                              topLeft: Radius.circular(14),
+                              bottomLeft: Radius.circular(14),
+                            ),
+                          ),
+                          child: Text(
+                            '$currentIndex/${_cards.length}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontFamily: 'Pretendard',
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            );
+          },
+        );
+      },
     );
   }
 

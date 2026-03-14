@@ -18,6 +18,7 @@ import 'import_screen.dart';
 import 'lock_screen_settings.dart';
 import 'push_notification_settings.dart';
 import 'settings_screen.dart';
+import '../services/import_export_controller.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,9 +27,10 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with RouteAware {
   List<Folder> _folders = [];
   bool _loading = true;
+  bool _isDeleting = false;
   StreamSubscription<List<SharedMediaFile>>? _intentSub;
   String _sortMode = 'sequence'; // sequence, name_asc, oldest, newest
   int _totalCardCount = 0;
@@ -40,12 +42,33 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadFolders();
     _initSharingIntent();
+    ImportExportController.instance.addListener(_onImportExportUpdate);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
   }
 
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
+    ImportExportController.instance.removeListener(_onImportExportUpdate);
     _intentSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    if (!_isDeleting) _loadFolders();
+  }
+
+  void _onImportExportUpdate() {
+    if (!ImportExportController.instance.isRunning &&
+        ImportExportController.instance.lastImportResult != null) {
+      _loadFolders();
+    }
   }
 
   void _initSharingIntent() {
@@ -157,7 +180,8 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.note_add),
-              title: const Text('새 카드 추가'),
+              title: const Text('새 카드 추가',
+                  style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _showFolderPickerForNewCard();
@@ -165,7 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.create_new_folder),
-              title: const Text('새 폴더 만들기'),
+              title: const Text('새 폴더 만들기',
+                  style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _createFolder();
@@ -173,7 +198,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.folder_special),
-              title: const Text('묶음 폴더 만들기'),
+              title: const Text('묶음 폴더 만들기',
+                  style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _navigateToBundleFolder();
@@ -181,7 +207,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.file_download),
-              title: const Text('파일(.memk) 가져오기'),
+              title: const Text('파일(.memk) 가져오기',
+                  style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickAndImport();
@@ -254,7 +281,8 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.edit),
-              title: const Text('이름 변경'),
+              title: const Text('이름 변경',
+                  style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _renameFolder(folder);
@@ -263,7 +291,8 @@ class _HomeScreenState extends State<HomeScreen> {
             if (folder.isBundle)
               ListTile(
                 leading: const Icon(Icons.folder_special),
-                title: const Text('묶음 폴더 편집'),
+                title: const Text('묶음 폴더 편집',
+                    style: TextStyle(fontSize: 14)),
                 onTap: () {
                   Navigator.pop(ctx);
                   _navigateToBundleFolder(existing: folder);
@@ -271,7 +300,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ListTile(
               leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('삭제', style: TextStyle(color: Colors.red)),
+              title: const Text('삭제',
+                  style: TextStyle(fontSize: 14, color: Colors.red)),
               onTap: () {
                 Navigator.pop(ctx);
                 _deleteFolder(folder);
@@ -325,6 +355,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteFolder(Folder folder) async {
+    // 바텀시트 닫힘 → didPopNext 차단 (optimistic update 덮어쓰기 방지)
+    _isDeleting = true;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -344,58 +376,72 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-    if (confirm != true) return;
-
-    if (folder.isBundle) {
-      // 묶음 폴더 삭제: 자식 해제 + 삭제를 트랜잭션으로 원자적 실행
-      await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
+    if (confirm != true) {
+      _isDeleting = false;
+      _loadFolders();
+      return;
     }
 
-    // 삭제 전 해당 폴더 카드의 이미지 파일 수집 (배치 로드로 OOM 방지)
-    if (!folder.isBundle) {
-      final imagePaths = <String>[];
-      const batchSize = 500;
-      int offset = 0;
-      while (true) {
-        final cards = await DatabaseHelper.instance.getCardsByFolderId(
-            folder.id!, limit: batchSize, offset: offset);
-        if (cards.isEmpty) break;
-        for (final card in cards) {
-          imagePaths.addAll(card.questionImagePaths);
-          imagePaths.addAll(card.answerImagePaths);
-          // hand image + voice record 경로도 수집
-          for (final p in [
-            card.questionHandImagePath, card.questionHandImagePath2,
-            card.questionHandImagePath3, card.questionHandImagePath4,
-            card.questionHandImagePath5,
-            card.answerHandImagePath, card.answerHandImagePath2,
-            card.answerHandImagePath3, card.answerHandImagePath4,
-            card.answerHandImagePath5,
-            card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
-            card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
-            card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
-            card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
-            card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
-            card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
-            card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
-            card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
-            card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
-            card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
-          ]) {
-            if (p != null && p.isNotEmpty) imagePaths.add(p);
+    // 즉시 UI에서 제거 (optimistic update)
+    setState(() {
+      _folders.removeWhere((f) => f.id == folder.id);
+      _totalCardCount = _folders.fold<int>(0, (sum, f) => sum + f.cardCount);
+    });
+
+    try {
+      if (folder.isBundle) {
+        // 묶음 폴더 삭제: 자식 해제 + 삭제를 트랜잭션으로 원자적 실행
+        await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
+      }
+
+      // 삭제 전 해당 폴더 카드의 이미지 파일 수집 (배치 로드로 OOM 방지)
+      if (!folder.isBundle) {
+        final imagePaths = <String>[];
+        const batchSize = 500;
+        int offset = 0;
+        while (true) {
+          final cards = await DatabaseHelper.instance.getCardsByFolderId(
+              folder.id!, limit: batchSize, offset: offset);
+          if (cards.isEmpty) break;
+          for (final card in cards) {
+            imagePaths.addAll(card.questionImagePaths);
+            imagePaths.addAll(card.answerImagePaths);
+            // hand image + voice record 경로도 수집
+            for (final p in [
+              card.questionHandImagePath, card.questionHandImagePath2,
+              card.questionHandImagePath3, card.questionHandImagePath4,
+              card.questionHandImagePath5,
+              card.answerHandImagePath, card.answerHandImagePath2,
+              card.answerHandImagePath3, card.answerHandImagePath4,
+              card.answerHandImagePath5,
+              card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
+              card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
+              card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
+              card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
+              card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
+              card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
+              card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
+              card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
+              card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
+              card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
+            ]) {
+              if (p != null && p.isNotEmpty) imagePaths.add(p);
+            }
           }
+          offset += batchSize;
         }
-        offset += batchSize;
+        // DB 삭제 (CASCADE로 카드도 삭제됨)
+        await DatabaseHelper.instance.deleteFolder(folder.id!);
+        // 디스크에서 이미지 파일 정리
+        for (final path in imagePaths) {
+          try {
+            final f = File(path);
+            if (await f.exists()) await f.delete();
+          } catch (_) {}
+        }
       }
-      // DB 삭제 (CASCADE로 카드도 삭제됨)
-      await DatabaseHelper.instance.deleteFolder(folder.id!);
-      // 디스크에서 이미지 파일 정리
-      for (final path in imagePaths) {
-        try {
-          final f = File(path);
-          if (await f.exists()) await f.delete();
-        } catch (_) {}
-      }
+    } finally {
+      _isDeleting = false;
     }
     if (!mounted) return;
     await _loadFolders();

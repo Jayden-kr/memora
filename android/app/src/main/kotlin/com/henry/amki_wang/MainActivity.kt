@@ -15,12 +15,15 @@ class MainActivity : FlutterActivity() {
     private val IMPORT_EXPORT_CHANNEL = "com.henry.amki_wang/import_export"
     private val TAG = "AmkiWang"
 
+    private var importExportChannel: MethodChannel? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
         // Import/Export Foreground Service MethodChannel
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
-            .setMethodCallHandler { call, result ->
+        val ieChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
+        importExportChannel = ieChannel
+        ieChannel.setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
                         "startService" -> {
@@ -192,6 +195,18 @@ class MainActivity : FlutterActivity() {
             Log.d(TAG, "stopLockScreenService called")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to stop service", e)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleImportNavigationIntent(intent)
+    }
+
+    private fun handleImportNavigationIntent(intent: Intent) {
+        if (intent.getBooleanExtra("navigate_to_import", false)) {
+            intent.removeExtra("navigate_to_import")
+            importExportChannel?.invokeMethod("navigateToImport", null)
         }
     }
 

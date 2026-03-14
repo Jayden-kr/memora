@@ -16,6 +16,9 @@ class ImportExportController {
   final _importService = MemkImportService();
   final _exportService = MemkExportService();
 
+  /// ImportScreen과 공유하여 Archive 캐시 재사용
+  MemkImportService get importService => _importService;
+
   // 동시 실행 방지 락
   Completer<void>? _operationLock;
 
@@ -99,14 +102,27 @@ class ImportExportController {
           currentImportProgress = progress;
           _notify();
 
-          // 알림 업데이트 (너무 자주 안 보내도록)
-          final total = progress.totalCards > 0 ? progress.totalCards : 1;
-          final current = progress.currentCards;
+          // 카드+이미지 통합 진행률 계산 (0-100)
+          final cardProg = progress.totalCards > 0
+              ? progress.currentCards / progress.totalCards
+              : 0.0;
+          final imageProg = progress.totalImages > 0
+              ? progress.currentImages / progress.totalImages
+              : 0.0;
+          double combined;
+          if (progress.phase == 'images') {
+            combined = (cardProg + imageProg) / 2;
+          } else if (progress.phase == 'cards') {
+            combined = cardProg * 0.5;
+          } else {
+            combined = 0.0;
+          }
+
           _updateProgress(
             'Import 진행 중',
             progress.message ?? '처리 중...',
-            current,
-            total,
+            (combined * 100).round(),
+            100,
           );
         },
       );

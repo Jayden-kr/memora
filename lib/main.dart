@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app.dart';
 import 'database/database_helper.dart';
 import 'screens/card_list_screen.dart';
+import 'screens/import_screen.dart';
 import 'services/lock_screen_service.dart';
 import 'services/notification_service.dart';
 import 'utils/constants.dart';
@@ -37,6 +39,15 @@ void main() async {
 
   // 알림 탭 → 카드 네비게이션 콜백 등록
   NotificationService.onNavigate = _handleNotificationNav;
+
+  // Import/Export 알림 탭 → ImportScreen 네비게이션
+  const importExportChannel =
+      MethodChannel('com.henry.amki_wang/import_export');
+  importExportChannel.setMethodCallHandler((call) async {
+    if (call.method == 'navigateToImport') {
+      _handleImportNotificationTap();
+    }
+  });
 
   runApp(const MemoraApp());
 
@@ -95,6 +106,18 @@ Future<void> _doNavigate(
       folder: folder,
       scrollToCardId: card.id,
     ),
+  ));
+}
+
+void _handleImportNotificationTap() {
+  // ImportScreen이 이미 열려 있으면 중복 push 방지
+  if (ImportScreen.isOpen) return;
+
+  final nav = navigatorKey.currentState;
+  if (nav == null) return;
+
+  nav.push(MaterialPageRoute(
+    builder: (_) => const ImportScreen(filePath: '', progressOnly: true),
   ));
 }
 
