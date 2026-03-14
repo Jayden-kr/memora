@@ -554,7 +554,7 @@ class CardModel {
     int? id,
     String? uuid,
     int? folderId,
-    String? folderName,
+    Object? folderName = _absent,
     String? question,
     String? answer,
     Object? questionImagePath = _absent,
@@ -622,13 +622,13 @@ class CardModel {
     int? sequence2,
     int? sequence3,
     int? sequence4,
-    String? modified,
+    Object? modified = _absent,
   }) {
     return CardModel(
       id: id ?? this.id,
       uuid: uuid ?? this.uuid,
       folderId: folderId ?? this.folderId,
-      folderName: folderName ?? this.folderName,
+      folderName: identical(folderName, _absent) ? this.folderName : folderName as String?,
       question: question ?? this.question,
       answer: answer ?? this.answer,
       questionImagePath: identical(questionImagePath, _absent) ? this.questionImagePath : questionImagePath as String?,
@@ -694,7 +694,7 @@ class CardModel {
       sequence2: sequence2 ?? this.sequence2,
       sequence3: sequence3 ?? this.sequence3,
       sequence4: sequence4 ?? this.sequence4,
-      modified: modified ?? this.modified,
+      modified: identical(modified, _absent) ? this.modified : modified as String?,
     );
   }
 }

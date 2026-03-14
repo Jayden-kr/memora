@@ -190,11 +190,14 @@ class _PushNotificationSettingsScreenState
     if (_intervalAlarmId == null) return;
     await DatabaseHelper.instance.deletePushAlarm(_intervalAlarmId!);
     await NotificationService.rescheduleAll();
-    _intervalAlarmId = null;
-    _intervalEnabled = true;
-    _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
-    _intervalEndTime = const TimeOfDay(hour: 22, minute: 0);
-    _intervalMinController.text = '30';
+    if (!mounted) return;
+    setState(() {
+      _intervalAlarmId = null;
+      _intervalEnabled = true;
+      _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
+      _intervalEndTime = const TimeOfDay(hour: 22, minute: 0);
+      _intervalMinController.text = '30';
+    });
     await _loadData();
   }
 
@@ -216,7 +219,7 @@ class _PushNotificationSettingsScreenState
     // 디바운싱: 빠른 연속 변경 시 마지막만 실제 적용 (500ms)
     _globalSettingsDebounce?.cancel();
     _globalSettingsDebounce = Timer(const Duration(milliseconds: 500), () {
-      _applyGlobalSettings();
+      if (mounted) _applyGlobalSettings();
     });
   }
 
@@ -255,6 +258,9 @@ class _PushNotificationSettingsScreenState
       final folderId = alarm['folder_id'] as int?;
       final soundEnabled = (alarm['sound_enabled'] as int? ?? 1) == 1;
       final mode = alarm['mode'] as String? ?? 'fixed';
+
+      // 선택된 요일이 없으면 알림을 스케줄링하지 않음
+      if (days != null && days.isEmpty) continue;
 
       if (mode == 'interval') {
         final startTime = alarm['start_time'] as String?;
@@ -327,11 +333,12 @@ class _PushNotificationSettingsScreenState
                       value: _enabled,
                       onChanged: (v) async {
                         if (v) {
+                          final messenger = ScaffoldMessenger.of(context);
                           final granted =
                               await NotificationService.requestPermission();
                           if (!granted) {
                             if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            messenger.showSnackBar(
                               SnackBar(
                                 content:
                                     const Text('알림 권한이 필요합니다.'),
@@ -427,9 +434,10 @@ class _PushNotificationSettingsScreenState
                   title: const Text('테스트 알림 보내기'),
                   leading: const Icon(Icons.notifications_active),
                   onTap: () async {
+                    final messenger = ScaffoldMessenger.of(context);
                     await NotificationService.showTestNotification();
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    messenger.showSnackBar(
                       const SnackBar(content: Text('테스트 알림을 보냈습니다.')),
                     );
                   },
@@ -550,7 +558,7 @@ class _PushNotificationSettingsScreenState
             const SizedBox(width: 12),
             if (count > 0)
               Text(
-                '(하루 ${count}회)',
+                '(하루 $count회)',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),

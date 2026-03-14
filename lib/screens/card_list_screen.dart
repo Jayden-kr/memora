@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/painting.dart' show ResizeImage, FileImage;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
@@ -193,8 +192,11 @@ class _CardListScreenState extends State<CardListScreen> {
         if (visible.isNotEmpty) {
           final firstIndex =
               visible.reduce((a, b) => a.index < b.index ? a : b).index;
-          _scrollFractionNotifier.value =
-              (firstIndex / (_cards.length - 1)).clamp(0.0, 1.0);
+          final total = _cards.length - 1;
+          if (total > 0) {
+            _scrollFractionNotifier.value =
+                (firstIndex / total).clamp(0.0, 1.0);
+          }
         }
       }
     }
@@ -272,7 +274,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
     // 초기 로딩에만 스피너 표시. 리로드 시에는 기존 카드 유지하여 깜빡임 방지
     final isInitialLoad = _cards.isEmpty;
-    if (isInitialLoad) {
+    if (isInitialLoad && mounted) {
       setState(() {
         _loading = true;
       });
@@ -344,6 +346,7 @@ class _CardListScreenState extends State<CardListScreen> {
   void _onSearchChanged(String query) {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
       setState(() => _searchQuery = query.trim());
       _loadCards();
     });
@@ -408,12 +411,13 @@ class _CardListScreenState extends State<CardListScreen> {
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
     final filePaths = _collectCardFilePaths(card);
     await DatabaseHelper.instance.deleteCard(card.id!);
     await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
     await _deleteFiles(filePaths);
+    if (!mounted) return;
     await _loadCards();
   }
 
@@ -470,6 +474,7 @@ class _CardListScreenState extends State<CardListScreen> {
         ),
       ),
     );
+    if (!mounted) return;
     _loadCards();
   }
 
@@ -528,7 +533,7 @@ class _CardListScreenState extends State<CardListScreen> {
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
     // 삭제 전 파일 경로 수집
     final selectedCards = _cards
@@ -575,7 +580,7 @@ class _CardListScreenState extends State<CardListScreen> {
             )).toList(),
       ),
     );
-    if (target == null) return;
+    if (target == null || !mounted) return;
 
     final sourceFolderIds = _cards
         .where((c) => _selectedCardIds.contains(c.id))
@@ -770,6 +775,7 @@ class _CardListScreenState extends State<CardListScreen> {
                           CardEditScreen(folderId: widget.folder.id!),
                     ),
                   );
+                  if (!mounted) return;
                   _loadCards();
                 },
                 child: const Icon(Icons.add),

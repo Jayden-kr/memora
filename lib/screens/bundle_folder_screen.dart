@@ -39,15 +39,17 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
   Future<void> _loadFolders() async {
     final allFolders = await DatabaseHelper.instance.getNonBundleFolders();
 
+    Set<int> selectedIds = {};
     if (_isEditing) {
       // 편집 모드: 현재 묶음에 속한 폴더를 미리 선택
       final children = await DatabaseHelper.instance
           .getChildFolders(widget.existingBundle!.id!);
-      _selectedFolderIds = children.map((f) => f.id!).toSet();
+      selectedIds = children.map((f) => f.id!).toSet();
     }
 
     if (!mounted) return;
     setState(() {
+      _selectedFolderIds = selectedIds;
       _availableFolders = allFolders;
       _loading = false;
     });
@@ -80,6 +82,19 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
 
     try {
       if (_isEditing) {
+        // 이름 변경 시 중복 체크
+        if (name != widget.existingBundle!.name) {
+          final existing = await DatabaseHelper.instance.getFolderByName(name);
+          if (existing != null) {
+            if (!mounted) return;
+            setState(() => _saving = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
+            );
+            return;
+          }
+        }
+
         // 기존 묶음 수정
         await DatabaseHelper.instance.updateFolder(
           widget.existingBundle!.copyWith(

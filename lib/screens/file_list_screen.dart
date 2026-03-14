@@ -92,17 +92,16 @@ class _FileListScreenState extends State<FileListScreen> {
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
-    // DB 레코드 삭제
-    await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
-
-    // 실제 파일 삭제
+    // 실제 파일 먼저 삭제 (실패 시 DB 레코드 유지)
     try {
-      final filePath = file['file_path'] as String;
-      final f = File(filePath);
-      if (await f.exists()) {
-        await f.delete();
+      final filePath = file['file_path'] as String?;
+      if (filePath != null) {
+        final f = File(filePath);
+        if (await f.exists()) {
+          await f.delete();
+        }
       }
     } catch (e) {
       debugPrint('[FILE_LIST] 파일 삭제 실패: $e');
@@ -113,6 +112,10 @@ class _FileListScreenState extends State<FileListScreen> {
       }
     }
 
+    // 파일 삭제 후 DB 레코드 삭제
+    await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
+
+    if (!mounted) return;
     await _loadFiles();
   }
 
@@ -157,6 +160,7 @@ class _FileListScreenState extends State<FileListScreen> {
       extentOffset: nameWithoutExt.length,
     );
 
+    try {
     final newName = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -199,6 +203,9 @@ class _FileListScreenState extends State<FileListScreen> {
     );
 
     await _loadFiles();
+    } finally {
+      controller.dispose();
+    }
   }
 
   Future<void> _saveToDevice(Map<String, dynamic> file) async {

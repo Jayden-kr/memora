@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' show max;
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
 import 'package:path_provider/path_provider.dart';
@@ -129,12 +127,12 @@ class MemkImportService {
     final zipFileIndex = <String, ArchiveFile>{};
     final zipFileByBareName = <String, ArchiveFile>{};
     final rawZipEntries = <String>{};
-    int _archiveTotal = 0;
-    int _archiveFiles = 0;
+    int archiveTotal = 0;
+    int archiveFiles = 0;
     for (final file in archive.files) {
-      _archiveTotal++;
+      archiveTotal++;
       if (file.isFile) {
-        _archiveFiles++;
+        archiveFiles++;
         zipFileIndex[file.name] = file;
         rawZipEntries.add(file.name);
         final bareName = file.name.split('/').last;
@@ -144,7 +142,7 @@ class MemkImportService {
         }
       }
     }
-    debugPrint('[IMPORT] archive entries: $_archiveTotal total, $_archiveFiles files, rawZipEntries=${rawZipEntries.length}');
+    debugPrint('[IMPORT] archive entries: $archiveTotal total, $archiveFiles files, rawZipEntries=${rawZipEntries.length}');
 
     // folders.json 파싱
     final foldersFile = zipFileIndex[AppConstants.memkFoldersJson];
@@ -383,6 +381,9 @@ class MemkImportService {
         missingOnDisk.add(fileName);
       }
     }
+    // counter.json 참조를 clear() 전에 보존
+    final counterFile = zipFileIndex[AppConstants.memkCounterJson];
+
     if (missingOnDisk.isNotEmpty) {
       debugPrint('[IMPORT] ${missingOnDisk.length} images missing after archive extraction, trying raw ZIP extraction');
       // archive/인덱스 참조 해제하여 메모리 확보
@@ -407,7 +408,6 @@ class MemkImportService {
     }
 
     // counter.json 처리 — 현재 값보다 높은 경우만 적용
-    final counterFile = zipFileIndex[AppConstants.memkCounterJson];
     if (counterFile != null) {
       try {
         final counterJson =
@@ -417,26 +417,26 @@ class MemkImportService {
           final current = await db.getCounter();
           // snake_case / camelCase 양쪽 키 호환 (암기짱 원본은 camelCase)
           // num → int 안전 캐스트 (JSON 파싱 결과가 num일 수 있음)
-          int _counterVal(String snakeKey, String camelKey) =>
+          int counterVal(String snakeKey, String camelKey) =>
               (counterData[snakeKey] as num?)?.toInt() ??
               (counterData[camelKey] as num?)?.toInt() ??
               0;
           await db.updateCounter({
             'card_sequence': max(
               (current?['card_sequence'] as int?) ?? 0,
-              _counterVal('card_sequence', 'cardSequence'),
+              counterVal('card_sequence', 'cardSequence'),
             ),
             'card_minus_sequence': max(
               (current?['card_minus_sequence'] as int?) ?? 0,
-              _counterVal('card_minus_sequence', 'cardMinusSequence'),
+              counterVal('card_minus_sequence', 'cardMinusSequence'),
             ),
             'folder_sequence': max(
               (current?['folder_sequence'] as int?) ?? 0,
-              _counterVal('folder_sequence', 'folderSequence'),
+              counterVal('folder_sequence', 'folderSequence'),
             ),
             'folder_minus_sequence': max(
               (current?['folder_minus_sequence'] as int?) ?? 0,
-              _counterVal('folder_minus_sequence', 'folderMinusSequence'),
+              counterVal('folder_minus_sequence', 'folderMinusSequence'),
             ),
           });
         }
@@ -494,63 +494,6 @@ class MemkImportService {
         cardJson[key] = '';
       }
     }
-  }
-
-  /// ZIP 파일의 Central Directory를 직접 파싱하여 모든 파일명을 가져옴
-  /// (Dart archive 패키지가 대용량 ZIP에서 일부 항목을 누락하는 버그 우회)
-  static Set<String> _parseZipEntryNames(Uint8List bytes) {
-    final names = <String>{};
-    // EOCD signature (0x06054b50) 찾기 (파일 끝에서 역방향 검색)
-    int eocdPos = -1;
-    for (int i = bytes.length - 22; i >= 0; i--) {
-      if (bytes[i] == 0x50 && bytes[i + 1] == 0x4b &&
-          bytes[i + 2] == 0x05 && bytes[i + 3] == 0x06) {
-        eocdPos = i;
-        break;
-      }
-    }
-    if (eocdPos < 0) return names;
-
-    // Central Directory offset & size 읽기
-    final bd = ByteData.sublistView(bytes);
-    int cdSize = bd.getUint32(eocdPos + 12, Endian.little);
-    int cdOffset = bd.getUint32(eocdPos + 16, Endian.little);
-    final eocdEntryCount = bd.getUint16(eocdPos + 10, Endian.little);
-    debugPrint('[ZIP_PARSE] bytes.length=${bytes.length} eocdPos=$eocdPos cdOffset=$cdOffset cdSize=$cdSize eocdEntries=$eocdEntryCount');
-
-    // Central Directory 항목 파싱
-    int pos = cdOffset;
-    final cdEnd = cdOffset + cdSize;
-    int parsedCount = 0;
-    while (pos + 46 <= cdEnd && pos + 46 <= bytes.length) {
-      // Central Directory Header signature: 0x02014b50
-      if (bytes[pos] != 0x50 || bytes[pos + 1] != 0x4b ||
-          bytes[pos + 2] != 0x01 || bytes[pos + 3] != 0x02) {
-        debugPrint('[ZIP_PARSE] STOP at entry $parsedCount, pos=$pos, bytes: ${bytes[pos].toRadixString(16)} ${bytes[pos+1].toRadixString(16)} ${bytes[pos+2].toRadixString(16)} ${bytes[pos+3].toRadixString(16)}');
-        break;
-      }
-      final fnameLen = bd.getUint16(pos + 28, Endian.little);
-      final extraLen = bd.getUint16(pos + 30, Endian.little);
-      final commentLen = bd.getUint16(pos + 32, Endian.little);
-
-      if (pos + 46 + fnameLen <= bytes.length && fnameLen > 0) {
-        final fname = utf8.decode(
-            bytes.sublist(pos + 46, pos + 46 + fnameLen),
-            allowMalformed: true);
-        if (!fname.endsWith('/')) {
-          names.add(fname);
-          // bare name도 추가
-          final bareName = fname.split('/').last;
-          if (bareName.isNotEmpty && bareName != fname) {
-            names.add(bareName);
-          }
-        }
-      }
-      pos += 46 + fnameLen + extraLen + commentLen;
-      parsedCount++;
-    }
-    debugPrint('[ZIP_PARSE] parsed $parsedCount / $eocdEntryCount entries, names=${names.length}');
-    return names;
   }
 
   /// archive 패키지가 누락한 ZIP 항목을 직접 추출

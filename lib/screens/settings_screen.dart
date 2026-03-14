@@ -23,12 +23,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadSettings() async {
-    final settings = await DatabaseHelper.instance.getAllSettings();
-    if (!mounted) return;
-    setState(() {
-      _settings = settings;
-      _loading = false;
-    });
+    try {
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      if (!mounted) return;
+      setState(() {
+        _settings = settings;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('설정을 불러올 수 없습니다: $e')),
+      );
+    }
   }
 
   String _getSetting(String key, String defaultValue) {
@@ -36,21 +44,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _setSetting(String key, String value) async {
-    await DatabaseHelper.instance.upsertSetting(key, value);
-    if (!mounted) return;
-    setState(() => _settings[key] = value);
+    try {
+      await DatabaseHelper.instance.upsertSetting(key, value);
+      if (!mounted) return;
+      setState(() => _settings[key] = value);
 
-    // 테마 변경 즉시 반영
-    if (key == AppConstants.settingThemeMode &&
-        widget.themeModeNotifier != null) {
-      switch (value) {
-        case 'light':
-          widget.themeModeNotifier!.value = ThemeMode.light;
-        case 'dark':
-          widget.themeModeNotifier!.value = ThemeMode.dark;
-        default:
-          widget.themeModeNotifier!.value = ThemeMode.system;
+      // 테마 변경 즉시 반영
+      if (key == AppConstants.settingThemeMode &&
+          widget.themeModeNotifier != null) {
+        switch (value) {
+          case 'light':
+            widget.themeModeNotifier!.value = ThemeMode.light;
+          case 'dark':
+            widget.themeModeNotifier!.value = ThemeMode.dark;
+          default:
+            widget.themeModeNotifier!.value = ThemeMode.system;
+        }
       }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('설정 저장 실패: $e')),
+      );
     }
   }
 

@@ -192,7 +192,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
                 File(path),
                 width: double.infinity,
                 fit: BoxFit.fitWidth,
-                errorBuilder: (_, __, ___) => Container(
+                errorBuilder: (_, e, s) => Container(
                   height: 80,
                   width: double.infinity,
                   color: colorScheme.surfaceContainerHighest,

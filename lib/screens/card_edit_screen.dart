@@ -147,7 +147,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
     if (source == null) return;
 
     final picked = await _picker.pickImage(source: source);
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
 
     String? savedPath;
     try {

@@ -313,9 +313,11 @@ class DatabaseHelper {
 
   Future<int> updateFolder(Folder folder) async {
     final db = await database;
+    final map = folder.toDb();
+    map.remove('id'); // id는 WHERE 절에서 사용하므로 SET 절에서 제외
     return await db.update(
       AppConstants.tableFolders,
-      folder.toDb(),
+      map,
       where: 'id = ?',
       whereArgs: [folder.id],
     );
@@ -498,12 +500,32 @@ class DatabaseHelper {
 
   Future<int> moveCard(int cardId, int newFolderId) async {
     final db = await database;
-    return await db.update(
+    // 이동 전 원래 폴더 ID 조회
+    final card = await db.query(
+      AppConstants.tableCards,
+      columns: ['folder_id'],
+      where: 'id = ?',
+      whereArgs: [cardId],
+      limit: 1,
+    );
+    final oldFolderId = card.isNotEmpty ? card.first['folder_id'] as int? : null;
+
+    final result = await db.update(
       AppConstants.tableCards,
       {'folder_id': newFolderId},
       where: 'id = ?',
       whereArgs: [cardId],
     );
+
+    // 원본/대상 폴더의 card_count 갱신
+    if (result > 0) {
+      if (oldFolderId != null && oldFolderId != newFolderId) {
+        await updateFolderCardCount(oldFolderId);
+      }
+      await updateFolderCardCount(newFolderId);
+    }
+
+    return result;
   }
 
   Future<int> getMaxSequence(int folderId) async {

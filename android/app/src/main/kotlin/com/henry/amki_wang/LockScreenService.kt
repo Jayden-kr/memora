@@ -21,6 +21,7 @@ class LockScreenService : Service() {
     }
 
     private var screenReceiver: ScreenReceiver? = null
+    @Volatile
     private var overlayView: View? = null
     private var windowManager: WindowManager? = null
 
@@ -126,6 +127,7 @@ class LockScreenService : Service() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "onStartCommand error", e)
+            return START_NOT_STICKY
         }
         return START_STICKY
     }
@@ -305,6 +307,7 @@ class LockScreenService : Service() {
         }
     }
 
+    @Synchronized
     private fun ensureBgThread() {
         if (!isServiceActive) return
         if (bgThread == null) {
@@ -504,8 +507,9 @@ class LockScreenService : Service() {
             }
         })
         answerContainer.setOnTouchListener { _, event ->
-            // fling 인식 시만 소비, 아니면 ScrollView로 전파하여 스크롤 허용
+            // fling 감지만 시도하고 항상 false 반환하여 ScrollView 스크롤 허용
             cardGesture.onTouchEvent(event)
+            false
         }
 
         cardContent.addView(answerContainer)

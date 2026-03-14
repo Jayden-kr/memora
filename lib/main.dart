@@ -25,7 +25,9 @@ void main() async {
       default:
         themeModeNotifier.value = ThemeMode.system;
     }
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('Failed to load theme setting: $e');
+  }
 
   // 잠금화면 서비스 자동 재시작 (enabled 상태면)
   _restoreLockScreenService();
@@ -142,5 +144,7 @@ Future<void> _restoreLockScreenService() async {
       reversed: settings['reversed'] as bool? ?? false,
       bgColor: settings['bgColor'] as int? ?? 0xFF1A1A2E,
     );
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('Failed to restore lock screen service: $e');
+  }
 }

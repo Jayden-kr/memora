@@ -31,17 +31,18 @@ class ImportExportService : Service() {
         }
 
         fun updateProgress(context: Context, title: String, message: String, progress: Int, max: Int) {
-            ensureChannel(context)
-            val intent = Intent(context, MainActivity::class.java).apply {
+            val appContext = context.applicationContext
+            ensureChannel(appContext)
+            val intent = Intent(appContext, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra("navigate_to_import", true)
             }
             val pendingIntent = PendingIntent.getActivity(
-                context, 0, intent,
+                appContext, 0, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setSmallIcon(R.drawable.ic_notification)
@@ -52,24 +53,25 @@ class ImportExportService : Service() {
                 .setProgress(max, progress, max == 0)
                 .build()
 
-            val manager = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val manager = appContext.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
             manager.notify(PROGRESS_NOTIFICATION_ID, notification)
         }
 
         fun showComplete(context: Context, title: String, message: String) {
-            ensureChannel(context)
+            val appContext = context.applicationContext
+            ensureChannel(appContext)
             // 진행 알림 제거 (이중 알림 방지)
-            val mgr = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+            val mgr = appContext.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
             mgr?.cancel(PROGRESS_NOTIFICATION_ID)
-            val intent = Intent(context, MainActivity::class.java).apply {
+            val intent = Intent(appContext, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             val pendingIntent = PendingIntent.getActivity(
-                context, 1, intent,
+                appContext, 1, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setSmallIcon(R.drawable.ic_notification)
@@ -78,7 +80,7 @@ class ImportExportService : Service() {
                 .setOngoing(false)
                 .build()
 
-            val manager = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val manager = appContext.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
             manager.notify(COMPLETE_NOTIFICATION_ID, notification)
         }
     }

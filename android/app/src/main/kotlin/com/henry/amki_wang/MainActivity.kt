@@ -107,15 +107,21 @@ class MainActivity : FlutterActivity() {
                                         MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
                                     )
                                     if (uri != null) {
-                                        contentResolver.openOutputStream(uri)?.use { output ->
-                                            sourceFile.inputStream().use { input ->
-                                                input.copyTo(output)
+                                        try {
+                                            contentResolver.openOutputStream(uri)?.use { output ->
+                                                sourceFile.inputStream().use { input ->
+                                                    input.copyTo(output)
+                                                }
                                             }
+                                            values.clear()
+                                            values.put(MediaStore.Downloads.IS_PENDING, 0)
+                                            contentResolver.update(uri, values, null, null)
+                                            result.success(true)
+                                        } catch (e: Exception) {
+                                            // 실패 시 IS_PENDING 고아 레코드 정리
+                                            contentResolver.delete(uri, null, null)
+                                            result.error("ERROR", e.message, e.stackTraceToString())
                                         }
-                                        values.clear()
-                                        values.put(MediaStore.Downloads.IS_PENDING, 0)
-                                        contentResolver.update(uri, values, null, null)
-                                        result.success(true)
                                     } else {
                                         result.error("ERROR", "Failed to create MediaStore entry", null)
                                     }

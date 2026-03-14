@@ -92,6 +92,14 @@
 
         <!-- SCREEN_OFF 리시버는 코드에서 동적 등록 (manifest 선언 불가) -->
 
+        <!-- 기본 알림 아이콘 (Phone Link 등 외부에서 참조) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
+        <meta-data
+            android:name="io.flutter.plugins.flutter_local_notifications.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

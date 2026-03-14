@@ -153,14 +153,13 @@ class _CardTileState extends State<CardTile> {
                     PopupMenuButton<String>(
                       icon: const Icon(Icons.more_vert, size: 20),
                       onSelected: widget.onMenuAction,
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'edit', child: Text('편집')),
-                        PopupMenuItem(value: 'duplicate', child: Text('복제')),
-                        PopupMenuItem(value: 'move', child: Text('다른 폴더로 이동')),
+                      itemBuilder: (ctx) => [
+                        const PopupMenuItem(value: 'edit', child: Text('편집')),
+                        const PopupMenuItem(value: 'duplicate', child: Text('복제')),
+                        const PopupMenuItem(value: 'move', child: Text('다른 폴더로 이동')),
                         PopupMenuItem(
                           value: 'delete',
-                          child:
-                              Text('삭제', style: TextStyle(color: Colors.red)),
+                          child: Text('삭제', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
                         ),
                       ],
                     ),
@@ -206,7 +205,7 @@ class _CardTileState extends State<CardTile> {
         text: text.substring(index, index + query.length),
         style: TextStyle(backgroundColor: highlightColor),
       ));
-      start = index + (query.length > 0 ? query.length : 1);
+      start = index + (query.isNotEmpty ? query.length : 1);
     }
 
     return Text.rich(
@@ -245,6 +244,7 @@ class _CardTileState extends State<CardTile> {
                           width: double.infinity,
                           fit: BoxFit.fitWidth,
                           cacheWidth: 600,
+                          gaplessPlayback: true,
                           errorBuilder: (_, _, _) => Container(
                             height: 80,
                             width: double.infinity,

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
-import '../services/memk_import_service.dart';
 import '../services/import_export_controller.dart';
 
 class ImportScreen extends StatefulWidget {
@@ -100,7 +99,7 @@ class _ImportScreenState extends State<ImportScreen> {
         _memkFolders = memkFolders;
         _localFolders = localFolders;
         _selectedFolderNames
-            .addAll(memkFolders.map((f) => f['name'] as String));
+            .addAll(memkFolders.map((f) => (f['name'] as String?) ?? ''));
         _stage = _ImportStage.folderSelect;
       });
     } catch (e) {
@@ -162,6 +161,7 @@ class _ImportScreenState extends State<ImportScreen> {
 
   Future<void> _createNewLocalFolder() async {
     final controller = TextEditingController();
+    try {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -202,6 +202,9 @@ class _ImportScreenState extends State<ImportScreen> {
         await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     setState(() => _localFolders = localFolders);
+    } finally {
+      controller.dispose();
+    }
   }
 
   @override
@@ -295,23 +298,22 @@ class _ImportScreenState extends State<ImportScreen> {
                   child: Text('가져올 위치',
                       style: Theme.of(context).textTheme.titleMedium),
                 ),
-                Column(
-                  children: [
-                    RadioListTile<bool>(
-                      title: const Text('새 폴더 자동 생성'),
-                      value: false,
-                      groupValue: _useExistingFolder,
-                      onChanged: (v) =>
-                          setState(() => _useExistingFolder = v!),
-                    ),
-                    RadioListTile<bool>(
-                      title: const Text('기존 폴더 선택'),
-                      value: true,
-                      groupValue: _useExistingFolder,
-                      onChanged: (v) =>
-                          setState(() => _useExistingFolder = v!),
-                    ),
-                  ],
+                RadioGroup<bool>(
+                  groupValue: _useExistingFolder,
+                  onChanged: (v) =>
+                      setState(() => _useExistingFolder = v ?? _useExistingFolder),
+                  child: Column(
+                    children: [
+                      RadioListTile<bool>(
+                        title: const Text('새 폴더 자동 생성'),
+                        value: false,
+                      ),
+                      RadioListTile<bool>(
+                        title: const Text('기존 폴더 선택'),
+                        value: true,
+                      ),
+                    ],
+                  ),
                 ),
 
                 if (_useExistingFolder) ...[

@@ -142,7 +142,7 @@ class NotificationService {
 
   /// 즉시 테스트 알림 전송 (푸시알림 설정의 폴더 반영)
   static Future<void> showTestNotification() async {
-    String title = 'Memora';
+    String title = '';
     String body = '카드를 복습할 시간입니다!';
     String? payload;
 
@@ -158,9 +158,6 @@ class NotificationService {
       final card = await DatabaseHelper.instance.getRandomCard(folderId: folderId);
 
       if (card != null) {
-        // 폴더명을 제목에 표시
-        final folder = await DatabaseHelper.instance.getFolderById(card.folderId);
-        if (folder != null) title = folder.name;
         body = card.question.isNotEmpty ? card.question : '(내용 없음)';
         payload = '${card.folderId}:${card.id}';
       }
@@ -173,6 +170,7 @@ class NotificationService {
         channelDescription: '설정한 시간에 랜덤 카드 알림',
         importance: Importance.high,
         priority: Priority.high,
+        icon: '@drawable/ic_notification',
       ),
     );
 
@@ -271,6 +269,7 @@ class NotificationService {
         channelDescription: '설정한 시간에 랜덤 카드 알림',
         importance: Importance.high,
         priority: Priority.high,
+        icon: '@drawable/ic_notification',
         playSound: soundEnabled,
         enableVibration: true,
       ),
@@ -359,14 +358,12 @@ class NotificationService {
   /// 알림용 카드 정보 조회 (중복 코드 제거용 헬퍼)
   static Future<({String title, String body, String? payload})>
       _buildNotificationContent({int? folderId}) async {
-    String title = 'Memora';
+    String title = '';
     String body = '카드를 복습할 시간입니다!';
     String? payload;
     try {
       final card = await DatabaseHelper.instance.getRandomCard(folderId: folderId);
       if (card != null) {
-        final folder = await DatabaseHelper.instance.getFolderById(card.folderId);
-        if (folder != null) title = folder.name;
         body = card.question.isNotEmpty ? card.question : '(내용 없음)';
         payload = '${card.folderId}:${card.id}';
       }
@@ -413,6 +410,7 @@ class NotificationService {
         channelDescription: '설정한 시간에 랜덤 카드 알림',
         importance: Importance.high,
         priority: Priority.high,
+        icon: '@drawable/ic_notification',
         playSound: soundEnabled,
         enableVibration: true,
       ),
@@ -432,7 +430,7 @@ class NotificationService {
           scheduled = scheduled.add(const Duration(days: 1));
         }
 
-        final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i;
+        final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + 8;
         await _plugin.zonedSchedule(
           notifId, content.title, content.body, scheduled, notificationDetails,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -446,7 +444,7 @@ class NotificationService {
             dartWeekday, slot.hour, slot.minute, now,
           );
 
-          final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + day;
+          final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + day; // day 0-6, all-days=8 → 충돌 없음
           await _plugin.zonedSchedule(
             notifId, content.title, content.body, scheduled, notificationDetails,
             androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,

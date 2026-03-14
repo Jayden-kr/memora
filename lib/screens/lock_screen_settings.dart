@@ -166,7 +166,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     // 디바운싱: 빠른 연속 변경 시 마지막 변경만 적용 (500ms)
     _settingDebounce?.cancel();
     _settingDebounce = Timer(const Duration(milliseconds: 500), () {
-      _applySettings();
+      if (mounted) _applySettings();
     });
   }
 
