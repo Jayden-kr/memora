@@ -674,9 +674,15 @@ class DatabaseHelper {
   Future<Map<String, String>> getAllSettings() async {
     final db = await database;
     final maps = await db.query(AppConstants.tableSettings);
-    return {
-      for (var m in maps) m['key'] as String: m['value'] as String,
-    };
+    final result = <String, String>{};
+    for (final m in maps) {
+      final key = m['key'];
+      final value = m['value'];
+      if (key is String && value is String) {
+        result[key] = value;
+      }
+    }
+    return result;
   }
 
   /// Settings 테이블: upsert
@@ -725,26 +731,67 @@ class DatabaseHelper {
     return results.map((m) => CardModel.fromDb(m)).toList();
   }
 
-  /// 배치 삭제
+  /// 배치 삭제 (영향받는 폴더 card_count 자동 갱신)
   Future<int> deleteCardsBatch(List<int> cardIds) async {
     if (cardIds.isEmpty) return 0;
     final db = await database;
     final placeholders = List.filled(cardIds.length, '?').join(',');
-    return await db.rawDelete(
-      'DELETE FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
-      cardIds,
-    );
+    int deleted = 0;
+    await db.transaction((txn) async {
+      // 삭제 전 영향받는 폴더 ID 수집
+      final affected = await txn.rawQuery(
+        'SELECT DISTINCT folder_id FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+        cardIds,
+      );
+      final folderIds = affected.map((r) => r['folder_id'] as int).toSet();
+
+      deleted = await txn.rawDelete(
+        'DELETE FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+        cardIds,
+      );
+
+      // 영향받는 폴더 card_count 갱신
+      for (final fid in folderIds) {
+        final count = Sqflite.firstIntValue(await txn.rawQuery(
+          'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
+          [fid],
+        )) ?? 0;
+        await txn.update(AppConstants.tableFolders, {'card_count': count},
+            where: 'id = ?', whereArgs: [fid]);
+      }
+    });
+    return deleted;
   }
 
-  /// 배치 이동
+  /// 배치 이동 (원본/대상 폴더 card_count 자동 갱신)
   Future<void> moveCardsBatch(List<int> cardIds, int newFolderId) async {
     if (cardIds.isEmpty) return;
     final db = await database;
     final placeholders = List.filled(cardIds.length, '?').join(',');
-    await db.rawUpdate(
-      'UPDATE ${AppConstants.tableCards} SET folder_id = ? WHERE id IN ($placeholders)',
-      [newFolderId, ...cardIds],
-    );
+    await db.transaction((txn) async {
+      // 이동 전 원본 폴더 ID 수집
+      final affected = await txn.rawQuery(
+        'SELECT DISTINCT folder_id FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+        cardIds,
+      );
+      final oldFolderIds = affected.map((r) => r['folder_id'] as int).toSet();
+
+      await txn.rawUpdate(
+        'UPDATE ${AppConstants.tableCards} SET folder_id = ? WHERE id IN ($placeholders)',
+        [newFolderId, ...cardIds],
+      );
+
+      // 원본 + 대상 폴더 card_count 갱신
+      final allFolderIds = {...oldFolderIds, newFolderId};
+      for (final fid in allFolderIds) {
+        final count = Sqflite.firstIntValue(await txn.rawQuery(
+          'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
+          [fid],
+        )) ?? 0;
+        await txn.update(AppConstants.tableFolders, {'card_count': count},
+            where: 'id = ?', whereArgs: [fid]);
+      }
+    });
   }
 
   /// 카드 복제
@@ -754,7 +801,7 @@ class DatabaseHelper {
     if (card == null) return -1;
     final maxSeq = await getMaxSequence(card.folderId);
     final newUuid =
-        '${card.uuid}-copy-${DateTime.now().millisecondsSinceEpoch}';
+        '${card.uuid}-copy-${DateTime.now().microsecondsSinceEpoch}';
     final newCard = card.copyWith(
       uuid: newUuid,
       sequence: maxSeq + 1,
@@ -834,7 +881,19 @@ class DatabaseHelper {
   Future<Map<String, dynamic>?> getCounter() async {
     final db = await database;
     final maps = await db.query(AppConstants.tableCounters, limit: 1);
-    if (maps.isEmpty) return null;
+    if (maps.isEmpty) {
+      // 카운터 row가 없으면 자동 생성
+      await db.insert(AppConstants.tableCounters, {
+        'id': 1,
+        'card_sequence': 0,
+        'card_minus_sequence': 0,
+        'folder_sequence': 0,
+        'folder_minus_sequence': 0,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      final retry = await db.query(AppConstants.tableCounters, limit: 1);
+      if (retry.isEmpty) return null;
+      return retry.first;
+    }
     return maps.first;
   }
 

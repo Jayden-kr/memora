@@ -168,4 +168,50 @@ void main() {
       expect(card.sequence, 0);
     });
   });
+
+  group('_parseBool String 호환', () {
+    test('String "true" → true', () {
+      final json = {
+        'uuid': 'test-uuid',
+        'folderId': 1,
+        'finished': 'true',
+        'starred': 'TRUE',
+      };
+      final card = CardModel.fromJson(json);
+      expect(card.finished, true);
+      expect(card.starred, true);
+    });
+
+    test('String "1" → true', () {
+      final json = {
+        'uuid': 'test-uuid',
+        'folderId': 1,
+        'finished': '1',
+      };
+      final card = CardModel.fromJson(json);
+      expect(card.finished, true);
+    });
+
+    test('String "false" → false', () {
+      final json = {
+        'uuid': 'test-uuid',
+        'folderId': 1,
+        'finished': 'false',
+        'starred': '0',
+      };
+      final card = CardModel.fromJson(json);
+      expect(card.finished, false);
+      expect(card.starred, false);
+    });
+
+    test('null → false', () {
+      final json = {
+        'uuid': 'test-uuid',
+        'folderId': 1,
+        'finished': null,
+      };
+      final card = CardModel.fromJson(json);
+      expect(card.finished, false);
+    });
+  });
 }

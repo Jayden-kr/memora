@@ -59,6 +59,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
       });
       return;
     }
+    if (!mounted) return;
     setState(() => _card = updated);
   }
 

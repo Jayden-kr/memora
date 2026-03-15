@@ -1,7 +1,7 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter/services.dart' show rootBundle;
@@ -208,22 +208,26 @@ class PdfExportService {
 
   /// dart:ui로 이미지를 70px 썸네일 PNG로 변환
   Future<Uint8List?> _compressForPdf(Uint8List bytes) async {
+    ui.Codec? codec;
+    ui.Image? image;
     try {
-      final codec = await ui.instantiateImageCodec(
+      codec = await ui.instantiateImageCodec(
         bytes,
         targetWidth: 70,
       );
       final frame = await codec.getNextFrame();
-      final image = frame.image;
+      image = frame.image;
       final byteData = await image.toByteData(
         format: ui.ImageByteFormat.png,
       );
-      image.dispose();
-      codec.dispose();
       if (byteData == null) return null;
       return byteData.buffer.asUint8List();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[PDF] _compressForPdf 실패: $e');
       return null;
+    } finally {
+      image?.dispose();
+      codec?.dispose();
     }
   }
 

@@ -107,30 +107,34 @@ Future<void> _handleNotificationNav(NotificationNavEvent event) async {
 
 Future<void> _doNavigate(
     NavigatorState nav, NotificationNavEvent event) async {
-  // DB에서 해당 카드를 직접 조회
-  final card =
-      await DatabaseHelper.instance.getCardById(event.cardId);
-  if (card == null) {
-    debugPrint('[MAIN] card not found for id=${event.cardId}');
-    return;
-  }
+  try {
+    // DB에서 해당 카드를 직접 조회
+    final card =
+        await DatabaseHelper.instance.getCardById(event.cardId);
+    if (card == null) {
+      debugPrint('[MAIN] card not found for id=${event.cardId}');
+      return;
+    }
 
-  // 폴더 조회
-  final folder =
-      await DatabaseHelper.instance.getFolderById(card.folderId);
-  if (folder == null) {
-    debugPrint('[MAIN] folder not found for id=${card.folderId}');
-    return;
-  }
+    // 폴더 조회
+    final folder =
+        await DatabaseHelper.instance.getFolderById(card.folderId);
+    if (folder == null) {
+      debugPrint('[MAIN] folder not found for id=${card.folderId}');
+      return;
+    }
 
-  debugPrint('[MAIN] navigating to folder="${folder.name}" scrollToCard=${card.id}');
-  nav.popUntil((route) => route.isFirst);
-  nav.push(MaterialPageRoute(
-    builder: (_) => CardListScreen(
-      folder: folder,
-      scrollToCardId: card.id,
-    ),
-  ));
+    debugPrint('[MAIN] navigating to folder="${folder.name}" scrollToCard=${card.id}');
+    nav.popUntil((route) => route.isFirst);
+    nav.push(MaterialPageRoute(
+      builder: (_) => CardListScreen(
+        folder: folder,
+        scrollToCardId: card.id,
+      ),
+    ));
+  } catch (e) {
+    debugPrint('[MAIN] _doNavigate 오류 (DB 연결 등): $e');
+  }
 }
 
 void _handleImportNotificationTap() {

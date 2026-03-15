@@ -60,10 +60,10 @@ class MemkImportService {
     _cachedFilePath = null;
   }
 
-  /// .memk 경로에서 파일명만 추출
+  /// .memk 경로에서 파일명만 추출 (/ 및 \ 모두 처리)
   static String extractFileName(String memkPath) {
     if (memkPath.isEmpty) return '';
-    return memkPath.split('/').last;
+    return memkPath.split('/').last.split('\\').last;
   }
 
   /// 로컬 이미지 경로 생성
@@ -103,10 +103,12 @@ class MemkImportService {
     final db = DatabaseHelper.instance;
     final appDocDir = (await getApplicationDocumentsDirectory()).path;
 
-    // 이미지 디렉토리 생성
+    // 이미지 디렉토리 생성 (동시 import 시 race condition 방지)
     final imageDir = Directory(p.join(appDocDir, AppConstants.imageDir));
-    if (!imageDir.existsSync()) {
+    try {
       imageDir.createSync(recursive: true);
+    } catch (e) {
+      if (!imageDir.existsSync()) rethrow;
     }
 
     onProgress(const ImportProgress(phase: 'parsing', message: '파일 분석 중...'));
@@ -441,7 +443,9 @@ class MemkImportService {
             ),
           });
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[IMPORT] counter.json merge 실패: $e');
+      }
     }
 
     stopwatch.stop();
@@ -508,10 +512,12 @@ class MemkImportService {
   }) async {
     if (missingFileNames.isEmpty) return 0;
 
+    if (zipBytes.length < 22) return 0; // 최소 ZIP 크기 검증
     final bd = ByteData.sublistView(zipBytes);
     // EOCD 찾기
     int eocdPos = -1;
     for (int i = zipBytes.length - 22; i >= 0; i--) {
+      if (i + 3 >= zipBytes.length) continue; // bounds 안전
       if (zipBytes[i] == 0x50 && zipBytes[i + 1] == 0x4b &&
           zipBytes[i + 2] == 0x05 && zipBytes[i + 3] == 0x06) {
         eocdPos = i;
@@ -527,7 +533,8 @@ class MemkImportService {
     final targets = <String, ({int localOffset, int compSize, int compression})>{};
     int pos = cdOffset;
     final cdEnd = cdOffset + cdSize;
-    while (pos + 46 <= cdEnd) {
+    while (pos + 46 <= cdEnd && pos + 46 <= zipBytes.length) {
+      if (pos + 3 >= zipBytes.length) break;
       if (zipBytes[pos] != 0x50 || zipBytes[pos + 1] != 0x4b ||
           zipBytes[pos + 2] != 0x01 || zipBytes[pos + 3] != 0x02) {
         break;
@@ -567,7 +574,7 @@ class MemkImportService {
         final fileName = entry.key;
         final t = entry.value;
         final offset = t.localOffset;
-        if (offset + 30 > zipBytes.length) continue;
+        if (offset < 0 || offset + 30 > zipBytes.length) continue;
 
         final localSig = bd.getUint32(offset, Endian.little);
         if (localSig != 0x04034b50) {
@@ -575,13 +582,15 @@ class MemkImportService {
           continue;
         }
 
-        // LFH에서 가변 길이 필드만 읽기
+        // LFH에서 가변 길이 필드만 읽기 (bounds 안전)
         final localFnameLen = bd.getUint16(offset + 26, Endian.little);
         final localExtraLen = bd.getUint16(offset + 28, Endian.little);
+        if (localFnameLen > 0xFFFF || localExtraLen > 0xFFFF) continue;
 
         final dataStart = offset + 30 + localFnameLen + localExtraLen;
+        if (dataStart < offset) continue; // 정수 오버플로우 감지
         final compSize = t.compSize;
-        if (dataStart + compSize > zipBytes.length) {
+        if (compSize < 0 || dataStart + compSize > zipBytes.length) {
           debugPrint('[IMPORT] data out of bounds for $fileName: start=$dataStart size=$compSize total=${zipBytes.length}');
           continue;
         }

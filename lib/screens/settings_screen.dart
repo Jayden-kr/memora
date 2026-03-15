@@ -39,8 +39,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  String _getSetting(String key, String defaultValue) {
-    return _settings[key] ?? defaultValue;
+  String _getSetting(String key, String defaultValue,
+      [Set<String>? validValues]) {
+    final value = _settings[key] ?? defaultValue;
+    // 유효값 목록이 있으면 검증 (SegmentedButton 크래시 방지)
+    if (validValues != null && !validValues.contains(value)) {
+      return defaultValue;
+    }
+    return value;
   }
 
   Future<void> _setSetting(String key, String value) async {
@@ -78,16 +84,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     }
 
-    final answerFold =
-        _getSetting(AppConstants.settingAnswerFold, 'expanded');
-    final answerVisibility =
-        _getSetting(AppConstants.settingAnswerVisibility, 'visible');
+    final answerFold = _getSetting(
+        AppConstants.settingAnswerFold, 'expanded', {'expanded', 'collapsed'});
+    final answerVisibility = _getSetting(
+        AppConstants.settingAnswerVisibility, 'visible', {'visible', 'hidden'});
     final cardNumber =
-        _getSetting(AppConstants.settingCardNumber, 'false');
+        _getSetting(AppConstants.settingCardNumber, 'false', {'true', 'false'});
     final cardScroll =
-        _getSetting(AppConstants.settingCardScroll, 'false');
-    final themeMode =
-        _getSetting(AppConstants.settingThemeMode, 'system');
+        _getSetting(AppConstants.settingCardScroll, 'false', {'true', 'false'});
+    final themeMode = _getSetting(
+        AppConstants.settingThemeMode, 'system', {'light', 'dark', 'system'});
 
     return Scaffold(
       appBar: AppBar(title: const Text('설정')),

@@ -248,11 +248,12 @@ class _ExportScreenState extends State<ExportScreen> {
                               value:
                                   _selectedFolderIds.contains(folder.id),
                               onChanged: (checked) {
+                                if (folder.id == null) return;
                                 setState(() {
-                                  if (checked == true && folder.id != null) {
+                                  if (checked == true) {
                                     _selectedFolderIds.add(folder.id!);
                                   } else {
-                                    _selectedFolderIds.remove(folder.id);
+                                    _selectedFolderIds.remove(folder.id!);
                                   }
                                 });
                               },

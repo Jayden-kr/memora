@@ -235,9 +235,9 @@ class MainActivity : FlutterActivity() {
                                     startService(intent)
                                 }
                             } catch (_: Exception) {
-                                // 서비스가 없으면 prefs만 정리
+                                // 서비스가 없으면 prefs만 정리 (commit으로 동기 저장)
                                 getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-                                    .edit().putBoolean("running", false).apply()
+                                    .edit().putBoolean("running", false).commit()
                             }
                             result.success(true)
                         }
@@ -322,12 +322,16 @@ class MainActivity : FlutterActivity() {
                 val cardId = parts[1].toIntOrNull()
                 if (folderId != null && cardId != null) {
                     Log.d(TAG, "Cold start push payload: $initialPayload")
-                    // Flutter 엔진이 준비될 때까지 약간 딜레이
+                    // Flutter 엔진이 준비될 때까지 약간 딜레이 (Activity 파괴 시 안전)
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        importExportChannel?.invokeMethod("navigateToPushCard", mapOf(
-                            "folderId" to folderId,
-                            "cardId" to cardId
-                        ))
+                        try {
+                            importExportChannel?.invokeMethod("navigateToPushCard", mapOf(
+                                "folderId" to folderId,
+                                "cardId" to cardId
+                            ))
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Cold start nav failed (activity destroyed?): ${e.message}")
+                        }
                     }, 1500)
                 }
             }

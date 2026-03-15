@@ -108,8 +108,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
   Future<String> _copyImageToAppDir(String sourcePath) async {
     final dir = await getApplicationDocumentsDirectory();
     final imageDir = Directory(p.join(dir.path, AppConstants.imageDir));
-    if (!await imageDir.exists()) {
-      await imageDir.create(recursive: true);
+    try {
+      if (!await imageDir.exists()) {
+        await imageDir.create(recursive: true);
+      }
+    } catch (e) {
+      if (!await imageDir.exists()) rethrow;
     }
     final uuid = const Uuid().v4();
     final ts = DateTime.now().millisecondsSinceEpoch;
@@ -427,7 +431,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
         title: Text(_isEditing ? '카드 편집' : '새 카드'),
         actions: [
           TextButton(
-            onPressed: _saving ? null : _save,
+            onPressed: (_saving || _folders.isEmpty) ? null : _save,
             child: const Text('저장'),
           ),
         ],

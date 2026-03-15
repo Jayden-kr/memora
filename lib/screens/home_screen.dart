@@ -94,11 +94,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _handleSharedFiles(List<SharedMediaFile> files) {
     if (files.isEmpty) return;
     if (!mounted) return;
-    final memkFile = files.firstWhere(
-      (f) => f.path.endsWith('.memk'),
-      orElse: () => files.first,
-    );
-    if (memkFile.path.endsWith('.memk')) {
+    // .memk 파일 찾기 (없으면 null)
+    SharedMediaFile? memkFile;
+    for (final f in files) {
+      if (f.path.endsWith('.memk')) {
+        memkFile = f;
+        break;
+      }
+    }
+    if (memkFile != null) {
       _navigateToImport(memkFile.path);
     } else {
       if (mounted) {
@@ -110,19 +114,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _loadFolders() async {
-    final folders = await DatabaseHelper.instance.getAllFolders();
-    // 폴더별 card_count 합계로 계산 (별도 COUNT 쿼리 불필요)
-    final totalCards = folders.fold<int>(0, (sum, f) => sum + f.cardCount);
-    // 저장된 정렬 모드 복원
-    final settings = await DatabaseHelper.instance.getAllSettings();
-    final savedSort = settings[_sortModeKey];
-    if (!mounted) return;
-    setState(() {
-      if (savedSort != null) _sortMode = savedSort;
-      _folders = _sortFolders(folders);
-      _totalCardCount = totalCards;
-      _loading = false;
-    });
+    try {
+      final folders = await DatabaseHelper.instance.getAllFolders();
+      final totalCards = folders.fold<int>(0, (sum, f) => sum + f.cardCount);
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      final savedSort = settings[_sortModeKey];
+      if (!mounted) return;
+      setState(() {
+        if (savedSort != null) _sortMode = savedSort;
+        _folders = _sortFolders(folders);
+        _totalCardCount = totalCards;
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('[HOME] _loadFolders 오류: $e');
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
   }
 
   List<Folder> _sortFolders(List<Folder> folders) {
@@ -466,7 +474,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제', style: TextStyle(color: Colors.red)),
+            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -825,9 +833,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ListTile(
             leading: const Icon(Icons.style),
             title: const Text('전체 카드 보기', style: TextStyle(fontSize: 14)),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
-              Navigator.push(
+              await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => CardListScreen(
@@ -836,6 +844,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   ),
                 ),
               );
+              if (mounted) _loadFolders();
             },
           ),
           ListTile(

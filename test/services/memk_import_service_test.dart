@@ -28,6 +28,24 @@ void main() {
     test('빈 문자열은 빈 문자열 반환', () {
       expect(MemkImportService.extractFileName(''), '');
     });
+
+    test('Windows 백슬래시 경로에서 파일명 추출', () {
+      expect(
+        MemkImportService.extractFileName(
+          r'C:\Users\test\images\R_abc.jpg',
+        ),
+        'R_abc.jpg',
+      );
+    });
+
+    test('혼합 경로 (/ + \\)에서 파일명 추출', () {
+      expect(
+        MemkImportService.extractFileName(
+          r'path/to\images\test.png',
+        ),
+        'test.png',
+      );
+    });
   });
 
   group('MemkImportService - localImagePath', () {

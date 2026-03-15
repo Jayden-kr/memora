@@ -18,11 +18,12 @@ class PushNotificationSettingsScreen extends StatefulWidget {
 
 class _PushNotificationSettingsScreenState
     extends State<PushNotificationSettingsScreen> {
-  bool _enabled = true;
+  bool _enabled = false;
   List<Folder> _folders = [];
   int? _selectedFolderId;
   bool _soundEnabled = true;
   bool _loading = true;
+  bool _saving = false; // 저장 중 중복 클릭 방지
 
   // 간격 반복 설정
   TimeOfDay _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
@@ -48,15 +49,22 @@ class _PushNotificationSettingsScreenState
   }
 
   Future<void> _loadData() async {
-    final alarms = await DatabaseHelper.instance.getAllPushAlarms();
-    final folders = await DatabaseHelper.instance.getNonBundleFolders();
-    final settings = await DatabaseHelper.instance.getAllSettings();
+    List<Map<String, dynamic>> alarms;
+    List<Folder> folders;
+    Map<String, String> settings;
+    try {
+      alarms = await DatabaseHelper.instance.getAllPushAlarms();
+      folders = await DatabaseHelper.instance.getNonBundleFolders();
+      settings = await DatabaseHelper.instance.getAllSettings();
+    } catch (e) {
+      debugPrint('[PUSH_SETTINGS] _loadData DB 오류: $e');
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
     if (!mounted) return;
 
-    final enabledStr = settings[_settingNotificationEnabled];
-    if (enabledStr != null) {
-      _enabled = enabledStr == 'true';
-    }
+    _enabled = (settings[_settingNotificationEnabled] ?? '').toLowerCase() == 'true';
 
     // interval 알람 찾기
     Map<String, dynamic>? intervalAlarm;
@@ -84,26 +92,16 @@ class _PushNotificationSettingsScreenState
     if (intervalAlarm != null) {
       _intervalAlarmId = intervalAlarm['id'] as int;
       _intervalEnabled = (intervalAlarm['enabled'] as int? ?? 1) == 1;
-      final startStr = intervalAlarm['start_time'] as String?;
-      final endStr = intervalAlarm['end_time'] as String?;
+      _parseAndSetTime(
+        intervalAlarm['start_time'] as String?,
+        (t) => _intervalStartTime = t,
+      );
+      _parseAndSetTime(
+        intervalAlarm['end_time'] as String?,
+        (t) => _intervalEndTime = t,
+      );
       final intMin = intervalAlarm['interval_min'] as int?;
-      if (startStr != null && startStr.contains(':')) {
-        final sp = startStr.split(':');
-        final h = int.tryParse(sp[0]);
-        final m = sp.length > 1 ? int.tryParse(sp[1]) : null;
-        if (h != null && m != null) {
-          _intervalStartTime = TimeOfDay(hour: h, minute: m);
-        }
-      }
-      if (endStr != null && endStr.contains(':')) {
-        final ep = endStr.split(':');
-        final h = int.tryParse(ep[0]);
-        final m = ep.length > 1 ? int.tryParse(ep[1]) : null;
-        if (h != null && m != null) {
-          _intervalEndTime = TimeOfDay(hour: h, minute: m);
-        }
-      }
-      if (intMin != null) {
+      if (intMin != null && intMin >= 5) {
         _intervalMinController.text = intMin.toString();
       }
     }
@@ -114,9 +112,23 @@ class _PushNotificationSettingsScreenState
     });
   }
 
+  /// HH:MM 형식의 시간 문자열을 파싱하여 setter로 전달
+  void _parseAndSetTime(String? timeStr, void Function(TimeOfDay) setter) {
+    if (timeStr == null || !timeStr.contains(':')) return;
+    final parts = timeStr.split(':');
+    if (parts.length != 2) return;
+    final h = int.tryParse(parts[0].trim());
+    final m = int.tryParse(parts[1].trim());
+    if (h != null && m != null && h >= 0 && h < 24 && m >= 0 && m < 60) {
+      setter(TimeOfDay(hour: h, minute: m));
+    }
+  }
+
   // ─── Interval mode ───
 
   Future<void> _saveIntervalAlarm() async {
+    if (_saving) return; // 중복 클릭 방지
+
     final intervalMin = int.tryParse(_intervalMinController.text);
     if (intervalMin == null || intervalMin < 5) {
       if (!mounted) return;
@@ -137,22 +149,24 @@ class _PushNotificationSettingsScreenState
       return;
     }
 
+    setState(() => _saving = true);
     try {
+      // 간격 알람 저장 시 자동으로 알림 활성화
       await DatabaseHelper.instance
-          .upsertSetting(_settingNotificationEnabled, _enabled.toString());
+          .upsertSetting(_settingNotificationEnabled, 'true');
 
-      final startStr =
-          '${_intervalStartTime.hour.toString().padLeft(2, '0')}:${_intervalStartTime.minute.toString().padLeft(2, '0')}';
-      final endStr =
-          '${_intervalEndTime.hour.toString().padLeft(2, '0')}:${_intervalEndTime.minute.toString().padLeft(2, '0')}';
+      final startStr = _formatTime(_intervalStartTime);
+      final endStr = _formatTime(_intervalEndTime);
 
       // 기존 interval 알람 삭제 후 새로 1개만 생성 (누적 방지)
       final existingAlarms = await DatabaseHelper.instance.getAllPushAlarms();
       for (final alarm in existingAlarms) {
+        if (!mounted) return;
         if ((alarm['mode'] as String? ?? 'fixed') == 'interval') {
           await DatabaseHelper.instance.deletePushAlarm(alarm['id'] as int);
         }
       }
+      if (!mounted) return;
 
       final newId = await DatabaseHelper.instance.insertPushAlarm(
         time: startStr,
@@ -163,10 +177,18 @@ class _PushNotificationSettingsScreenState
         folderId: _selectedFolderId,
         soundEnabled: _soundEnabled ? 1 : 0,
       );
-      _intervalAlarmId = newId;
 
-      await _loadData();
+      if (!mounted) return;
+      // _loadData 대신 직접 상태 업데이트 (불필요한 rescheduleAll 연쇄 방지)
+      setState(() {
+        _enabled = true;
+        _intervalAlarmId = newId;
+        _intervalEnabled = true;
+      });
+
+      // 서비스 시작은 딱 1번만
       await NotificationService.rescheduleAll();
+      if (!mounted) return;
 
       // Samsung 등에서 배터리 최적화 해제 요청
       try {
@@ -182,18 +204,31 @@ class _PushNotificationSettingsScreenState
       debugPrint('[PUSH_SETTINGS] 저장 실패: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('저장 실패: $e')),
+        const SnackBar(content: Text('저장에 실패했습니다. 다시 시도해 주세요.')),
       );
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
   Future<void> _toggleIntervalAlarm(bool enabled) async {
-    if (_intervalAlarmId == null) return;
+    if (_intervalAlarmId == null || !_enabled) return;
+    final previousEnabled = _intervalEnabled;
     setState(() => _intervalEnabled = enabled);
-    await DatabaseHelper.instance.updatePushAlarm(_intervalAlarmId!, {
-      'enabled': enabled ? 1 : 0,
-    });
-    await NotificationService.rescheduleAll();
+    try {
+      await DatabaseHelper.instance.updatePushAlarm(_intervalAlarmId!, {
+        'enabled': enabled ? 1 : 0,
+      });
+      if (!mounted) return;
+      await NotificationService.rescheduleAll();
+    } catch (e) {
+      debugPrint('[PUSH_SETTINGS] 토글 실패: $e');
+      if (!mounted) return;
+      setState(() => _intervalEnabled = previousEnabled);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('알림 설정 변경에 실패했습니다.')),
+      );
+    }
   }
 
   // ─── Common ───
@@ -208,14 +243,22 @@ class _PushNotificationSettingsScreenState
   }
 
   Future<void> _applyGlobalSettings() async {
-    final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
-    for (final alarm in allAlarms) {
-      await DatabaseHelper.instance.updatePushAlarm(alarm['id'] as int, {
-        'folder_id': _selectedFolderId,
-        'sound_enabled': _soundEnabled ? 1 : 0,
-      });
+    if (!mounted) return;
+    try {
+      final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
+      for (final alarm in allAlarms) {
+        // interval 알람은 자체 설정으로 관리 — 글로벌 설정으로 덮어쓰지 않음
+        if ((alarm['mode'] as String? ?? 'fixed') == 'interval') continue;
+        await DatabaseHelper.instance.updatePushAlarm(alarm['id'] as int, {
+          'folder_id': _selectedFolderId,
+          'sound_enabled': _soundEnabled ? 1 : 0,
+        });
+      }
+      if (!mounted) return;
+      await NotificationService.rescheduleAll();
+    } catch (e) {
+      debugPrint('[PUSH_SETTINGS] 글로벌 설정 적용 실패: $e');
     }
-    await NotificationService.rescheduleAll();
   }
 
   String _formatTime(TimeOfDay t) =>
@@ -223,7 +266,7 @@ class _PushNotificationSettingsScreenState
 
   int get _intervalSlotCount {
     final intervalMin = int.tryParse(_intervalMinController.text) ?? 0;
-    if (intervalMin < 5) return 0;
+    if (intervalMin < 5 || intervalMin > 1440) return 0;
     final startTotal =
         _intervalStartTime.hour * 60 + _intervalStartTime.minute;
     final endTotal = _intervalEndTime.hour * 60 + _intervalEndTime.minute;
@@ -251,29 +294,50 @@ class _PushNotificationSettingsScreenState
                     child: Switch(
                       value: _enabled,
                       onChanged: (v) async {
-                        if (v) {
-                          final messenger = ScaffoldMessenger.of(context);
-                          final granted =
-                              await NotificationService.requestPermission();
-                          if (!granted) {
-                            if (!mounted) return;
-                            messenger.showSnackBar(
-                              SnackBar(
-                                content: const Text('알림 권한이 필요합니다.'),
-                                action: SnackBarAction(
-                                  label: '설정 열기',
-                                  onPressed: () => openAppSettings(),
+                        final messenger = ScaffoldMessenger.of(context);
+                        try {
+                          if (v) {
+                            final granted =
+                                await NotificationService.requestPermission();
+                            if (!granted) {
+                              if (!mounted) return;
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: const Text('알림 권한이 필요합니다.'),
+                                  action: SnackBarAction(
+                                    label: '설정 열기',
+                                    onPressed: () => openAppSettings(),
+                                  ),
                                 ),
-                              ),
-                            );
-                            return;
+                              );
+                              return;
+                            }
                           }
+                          if (!mounted) return;
+                          final previousEnabled = _enabled;
+                          setState(() => _enabled = v);
+                          try {
+                            await DatabaseHelper.instance.upsertSetting(
+                                _settingNotificationEnabled, v.toString());
+                            if (!mounted) return;
+                            await NotificationService.rescheduleAll();
+                          } catch (e) {
+                            debugPrint('[PUSH_SETTINGS] 알림 토글 실패: $e');
+                            if (!mounted) return;
+                            setState(() => _enabled = previousEnabled);
+                            messenger.showSnackBar(
+                              const SnackBar(
+                                  content: Text('알림 설정 변경에 실패했습니다.')),
+                            );
+                          }
+                        } catch (e) {
+                          debugPrint('[PUSH_SETTINGS] 알림 토글 오류: $e');
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            const SnackBar(
+                                content: Text('알림 설정 변경에 실패했습니다.')),
+                          );
                         }
-                        if (!mounted) return;
-                        setState(() => _enabled = v);
-                        await DatabaseHelper.instance.upsertSetting(
-                            _settingNotificationEnabled, v.toString());
-                        await NotificationService.rescheduleAll();
                       },
                     ),
                   ),
@@ -295,7 +359,11 @@ class _PushNotificationSettingsScreenState
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: DropdownButton<int?>(
                     isExpanded: true,
-                    value: _selectedFolderId,
+                    // value가 items에 없으면 null로 폴백 (빌드 크래시 방지)
+                    value: (_selectedFolderId != null &&
+                            _folders.any((f) => f.id == _selectedFolderId))
+                        ? _selectedFolderId
+                        : null,
                     hint: const Text('전체 폴더'),
                     items: [
                       const DropdownMenuItem(
@@ -315,18 +383,23 @@ class _PushNotificationSettingsScreenState
                 ),
                 const Divider(),
 
-                // 테스트 알림
+                // 테스트 알림 (메인 토글 ON일 때만)
                 ListTile(
                   title: const Text('테스트 알림 보내기'),
-                  leading: const Icon(Icons.notifications_active),
-                  onTap: () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    await NotificationService.showTestNotification();
-                    if (!mounted) return;
-                    messenger.showSnackBar(
-                      const SnackBar(content: Text('테스트 알림을 보냈습니다.')),
-                    );
-                  },
+                  leading: Icon(Icons.notifications_active,
+                      color: _enabled ? null : Theme.of(context).disabledColor),
+                  enabled: _enabled,
+                  onTap: _enabled
+                      ? () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          await NotificationService.showTestNotification();
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            const SnackBar(
+                                content: Text('테스트 알림을 보냈습니다.')),
+                          );
+                        }
+                      : null,
                 ),
                 const Divider(),
 
@@ -366,8 +439,8 @@ class _PushNotificationSettingsScreenState
           trailing: Transform.scale(
             scale: 0.8,
             child: Switch(
-              value: _intervalEnabled,
-              onChanged: (v) => _toggleIntervalAlarm(v),
+              value: _intervalEnabled && _enabled,
+              onChanged: _enabled ? (v) => _toggleIntervalAlarm(v) : null,
             ),
           ),
         ),
@@ -460,9 +533,15 @@ class _PushNotificationSettingsScreenState
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: FilledButton.icon(
-          onPressed: _saveIntervalAlarm,
-          icon: const Icon(Icons.save),
-          label: const Text('저장'),
+          onPressed: _saving ? null : _saveIntervalAlarm,
+          icon: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.save),
+          label: Text(_saving ? '저장 중...' : '저장'),
         ),
       ),
     ];

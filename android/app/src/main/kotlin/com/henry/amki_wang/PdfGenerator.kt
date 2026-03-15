@@ -102,6 +102,10 @@ class PdfGenerator(private val context: Context) {
                 ImportExportService.updateProgress(context, "Export 진행 중", "$name — PDF 저장 중...", savePercent, 100, "export")
                 FileOutputStream(outputPath).use { doc.writeTo(it) }
                 Log.d(TAG, "PDF saved: $outputPath ($pn pages, $n cards)")
+            } catch (e: Exception) {
+                // 실패 시 불완전 PDF 파일 삭제
+                try { java.io.File(outputPath).delete() } catch (_: Exception) {}
+                throw e
             } finally {
                 doc.close()
             }
@@ -168,8 +172,13 @@ class PdfGenerator(private val context: Context) {
             o.inJustDecodeBounds = false
             o.inSampleSize = ss
             BitmapFactory.decodeFile(f.path, o)
-        } catch (_: OutOfMemoryError) { null }
-        catch (_: Exception) { null }
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "OOM decoding image: $path", e)
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to decode image: $path", e)
+            null
+        }
     }
 
     private fun wrap(cv: Canvas, t: String, x: Float, y: Float, s: Float, tf: Typeface, col: Int = Color.BLACK): Float {

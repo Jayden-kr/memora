@@ -32,7 +32,15 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _loadFiles() async {
-    final rawFiles = await DatabaseHelper.instance.getAllExportedFiles();
+    List<Map<String, dynamic>> rawFiles;
+    try {
+      rawFiles = await DatabaseHelper.instance.getAllExportedFiles();
+    } catch (e) {
+      debugPrint('[FILE_LIST] _loadFiles 오류: $e');
+      if (!mounted) return;
+      setState(() => _files = []);
+      return;
+    }
     // sqflite query()는 읽기 전용 Map 반환 → mutable 복사 후 수정
     final files = rawFiles.map((f) => Map<String, dynamic>.from(f)).toList();
     // 실제 파일 존재 여부 체크 (비동기)
@@ -87,7 +95,7 @@ class _FileListScreenState extends State<FileListScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제', style: TextStyle(color: Colors.red)),
+            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -192,11 +200,20 @@ class _FileListScreenState extends State<FileListScreen> {
 
     // 디스크에서 실제 파일 이름 변경
     final f = File(filePath);
-    if (await f.exists()) {
-      await f.rename(newFilePath);
+    try {
+      if (await f.exists()) {
+        await f.rename(newFilePath);
+      }
+    } catch (e) {
+      debugPrint('[FILE_LIST] 파일 이름 변경 실패: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('파일 이름 변경에 실패했습니다.')),
+      );
+      return; // 파일 변경 실패 시 DB 업데이트 건너뜀
     }
 
-    // DB 레코드 업데이트
+    // DB 레코드 업데이트 (파일 변경 성공 시에만)
     await DatabaseHelper.instance.renameExportedFile(
       file['id'] as int,
       newFileName,
@@ -295,9 +312,9 @@ class _FileListScreenState extends State<FileListScreen> {
                 },
               ),
             ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text('삭제',
-                  style: TextStyle(fontSize: 14, color: Colors.red)),
+              leading: Icon(Icons.delete, color: Theme.of(context).colorScheme.error),
+              title: Text('삭제',
+                  style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.error)),
               onTap: () {
                 Navigator.pop(ctx);
                 _deleteFile(file);
@@ -352,7 +369,7 @@ class _FileListScreenState extends State<FileListScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제', style: TextStyle(color: Colors.red)),
+            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),

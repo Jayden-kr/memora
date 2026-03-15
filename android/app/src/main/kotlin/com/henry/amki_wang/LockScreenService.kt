@@ -82,7 +82,7 @@ class LockScreenService : Service() {
             fontRegular = Typeface.createFromAsset(assets, "fonts/Pretendard-Regular.otf")
             fontBold = Typeface.createFromAsset(assets, "fonts/Pretendard-Bold.otf")
             Log.d(TAG, "Pretendard fonts loaded")
-        } catch (e: Exception) {
+        } catch (e: Throwable) { // Exception + Error (OOM 포함)
             Log.w(TAG, "Failed to load Pretendard fonts, using default", e)
             fontRegular = Typeface.DEFAULT
             fontBold = Typeface.DEFAULT_BOLD
@@ -403,6 +403,8 @@ class LockScreenService : Service() {
             windowManager?.addView(overlayView, params)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add overlay view", e)
+            // 부분적으로 추가된 뷰 정리 시도
+            try { windowManager?.removeView(overlayView) } catch (_: Exception) {}
             overlayView = null
             return
         }
@@ -527,12 +529,15 @@ class LockScreenService : Service() {
                 val diffX = e2.x - e1.x
                 val diffY = e2.y - e1.y
                 if (abs(diffX) > abs(diffY) && abs(diffX) > 100 && abs(velocityX) > 100) {
-                    if (diffX < 0 && currentIndex < cards.size - 1) {
-                        currentIndex++
-                        updateCardDisplay()
-                    } else if (diffX > 0 && currentIndex > 0) {
-                        currentIndex--
-                        updateCardDisplay()
+                    val localCards = cards // snapshot to prevent race
+                    synchronized(this@LockScreenService) {
+                        if (diffX < 0 && currentIndex < localCards.size - 1) {
+                            currentIndex++
+                            updateCardDisplay()
+                        } else if (diffX > 0 && currentIndex > 0) {
+                            currentIndex--
+                            updateCardDisplay()
+                        }
                     }
                     return true
                 }
@@ -653,7 +658,9 @@ class LockScreenService : Service() {
         val root = overlayView ?: return
         val localCards = cards // @Volatile 로컬 캡처 (스레드 간 재할당 안전)
         if (localCards.isEmpty()) return
-        if (currentIndex >= localCards.size) currentIndex = 0
+        synchronized(this) {
+            if (currentIndex >= localCards.size) currentIndex = 0
+        }
 
         val card = localCards[currentIndex]
 
@@ -725,7 +732,10 @@ class LockScreenService : Service() {
         }
     }
 
+    @Volatile private var imageLoadGeneration = 0
+
     private fun loadImages(container: LinearLayout?, images: List<String>) {
+        val generation = ++imageLoadGeneration // 세대 토큰으로 구 콜백 무효화
         // 이전 Bitmap을 drawable 해제 후 다음 프레임에서 recycle (draw pipeline 완료 보장)
         container?.let { c ->
             val oldBitmaps = mutableListOf<Bitmap>()
@@ -786,8 +796,8 @@ class LockScreenService : Service() {
             }
             // 메인 스레드에서 ImageView에 세팅
             mainHandler.post {
-                // 서비스 파괴 후 또는 container 제거 후: bitmap 정리
-                if (!isServiceActive || container.parent == null) {
+                // 세대 불일치 (새 loadImages 호출됨) 또는 서비스 파괴 시: bitmap 정리
+                if (generation != imageLoadGeneration || !isServiceActive || container.parent == null) {
                     bitmaps.forEach { if (!it.isRecycled) it.recycle() }
                     return@post
                 }

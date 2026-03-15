@@ -29,12 +29,11 @@ class LockScreenStartReceiver : BroadcastReceiver() {
         val enabled = prefs.getBoolean("enabled", false)
         if (!enabled) return
 
-        // API 31+: SYSTEM_ALERT_WINDOW 권한이 있으면 백그라운드 FGS 시작 면제
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // 오버레이 권한 확인 (API 23+ — canDrawOverlays는 Marshmallow부터)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(context)) {
-                // 오버레이 권한 없이는 FGS 시작 불가 → 사용자에게 앱 열기 안내 알림
                 showRestoreNotification(context)
-                Log.w(TAG, "Cannot start FGS: overlay permission not granted on API 31+")
+                Log.w(TAG, "Cannot start FGS: overlay permission not granted")
                 return
             }
         }

@@ -274,10 +274,11 @@ class CardModel {
     );
   }
 
-  /// JSON value → bool (handles bool, int 0/1, null)
+  /// JSON value → bool (handles bool, int 0/1, String "true"/"1", null)
   static bool _parseBool(dynamic value) {
     if (value is bool) return value;
     if (value is num) return value != 0;
+    if (value is String) return value.toLowerCase() == 'true' || value == '1';
     return false;
   }
 

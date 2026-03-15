@@ -3,11 +3,13 @@ package com.henry.amki_wang
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteDatabase
 import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 /**
  * 간격 반복 푸시 알림 Foreground Service
@@ -90,9 +92,9 @@ class PushNotificationService : Service() {
             .putInt("endTotal", endTotal)
             .putInt("folderId", folderId ?: -1)
             .putBoolean("soundEnabled", soundEnabled)
-            .apply()
+            .commit()  // apply() 대신 commit() — 서비스 kill 전 데이터 보존 보장
 
-        Log.d(TAG, "시작: ${startTotal/60}:${String.format("%02d", startTotal%60)}~${endTotal/60}:${String.format("%02d", endTotal%60)}, ${intervalMin}분 간격")
+        Log.d(TAG, "시작: ${startTotal/60}:${String.format(java.util.Locale.US, "%02d", startTotal%60)}~${endTotal/60}:${String.format(java.util.Locale.US, "%02d", endTotal%60)}, ${intervalMin}분 간격")
 
         // Foreground 알림
         val notification = createServiceNotification()
@@ -109,14 +111,29 @@ class PushNotificationService : Service() {
 
         saveRunning(true)
 
-        // 타이머 시작 — 다음 interval 시점까지 지연 (앱 열 때마다 즉시 뜨는 것 방지)
+        // 타이머 시작 — 시간대에 맞춰 정확한 딜레이 계산
         handler.removeCallbacks(tickRunnable)
         val cal = java.util.Calendar.getInstance()
         val nowMin = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
-        val elapsed = if (nowMin >= startTotal) (nowMin - startTotal) % intervalMin else 0
-        val delayMin = if (elapsed == 0) intervalMin else (intervalMin - elapsed)
+
+        val delayMin: Int = when {
+            nowMin < startTotal -> {
+                // 시작 시간 전 → startTotal까지 대기
+                startTotal - nowMin
+            }
+            nowMin > endTotal -> {
+                // 종료 시간 후 → 다음날 startTotal까지 대기
+                (1440 - nowMin) + startTotal
+            }
+            else -> {
+                // 범위 내 → 다음 interval 시점까지
+                val elapsed = (nowMin - startTotal) % intervalMin
+                if (elapsed == 0) intervalMin else (intervalMin - elapsed)
+            }
+        }
+
         val delayMs = delayMin * 60 * 1000L
-        Log.d(TAG, "${delayMin}분 후 첫 알림 (현재분=$nowMin, elapsed=$elapsed)")
+        Log.d(TAG, "${delayMin}분 후 첫 알림 (현재분=$nowMin, start=$startTotal, end=$endTotal)")
         handler.postDelayed(tickRunnable, delayMs)
 
         return START_STICKY
@@ -149,13 +166,21 @@ class PushNotificationService : Service() {
         val cal = java.util.Calendar.getInstance()
         val nowTotal = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
 
+        // end inclusive: 22:00 설정 시 22:00까지 발사
         if (nowTotal < startTotal || nowTotal > endTotal) {
-            Log.d(TAG, "시간 범위 밖 ($nowTotal), 스킵")
+            Log.d(TAG, "시간 범위 밖 ($nowTotal not in [$startTotal, $endTotal]), 스킵")
             return
         }
 
         Log.d(TAG, "알림 발사! ($nowTotal)")
-        showCardNotification()
+        // DB I/O를 백그라운드 스레드에서 실행 (ANR 방지)
+        Thread {
+            try {
+                showCardNotification()
+            } catch (e: Exception) {
+                Log.e(TAG, "showCardNotification 실패", e)
+            }
+        }.start()
     }
 
     private fun showCardNotification() {
@@ -163,7 +188,6 @@ class PushNotificationService : Service() {
         var db: SQLiteDatabase? = null
         try {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
-            try { db.enableWriteAheadLogging() } catch (_: Exception) {}
 
             // 랜덤 카드 조회
             val where = if (folderId != null) "folder_id = ?" else null
@@ -222,6 +246,14 @@ class PushNotificationService : Service() {
                 }
             }
 
+            // Android 13+: POST_NOTIFICATIONS 권한 확인
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                    Log.w(TAG, "POST_NOTIFICATIONS 권한 없음, 알림 스킵")
+                    return
+                }
+            }
             nm?.notify(CARD_NOTIF_BASE + (tickCount++ % 500), builder.build())
             Log.d(TAG, "알림 표시 완료: $question")
         } catch (e: Exception) {
@@ -233,14 +265,17 @@ class PushNotificationService : Service() {
 
     private fun findDbFile(): java.io.File? {
         val dataDir = applicationInfo.dataDir
-        for (candidate in listOf(
+        // getDatabasePath를 우선 시도 (공식 API)
+        val candidates = listOf(
+            getDatabasePath("amki_wang.db"),
             java.io.File(dataDir, "app_flutter/amki_wang.db"),
             java.io.File(filesDir, "app_flutter/amki_wang.db"),
             java.io.File(filesDir, "amki_wang.db"),
-            getDatabasePath("amki_wang.db")
-        )) {
-            if (candidate.exists()) return candidate
+        )
+        for (candidate in candidates) {
+            if (candidate.exists() && candidate.canRead()) return candidate
         }
+        Log.w(TAG, "DB 파일을 찾을 수 없음. 검색 경로: ${candidates.map { it.path }}")
         return null
     }
 
@@ -282,7 +317,7 @@ class PushNotificationService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")
-            .setContentText("${String.format("%02d:%02d", startH, startM)}~${String.format("%02d:%02d", endH, endM)}, ${intervalMin}분 간격 알림 활성화")
+            .setContentText("${String.format(java.util.Locale.US, "%02d:%02d", startH, startM)}~${String.format(java.util.Locale.US, "%02d:%02d", endH, endM)}, ${intervalMin}분 간격 알림 활성화")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pi)
             .setDeleteIntent(deletePi)
@@ -295,6 +330,6 @@ class PushNotificationService : Service() {
 
     private fun saveRunning(running: Boolean) {
         getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-            .edit().putBoolean("running", running).apply()
+            .edit().putBoolean("running", running).commit()
     }
 }

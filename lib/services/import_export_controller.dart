@@ -141,7 +141,9 @@ class ImportExportController {
     currentImportProgress = const ImportProgress();
     _notify();
 
-    await _startService('Import 진행 중');
+    try {
+      await _startService('Import 진행 중');
+    } catch (_) {}
 
     try {
       final result = await _importService.importSelectedFolders(
@@ -219,7 +221,7 @@ class ImportExportController {
     exportProgressValue = 0.0;
     _notify();
 
-    await _startService('Export 진행 중', type: 'export');
+    try { await _startService('Export 진행 중', type: 'export'); } catch (_) {}
 
     try {
       final totalFolders = selectedFolders.length;
@@ -232,13 +234,14 @@ class ImportExportController {
         final folderWeight = 1.0 / totalFolders;
 
         final safeName = _sanitizeFileName(folder.name);
-        final fileName = '$safeName.memk';
-        final outputPath = p.join(exportDirPath, fileName);
-
-        // 같은 이름 파일이 있으면 삭제 후 덮어쓰기
-        final existing = File(outputPath);
-        if (existing.existsSync()) {
-          try { existing.deleteSync(); } catch (_) {}
+        // 파일명 충돌 방지: 동일 이름 존재 시 숫자 접미사 추가
+        var fileName = '$safeName.memk';
+        var outputPath = p.join(exportDirPath, fileName);
+        var counter = 1;
+        while (File(outputPath).existsSync()) {
+          fileName = '${safeName}_$counter.memk';
+          outputPath = p.join(exportDirPath, fileName);
+          counter++;
         }
 
         await _exportService.exportMemk(
@@ -363,7 +366,7 @@ class ImportExportController {
     exportProgressValue = 0.0;
     _notify();
 
-    await _startService('Export 진행 중', type: 'export');
+    try { await _startService('Export 진행 중', type: 'export'); } catch (_) {}
 
     try {
       final totalFolders = selectedFolders.length;

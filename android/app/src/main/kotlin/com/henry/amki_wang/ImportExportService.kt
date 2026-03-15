@@ -116,6 +116,9 @@ class ImportExportService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "STOP" -> {
+                // progress 알림도 명시적으로 취소
+                val nm = getSystemService(android.app.NotificationManager::class.java)
+                nm?.cancel(PROGRESS_NOTIFICATION_ID)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                 } else {

@@ -51,10 +51,8 @@ class _ImportScreenState extends State<ImportScreen> {
   void dispose() {
     ImportScreen.isOpen = false;
     _controller.removeListener(_onControllerUpdate);
-    // Import 미시작 시 캐시 메모리 해제 (import 시작 후에는 이미 소비됨)
-    if (_stage != _ImportStage.importing) {
-      _controller.importService.clearCache();
-    }
+    // 캐시 메모리 해제 (import 중 뒤로가기 시에도 정리)
+    _controller.importService.clearCache();
     super.dispose();
   }
 
@@ -502,7 +500,7 @@ class _ImportScreenState extends State<ImportScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, size: 64, color: Colors.red),
+            Icon(Icons.error_outline, size: 64, color: Theme.of(context).colorScheme.error),
             const SizedBox(height: 16),
             Text(
               _errorMessage ?? '알 수 없는 에러',

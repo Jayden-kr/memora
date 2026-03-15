@@ -30,6 +30,7 @@ class CardListScreen extends StatefulWidget {
 class _CardListScreenState extends State<CardListScreen> {
   final List<CardModel> _cards = [];
   bool _loading = true;
+  bool _disposed = false; // precacheImage 등 비동기 작업 중단용
   int _totalCount = 0;
 
   // Answer 접기/숨기기 상태
@@ -103,68 +104,63 @@ class _CardListScreenState extends State<CardListScreen> {
       'sort_order_${widget.allCards ? "all" : widget.folder.id}';
 
   Future<void> _initLoad() async {
-    // 저장된 정렬 순서 및 설정값 불러오기
-    final settings = await DatabaseHelper.instance.getAllSettings();
-    final saved = settings[_sortSettingKey];
-    if (saved != null) _sortOrder = saved;
-
-    // 설정 화면에서 지정한 기본값 적용
-    final foldSetting = settings[AppConstants.settingAnswerFold];
-    if (foldSetting == 'collapsed') _allAnswersFolded = true;
-
-    final visSetting = settings[AppConstants.settingAnswerVisibility];
-    if (visSetting == 'hidden') _allAnswersHidden = true;
-
-    _showCardNumber = settings[AppConstants.settingCardNumber] == 'true';
-    _showScrollbar = settings[AppConstants.settingCardScroll] == 'true';
-
     if (_isNotificationMode) {
-      await _loadAllAndScrollToTarget();
+      // 알림 모드: 설정 + 카드 병렬 로드 (딜레이 최소화)
+      final results = await Future.wait([
+        DatabaseHelper.instance.getAllSettings(),
+        widget.allCards
+            ? DatabaseHelper.instance.getAllCards()
+            : DatabaseHelper.instance.getCardsByFolderIdSorted(
+                widget.folder.id!, _sortOrder),
+      ]);
+      if (!mounted) return;
+
+      final settings = results[0] as Map<String, String>;
+      final cards = results[1] as List<CardModel>;
+      _applySettings(settings);
+
+      final targetId = widget.scrollToCardId!;
+      final targetIndex = cards.indexWhere((c) => c.id == targetId);
+
+      setState(() {
+        _cards
+          ..clear()
+          ..addAll(cards);
+        _totalCount = cards.length;
+        _loading = false;
+      });
+
+      if (targetIndex >= 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_itemScrollController.isAttached) return;
+          _itemScrollController.jumpTo(index: targetIndex);
+        });
+      }
+
+      _highlightTimer?.cancel();
+      _highlightTimer = Timer(const Duration(seconds: 5), () {
+        if (mounted) setState(() => _highlightCardId = null);
+      });
     } else {
+      // 일반 모드: 설정 먼저, 카드 로드
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      if (!mounted) return;
+      _applySettings(settings);
       await _loadCards();
     }
   }
 
-  /// scrollToCardId가 설정된 경우: 전체 카드 로드 후 index 기반 스크롤
-  Future<void> _loadAllAndScrollToTarget() async {
-    final targetId = widget.scrollToCardId!;
-
-    List<CardModel> cards;
-    if (widget.allCards) {
-      _totalCount = await DatabaseHelper.instance.getTotalCardCount();
-      cards = await DatabaseHelper.instance.getAllCards();
-    } else {
-      _totalCount = await DatabaseHelper.instance
-          .countCardsByFolderId(widget.folder.id!);
-      cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
-        widget.folder.id!,
-        _sortOrder,
-      );
+  void _applySettings(Map<String, String> settings) {
+    final saved = settings[_sortSettingKey];
+    if (saved != null) _sortOrder = saved;
+    if (settings[AppConstants.settingAnswerFold] == 'collapsed') {
+      _allAnswersFolded = true;
     }
-
-    final targetIndex = cards.indexWhere((c) => c.id == targetId);
-
-    if (!mounted) return;
-    setState(() {
-      _cards
-        ..clear()
-        ..addAll(cards);
-      _loading = false;
-    });
-
-    // ScrollablePositionedList가 빌드된 후 대상 인덱스로 점프
-    if (targetIndex >= 0) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_itemScrollController.isAttached) return;
-        _itemScrollController.jumpTo(index: targetIndex);
-      });
+    if (settings[AppConstants.settingAnswerVisibility] == 'hidden') {
+      _allAnswersHidden = true;
     }
-
-    // 5초 후 하이라이트 해제
-    _highlightTimer?.cancel();
-    _highlightTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _highlightCardId = null);
-    });
+    _showCardNumber = settings[AppConstants.settingCardNumber] == 'true';
+    _showScrollbar = settings[AppConstants.settingCardScroll] == 'true';
   }
 
   @override
@@ -172,6 +168,7 @@ class _CardListScreenState extends State<CardListScreen> {
     _itemPositionsListener.itemPositions.removeListener(_onItemPositionsChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _disposed = true;
     _simpleScrollController.dispose();
     _debounceTimer?.cancel();
     _scrollLabelTimer?.cancel();
@@ -184,11 +181,11 @@ class _CardListScreenState extends State<CardListScreen> {
 
   /// ItemPositionsListener 콜백 (스크롤 위치 추적)
   void _onItemPositionsChanged() {
-    if (_isDraggingThumb.value) return;
+    if (_disposed || _isDraggingThumb.value) return;
     _scrollLabelNotifier.value = _currentVisibleIndex;
     _scrollLabelTimer?.cancel();
     _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
-      _scrollLabelNotifier.value = 0;
+      if (!_disposed) _scrollLabelNotifier.value = 0;
     });
     // 인디케이터 fraction 업데이트
     if (_cards.isNotEmpty) {
@@ -222,9 +219,9 @@ class _CardListScreenState extends State<CardListScreen> {
   /// 카드 이미지를 백그라운드에서 미리 디코딩 (Glide 방식 프리캐시)
   Future<void> _precacheCardImages() async {
     for (final card in _cards) {
-      if (!mounted) return;
+      if (_disposed || !mounted) return;
       for (final path in card.questionImagePaths) {
-        if (!mounted) return;
+        if (_disposed || !mounted) return;
         try {
           await precacheImage(
             ResizeImage(FileImage(File(path)), width: 600),
@@ -233,7 +230,7 @@ class _CardListScreenState extends State<CardListScreen> {
         } catch (_) {}
       }
       for (final path in card.answerImagePaths) {
-        if (!mounted) return;
+        if (_disposed || !mounted) return;
         try {
           await precacheImage(
             ResizeImage(FileImage(File(path)), width: 600),
@@ -418,7 +415,7 @@ class _CardListScreenState extends State<CardListScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제', style: TextStyle(color: Colors.red)),
+            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -426,15 +423,34 @@ class _CardListScreenState extends State<CardListScreen> {
     if (confirm != true || !mounted) return;
 
     final filePaths = _collectCardFilePaths(card);
-    await DatabaseHelper.instance.deleteCard(card.id!);
-    await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
+    try {
+      await DatabaseHelper.instance.deleteCard(card.id!);
+      await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
+    } catch (e) {
+      debugPrint('[CARD_LIST] 카드 삭제 실패: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('카드 삭제에 실패했습니다.')),
+      );
+      return;
+    }
     await _deleteFiles(filePaths);
     if (!mounted) return;
     await _loadCards();
   }
 
   Future<void> _duplicateCard(CardModel card) async {
-    await DatabaseHelper.instance.duplicateCard(card.id!);
+    try {
+      await DatabaseHelper.instance.duplicateCard(card.id!);
+    } catch (e) {
+      debugPrint('[CARD_LIST] 카드 복제 실패: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('카드 복제에 실패했습니다.')),
+      );
+      return;
+    }
+    if (!mounted) return;
     await _loadCards();
   }
 
@@ -455,10 +471,10 @@ class _CardListScreenState extends State<CardListScreen> {
             .toList(),
       ),
     );
-    if (target == null) return;
+    if (target == null || !mounted) return;
 
     await DatabaseHelper.instance.moveCard(card.id!, target.id!);
-    // moveCard이 내부 트랜잭션에서 양쪽 폴더 카운트를 갱신하므로 별도 호출 불필요
+    if (!mounted) return;
     await _loadCards();
   }
 
@@ -541,7 +557,7 @@ class _CardListScreenState extends State<CardListScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('삭제', style: TextStyle(color: Colors.red)),
+            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -557,21 +573,9 @@ class _CardListScreenState extends State<CardListScreen> {
       allFilePaths.addAll(_collectCardFilePaths(card));
     }
 
-    if (widget.allCards) {
-      final affectedFolderIds = selectedCards
-          .map((c) => c.folderId)
-          .toSet();
-      await DatabaseHelper.instance
-          .deleteCardsBatch(_selectedCardIds.toList());
-      for (final fid in affectedFolderIds) {
-        await DatabaseHelper.instance.updateFolderCardCount(fid);
-      }
-    } else {
-      await DatabaseHelper.instance
-          .deleteCardsBatch(_selectedCardIds.toList());
-      await DatabaseHelper.instance
-          .updateFolderCardCount(widget.folder.id!);
-    }
+    // deleteCardsBatch 내부에서 트랜잭션으로 folder card_count 자동 갱신
+    await DatabaseHelper.instance
+        .deleteCardsBatch(_selectedCardIds.toList());
     await _deleteFiles(allFilePaths);
     _exitSelectionMode();
     await _loadCards();
@@ -595,16 +599,9 @@ class _CardListScreenState extends State<CardListScreen> {
     );
     if (target == null || !mounted) return;
 
-    final sourceFolderIds = _cards
-        .where((c) => _selectedCardIds.contains(c.id))
-        .map((c) => c.folderId)
-        .toSet();
+    // moveCardsBatch 내부에서 트랜잭션으로 원본/대상 folder card_count 자동 갱신
     await DatabaseHelper.instance
         .moveCardsBatch(_selectedCardIds.toList(), target.id!);
-    for (final fid in sourceFolderIds) {
-      await DatabaseHelper.instance.updateFolderCardCount(fid);
-    }
-    await DatabaseHelper.instance.updateFolderCardCount(target.id!);
     _exitSelectionMode();
     await _loadCards();
   }
@@ -789,6 +786,11 @@ class _CardListScreenState extends State<CardListScreen> {
                     ),
                   );
                   if (!mounted) return;
+                  // 검색 모드에서 새 카드 생성 시 검색 초기화 (새 카드가 안 보이는 버그 방지)
+                  if (_searchQuery.isNotEmpty) {
+                    _searchController.clear();
+                    _searchQuery = '';
+                  }
                   _loadCards();
                 },
                 child: const Icon(Icons.add),
@@ -960,6 +962,11 @@ class _CardListScreenState extends State<CardListScreen> {
                 _sortOrder = value.replaceFirst('sort_', '');
                 DatabaseHelper.instance
                     .upsertSetting(_sortSettingKey, _sortOrder);
+                // 검색 모드에서 정렬 변경 시 검색 초기화 (정렬이 반영되도록)
+                if (_searchQuery.isNotEmpty) {
+                  _searchController.clear();
+                  _searchQuery = '';
+                }
                 _loadCards();
               case 'fold_toggle':
                 setState(() {
