@@ -86,14 +86,15 @@ class NotificationService {
     if (payload == null || !payload.contains(':')) return;
     final event = _parsePayload(payload);
     if (event == null) return;
-    // onNavigate가 등록되어 있으면 즉시 전달, 아니면 pending에 저장
-    _pendingEvent = event;
     if (onNavigate != null) {
-      try {
-        onNavigate!(event);
-      } finally {
-        _pendingEvent = null;
-      }
+      // onNavigate 등록됨 → 즉시 전달, pending 설정 안 함 (double navigation 방지)
+      onNavigate!(event).catchError((e) {
+        debugPrint('[NOTIF] onNavigate 실패: $e — pending으로 저장');
+        _pendingEvent = event;
+      });
+    } else {
+      // onNavigate 미등록 → pending에 저장 (cold-start 등)
+      _pendingEvent = event;
     }
   }
 

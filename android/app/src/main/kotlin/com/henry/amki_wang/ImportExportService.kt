@@ -32,6 +32,11 @@ class ImportExportService : Service() {
 
         fun updateProgress(context: Context, title: String, message: String, progress: Int, max: Int, type: String = "import") {
             val appContext = context.applicationContext
+            // Android 13+: POST_NOTIFICATIONS 권한 없으면 알림 스킵
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(appContext,
+                        android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+            }
             ensureChannel(appContext)
             val intent = Intent(appContext, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -63,6 +68,11 @@ class ImportExportService : Service() {
 
         fun showComplete(context: Context, title: String, message: String, type: String = "import") {
             val appContext = context.applicationContext
+            // Android 13+: POST_NOTIFICATIONS 권한 없으면 알림 스킵
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(appContext,
+                        android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+            }
             ensureChannel(appContext)
             // 진행 알림 제거 (이중 알림 방지)
             val mgr = appContext.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
@@ -116,6 +126,22 @@ class ImportExportService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "STOP" -> {
+                // startForegroundService로 시작된 경우 반드시 startForeground 호출 필요 (Android 12+ 크래시 방지)
+                // 서비스가 이미 destroy 후 재생성된 경우 startForeground 없이 stopSelf하면 ForegroundServiceDidNotStartInTimeException 발생
+                try {
+                    val stopNotification = NotificationCompat.Builder(this, CHANNEL_ID)
+                        .setSmallIcon(R.drawable.ic_notification)
+                        .setContentTitle("Memora")
+                        .setSilent(true)
+                        .build()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(PROGRESS_NOTIFICATION_ID, stopNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    } else {
+                        startForeground(PROGRESS_NOTIFICATION_ID, stopNotification)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ImportExportService", "startForeground in STOP failed: ${e.message}")
+                }
                 // progress 알림도 명시적으로 취소
                 val nm = getSystemService(android.app.NotificationManager::class.java)
                 nm?.cancel(PROGRESS_NOTIFICATION_ID)

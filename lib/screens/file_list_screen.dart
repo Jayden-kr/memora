@@ -38,7 +38,10 @@ class _FileListScreenState extends State<FileListScreen> {
     } catch (e) {
       debugPrint('[FILE_LIST] _loadFiles 오류: $e');
       if (!mounted) return;
-      setState(() => _files = []);
+      setState(() {
+        _files = [];
+        _loading = false;
+      });
       return;
     }
     // sqflite query()는 읽기 전용 Map 반환 → mutable 복사 후 수정
@@ -390,8 +393,8 @@ class _FileListScreenState extends State<FileListScreen> {
       await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
     }
 
-    _selectedIds.clear();
     if (!mounted) return;
+    setState(() => _selectedIds.clear());
     await _loadFiles();
   }
 
@@ -463,8 +466,8 @@ class _FileListScreenState extends State<FileListScreen> {
       );
     }
 
-    _selectedIds.clear();
     if (!mounted) return;
+    setState(() => _selectedIds.clear());
     _loadFiles();
   }
 

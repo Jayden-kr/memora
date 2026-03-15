@@ -113,14 +113,23 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
           }
         }
 
-        // 새 하위 폴더 설정
+        // 새 하위 폴더 설정 + 실제 연결 수 카운트 (삭제된 폴더 대응)
+        int actualLinked = 0;
         for (final folderId in _selectedFolderIds) {
           final folder = await DatabaseHelper.instance.getFolderById(folderId);
           if (folder != null) {
             await DatabaseHelper.instance.updateFolder(
               folder.copyWith(parentFolderId: widget.existingBundle!.id),
             );
+            actualLinked++;
           }
+        }
+        // folderCount를 실제 연결된 수로 보정
+        if (actualLinked != _selectedFolderIds.length) {
+          await DatabaseHelper.instance.updateFolder(
+            widget.existingBundle!.copyWith(
+                name: name, folderCount: actualLinked),
+          );
         }
       } else {
         // 새 묶음 생성

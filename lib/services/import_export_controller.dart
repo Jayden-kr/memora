@@ -223,10 +223,10 @@ class ImportExportController {
 
     try { await _startService('Export 진행 중', type: 'export'); } catch (_) {}
 
+    final createdFiles = <String>[];
+    final createdFileNames = <String>[];
     try {
       final totalFolders = selectedFolders.length;
-      final createdFiles = <String>[];
-      final createdFileNames = <String>[];
 
       for (int i = 0; i < selectedFolders.length; i++) {
         final folder = selectedFolders[i];
@@ -314,6 +314,11 @@ class ImportExportController {
         type: 'export',
       );
     } catch (e) {
+      // 부분 결과 보존 (중간 실패 시 성공한 파일 접근 가능)
+      if (createdFileNames.isNotEmpty) {
+        lastExportFileNames = List.from(createdFileNames);
+        lastExportFilePaths = List.from(createdFiles);
+      }
       lastExportError = e;
       isRunning = false;
       currentOperation = null;
@@ -368,11 +373,11 @@ class ImportExportController {
 
     try { await _startService('Export 진행 중', type: 'export'); } catch (_) {}
 
+    final createdFiles = <String>[];
+    final createdFileNames = <String>[];
     try {
       final totalFolders = selectedFolders.length;
       _pdfTotalFolders = totalFolders;
-      final createdFiles = <String>[];
-      final createdFileNames = <String>[];
 
       for (int i = 0; i < selectedFolders.length; i++) {
         final folder = selectedFolders[i];
@@ -382,13 +387,14 @@ class ImportExportController {
         _pdfCurrentFolderName = folder.name;
 
         final safeName = _sanitizeFileName(folder.name);
-        final fileName = '$safeName.pdf';
-        final outputPath = p.join(exportDirPath, fileName);
-
-        // 같은 이름 파일이 있으면 삭제 후 덮어쓰기
-        final existing = File(outputPath);
-        if (existing.existsSync()) {
-          try { existing.deleteSync(); } catch (_) {}
+        // 파일명 충돌 방지: 동일 이름 존재 시 숫자 접미사 추가 (memk와 동일 패턴)
+        var fileName = '$safeName.pdf';
+        var outputPath = p.join(exportDirPath, fileName);
+        var counter = 1;
+        while (File(outputPath).existsSync()) {
+          fileName = '${safeName}_$counter.pdf';
+          outputPath = p.join(exportDirPath, fileName);
+          counter++;
         }
 
         // Android 네이티브 PDF 생성 (Dart VM 힙 사용 안 함)
@@ -430,6 +436,10 @@ class ImportExportController {
         type: 'export',
       );
     } catch (e) {
+      if (createdFileNames.isNotEmpty) {
+        lastExportFileNames = List.from(createdFileNames);
+        lastExportFilePaths = List.from(createdFiles);
+      }
       lastExportError = e;
       isRunning = false;
       currentOperation = null;

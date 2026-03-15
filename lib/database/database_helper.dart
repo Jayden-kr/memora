@@ -40,6 +40,8 @@ class DatabaseHelper {
       onUpgrade: _upgradeDB,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
+        // WAL 모드: Kotlin 서비스(LockScreen, PushNotification)와 동시 읽기 허용
+        await db.execute('PRAGMA journal_mode = WAL');
       },
     );
   }
@@ -456,9 +458,11 @@ class DatabaseHelper {
 
   Future<int> updateCard(CardModel card) async {
     final db = await database;
+    final map = card.toDb();
+    map.remove('id'); // id는 WHERE 절에서 사용하므로 SET 절에서 제외
     return await db.update(
       AppConstants.tableCards,
-      card.toDb(),
+      map,
       where: 'id = ?',
       whereArgs: [card.id],
     );
@@ -718,6 +722,7 @@ class DatabaseHelper {
   }
 
   /// 전체 카드 검색 (allCards 모드, 단일 쿼리, 대소문자 무시)
+  /// 결과를 1000개로 제한하여 대량 카드에서 OOM 방지
   Future<List<CardModel>> searchAllCards(String query) async {
     final db = await database;
     final escaped = _escapeLike(query);
@@ -725,7 +730,8 @@ class DatabaseHelper {
     final results = await db.rawQuery(
       "SELECT * FROM ${AppConstants.tableCards} "
       "WHERE question LIKE ? ESCAPE '\\' COLLATE NOCASE OR answer LIKE ? ESCAPE '\\' COLLATE NOCASE "
-      "ORDER BY CASE WHEN question LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, folder_id, sequence ASC",
+      "ORDER BY CASE WHEN question LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, folder_id, sequence ASC "
+      "LIMIT 1000",
       [pattern, pattern, pattern],
     );
     return results.map((m) => CardModel.fromDb(m)).toList();
@@ -1004,6 +1010,7 @@ class DatabaseHelper {
 
   /// 존재하지 않는 이미지/음성 파일 경로를 DB에서 일괄 제거
   /// 앱 시작 시 1회 실행하여 깨진 이미지 참조를 정리
+  /// 배치 처리로 OOM 방지 (대량 카드 대응)
   Future<int> cleanupBrokenImagePaths() async {
     final db = await database;
 
@@ -1031,34 +1038,62 @@ class DatabaseHelper {
       'answer_voice_record_path_9', 'answer_voice_record_path_10',
     ];
 
-    // 경로가 비어있지 않은 카드만 조회 (OR 조건)
     final whereClauses =
         pathColumns.map((c) => "($c IS NOT NULL AND $c != '')").join(' OR ');
-    final rows = await db.query(
-      AppConstants.tableCards,
-      columns: ['id', ...pathColumns],
-      where: whereClauses,
-    );
 
     int cleaned = 0;
-    for (final row in rows) {
-      final updates = <String, dynamic>{};
-      for (final col in pathColumns) {
-        final path = row[col] as String?;
-        if (path == null || path.isEmpty) continue;
-        if (!File(path).existsSync()) {
-          updates[col] = '';
-          cleaned++;
+    const batchSize = 500;
+
+    // ID 기반 페이지네이션: offset 드리프트 방지
+    // 처리된 ID를 추적하여 무한 루프 방지
+    int lastMaxId = 0;
+
+    while (true) {
+      // ID 기반 페이지네이션으로 offset 드리프트 문제 해결
+      final rows = await db.query(
+        AppConstants.tableCards,
+        columns: ['id', ...pathColumns],
+        where: 'id > ? AND ($whereClauses)',
+        whereArgs: [lastMaxId],
+        orderBy: 'id ASC',
+        limit: batchSize,
+      );
+      if (rows.isEmpty) break;
+
+      // 이 배치의 최대 ID 기록 (다음 배치의 시작점)
+      lastMaxId = rows.last['id'] as int;
+
+      // 파일 존재 확인은 비동기로 (UI 스레드 블로킹 방지)
+      final batchUpdates = <int, Map<String, dynamic>>{};
+      for (final row in rows) {
+        final updates = <String, dynamic>{};
+        for (final col in pathColumns) {
+          final path = row[col] as String?;
+          if (path == null || path.isEmpty) continue;
+          if (!await File(path).exists()) {
+            updates[col] = '';
+            cleaned++;
+          }
+        }
+        if (updates.isNotEmpty) {
+          batchUpdates[row['id'] as int] = updates;
         }
       }
-      if (updates.isNotEmpty) {
-        await db.update(
-          AppConstants.tableCards,
-          updates,
-          where: 'id = ?',
-          whereArgs: [row['id']],
-        );
+      // 트랜잭션으로 배치 업데이트 (성능 + 원자성)
+      if (batchUpdates.isNotEmpty) {
+        await db.transaction((txn) async {
+          for (final entry in batchUpdates.entries) {
+            await txn.update(
+              AppConstants.tableCards,
+              entry.value,
+              where: 'id = ?',
+              whereArgs: [entry.key],
+            );
+          }
+        });
       }
+
+      if (rows.length < batchSize) break;
     }
     return cleaned;
   }

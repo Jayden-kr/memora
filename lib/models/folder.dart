@@ -80,7 +80,7 @@ class Folder {
   factory Folder.fromDb(Map<String, dynamic> map) {
     return Folder(
       id: map['id'] as int?,
-      name: map['name'] as String,
+      name: map['name'] as String? ?? '',
       cardCount: map['card_count'] as int? ?? 0,
       folderCount: map['folder_count'] as int? ?? 0,
       sequence: map['sequence'] as int? ?? 0,
@@ -136,12 +136,12 @@ class Folder {
       folderCount: folderCount ?? this.folderCount,
       sequence: sequence ?? this.sequence,
       originalSequence: originalSequence ?? this.originalSequence,
-      modified: modified == _absent ? this.modified : modified as String?,
+      modified: identical(modified, _absent) ? this.modified : modified as String?,
       parent: parent ?? this.parent,
-      parentFolderId: parentFolderId == _absent
+      parentFolderId: identical(parentFolderId, _absent)
           ? this.parentFolderId
           : parentFolderId as int?,
-      parentFolderName: parentFolderName == _absent
+      parentFolderName: identical(parentFolderName, _absent)
           ? this.parentFolderName
           : parentFolderName as String?,
       isSpecialFolder: isSpecialFolder ?? this.isSpecialFolder,

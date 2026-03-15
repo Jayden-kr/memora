@@ -11,6 +11,7 @@ import android.util.Log
 import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 
 class LockScreenService : Service() {
@@ -94,8 +95,17 @@ class LockScreenService : Service() {
         try {
             when (intent?.action) {
                 "SHOW_OVERLAY" -> {
+                    // startForegroundService로 시작된 경우 반드시 startForeground 호출 필요 (Android 12+ 크래시 방지)
+                    val notification = createNotification()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
                     showOverlay()
-                    return START_NOT_STICKY
+                    // START_STICKY 유지: SHOW_OVERLAY가 마지막 onStartCommand일 때도
+                    // OS kill 후 서비스가 자동 재시작되어야 함 (START_NOT_STICKY면 영구 중단)
+                    return START_STICKY
                 }
                 "RECREATE_NOTIFICATION" -> {
                     // 알림이 스와이프로 제거된 경우 → 다시 표시
@@ -196,7 +206,7 @@ class LockScreenService : Service() {
         val recreateIntent = Intent(this, LockScreenService::class.java).apply {
             action = "RECREATE_NOTIFICATION"
         }
-        val deletePendingIntent = PendingIntent.getService(
+        val deletePendingIntent = PendingIntent.getForegroundService(
             this, 100, recreateIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -631,15 +641,18 @@ class LockScreenService : Service() {
 
                 // 좌우 스와이프 → 카드 넘기기
                 if (abs(diffX) > abs(diffY) && abs(diffX) > SWIPE_THRESHOLD && abs(velocityX) > SWIPE_VELOCITY_THRESHOLD) {
-                    if (diffX < 0) {
-                        if (currentIndex < cards.size - 1) {
-                            currentIndex++
-                            updateCardDisplay()
-                        }
-                    } else {
-                        if (currentIndex > 0) {
-                            currentIndex--
-                            updateCardDisplay()
+                    val localCards = cards // @Volatile snapshot
+                    synchronized(this@LockScreenService) {
+                        if (diffX < 0) {
+                            if (currentIndex < localCards.size - 1) {
+                                currentIndex++
+                                updateCardDisplay()
+                            }
+                        } else {
+                            if (currentIndex > 0) {
+                                currentIndex--
+                                updateCardDisplay()
+                            }
                         }
                     }
                     return true
@@ -732,10 +745,10 @@ class LockScreenService : Service() {
         }
     }
 
-    @Volatile private var imageLoadGeneration = 0
+    private val imageLoadGeneration = AtomicInteger(0)
 
     private fun loadImages(container: LinearLayout?, images: List<String>) {
-        val generation = ++imageLoadGeneration // 세대 토큰으로 구 콜백 무효화
+        val generation = imageLoadGeneration.incrementAndGet() // 세대 토큰으로 구 콜백 무효화
         // 이전 Bitmap을 drawable 해제 후 다음 프레임에서 recycle (draw pipeline 완료 보장)
         container?.let { c ->
             val oldBitmaps = mutableListOf<Bitmap>()
@@ -797,7 +810,7 @@ class LockScreenService : Service() {
             // 메인 스레드에서 ImageView에 세팅
             mainHandler.post {
                 // 세대 불일치 (새 loadImages 호출됨) 또는 서비스 파괴 시: bitmap 정리
-                if (generation != imageLoadGeneration || !isServiceActive || container.parent == null) {
+                if (generation != imageLoadGeneration.get() || !isServiceActive || container.parent == null) {
                     bitmaps.forEach { if (!it.isRecycled) it.recycle() }
                     return@post
                 }

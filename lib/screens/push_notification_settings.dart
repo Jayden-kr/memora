@@ -151,9 +151,9 @@ class _PushNotificationSettingsScreenState
 
     setState(() => _saving = true);
     try {
-      // 간격 알람 저장 시 자동으로 알림 활성화
+      // 간격 알람 설정 저장 (현재 _enabled 상태 유지 — 사용자가 OFF로 둔 경우 존중)
       await DatabaseHelper.instance
-          .upsertSetting(_settingNotificationEnabled, 'true');
+          .upsertSetting(_settingNotificationEnabled, _enabled.toString());
 
       final startStr = _formatTime(_intervalStartTime);
       final endStr = _formatTime(_intervalEndTime);
@@ -181,7 +181,7 @@ class _PushNotificationSettingsScreenState
       if (!mounted) return;
       // _loadData 대신 직접 상태 업데이트 (불필요한 rescheduleAll 연쇄 방지)
       setState(() {
-        _enabled = true;
+        // _enabled 상태는 사용자가 설정한 값 유지 (강제 변경 안 함)
         _intervalAlarmId = newId;
         _intervalEnabled = true;
       });
@@ -247,8 +247,7 @@ class _PushNotificationSettingsScreenState
     try {
       final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
       for (final alarm in allAlarms) {
-        // interval 알람은 자체 설정으로 관리 — 글로벌 설정으로 덮어쓰지 않음
-        if ((alarm['mode'] as String? ?? 'fixed') == 'interval') continue;
+        // 모든 알람(fixed + interval)에 폴더/알림음 설정 반영
         await DatabaseHelper.instance.updatePushAlarm(alarm['id'] as int, {
           'folder_id': _selectedFolderId,
           'sound_enabled': _soundEnabled ? 1 : 0,

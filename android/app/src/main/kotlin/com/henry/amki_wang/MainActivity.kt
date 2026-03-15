@@ -143,58 +143,60 @@ class MainActivity : FlutterActivity() {
                                 result.error("ERROR", "sourcePath and fileName required", null)
                                 return@setMethodCallHandler
                             }
-                            try {
-                                val sourceFile = File(sourcePath)
-                                if (!sourceFile.exists()) {
-                                    result.error("ERROR", "Source file not found", null)
-                                    return@setMethodCallHandler
-                                }
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    val values = ContentValues().apply {
-                                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                                        put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
-                                        put(MediaStore.Downloads.IS_PENDING, 1)
+                            // 백그라운드 스레드에서 파일 I/O 수행 (ANR 방지)
+                            Thread {
+                                try {
+                                    val sourceFile = File(sourcePath)
+                                    if (!sourceFile.exists()) {
+                                        runOnUiThread { result.error("ERROR", "Source file not found", null) }
+                                        return@Thread
                                     }
-                                    val uri = contentResolver.insert(
-                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                                    )
-                                    if (uri != null) {
-                                        try {
-                                            val outputStream = contentResolver.openOutputStream(uri)
-                                            if (outputStream != null) {
-                                                outputStream.use { output ->
-                                                    sourceFile.inputStream().use { input ->
-                                                        input.copyTo(output)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        val values = ContentValues().apply {
+                                            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                                            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                                            put(MediaStore.Downloads.IS_PENDING, 1)
+                                        }
+                                        val uri = contentResolver.insert(
+                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                        )
+                                        if (uri != null) {
+                                            try {
+                                                val outputStream = contentResolver.openOutputStream(uri)
+                                                if (outputStream != null) {
+                                                    outputStream.use { output ->
+                                                        sourceFile.inputStream().use { input ->
+                                                            input.copyTo(output)
+                                                        }
                                                     }
+                                                    values.clear()
+                                                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                                                    contentResolver.update(uri, values, null, null)
+                                                    runOnUiThread { result.success(true) }
+                                                } else {
+                                                    contentResolver.delete(uri, null, null)
+                                                    runOnUiThread { result.error("ERROR", "Failed to open output stream", null) }
                                                 }
-                                                values.clear()
-                                                values.put(MediaStore.Downloads.IS_PENDING, 0)
-                                                contentResolver.update(uri, values, null, null)
-                                                result.success(true)
-                                            } else {
+                                            } catch (e: Exception) {
                                                 contentResolver.delete(uri, null, null)
-                                                result.error("ERROR", "Failed to open output stream", null)
+                                                runOnUiThread { result.error("ERROR", e.message, e.stackTraceToString()) }
                                             }
-                                        } catch (e: Exception) {
-                                            // 실패 시 IS_PENDING 고아 레코드 정리
-                                            contentResolver.delete(uri, null, null)
-                                            result.error("ERROR", e.message, e.stackTraceToString())
+                                        } else {
+                                            runOnUiThread { result.error("ERROR", "Failed to create MediaStore entry", null) }
                                         }
                                     } else {
-                                        result.error("ERROR", "Failed to create MediaStore entry", null)
+                                        @Suppress("DEPRECATION")
+                                        val downloadsDir = Environment.getExternalStoragePublicDirectory(
+                                            Environment.DIRECTORY_DOWNLOADS
+                                        )
+                                        val destFile = File(downloadsDir, fileName)
+                                        sourceFile.copyTo(destFile, overwrite = true)
+                                        runOnUiThread { result.success(true) }
                                     }
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    val downloadsDir = Environment.getExternalStoragePublicDirectory(
-                                        Environment.DIRECTORY_DOWNLOADS
-                                    )
-                                    val destFile = File(downloadsDir, fileName)
-                                    sourceFile.copyTo(destFile, overwrite = true)
-                                    result.success(true)
+                                } catch (e: Exception) {
+                                    runOnUiThread { result.error("ERROR", e.message, e.stackTraceToString()) }
                                 }
-                            } catch (e: Exception) {
-                                result.error("ERROR", e.message, e.stackTraceToString())
-                            }
+                            }.start()
                         }
                         else -> result.notImplemented()
                     }
@@ -322,17 +324,49 @@ class MainActivity : FlutterActivity() {
                 val cardId = parts[1].toIntOrNull()
                 if (folderId != null && cardId != null) {
                     Log.d(TAG, "Cold start push payload: $initialPayload")
-                    // Flutter 엔진이 준비될 때까지 약간 딜레이 (Activity 파괴 시 안전)
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        try {
-                            importExportChannel?.invokeMethod("navigateToPushCard", mapOf(
-                                "folderId" to folderId,
-                                "cardId" to cardId
-                            ))
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Cold start nav failed (activity destroyed?): ${e.message}")
+                    // Flutter 엔진이 준비될 때까지 재시도 (저사양 기기에서 1500ms 부족 가능)
+                    val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                    val payload = mapOf("folderId" to folderId, "cardId" to cardId)
+                    var retryCount = 0
+                    val maxRetries = 5
+                    var retryRef: Runnable? = null
+                    val retryRunnable = object : Runnable {
+                        override fun run() {
+                            try {
+                                val channel = importExportChannel
+                                if (channel != null) {
+                                    val self = retryRef ?: return
+                                    channel.invokeMethod("navigateToPushCard", payload, object : MethodChannel.Result {
+                                        override fun success(result: Any?) {
+                                            Log.d(TAG, "Cold start nav succeeded")
+                                        }
+                                        override fun error(code: String, message: String?, details: Any?) {
+                                            Log.w(TAG, "Cold start nav error: $code $message")
+                                        }
+                                        override fun notImplemented() {
+                                            // Dart handler not registered yet → retry
+                                            retryCount++
+                                            if (retryCount < maxRetries) {
+                                                Log.d(TAG, "Cold start nav notImplemented, retry $retryCount/$maxRetries")
+                                                mainHandler.postDelayed(self, 1000)
+                                            } else {
+                                                Log.w(TAG, "Cold start nav: gave up after $maxRetries retries")
+                                            }
+                                        }
+                                    })
+                                } else {
+                                    retryCount++
+                                    if (retryCount < maxRetries) {
+                                        mainHandler.postDelayed(this, 1000)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Cold start nav failed (activity destroyed?): ${e.message}")
+                            }
                         }
-                    }, 1500)
+                    }
+                    retryRef = retryRunnable
+                    mainHandler.postDelayed(retryRunnable, 1500)
                 }
             }
         }

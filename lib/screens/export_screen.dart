@@ -241,6 +241,11 @@ class _ExportScreenState extends State<ExportScreen> {
                               ],
                             ),
                           ),
+                          if (_folders.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Text('내보낼 수 있는 폴더가 없습니다.'),
+                            ),
                           ..._folders.map((folder) {
                             return CheckboxListTile(
                               title: Text(folder.name),

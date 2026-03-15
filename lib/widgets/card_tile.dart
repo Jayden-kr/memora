@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/card.dart';
 
-class CardTile extends StatefulWidget {
+class CardTile extends StatelessWidget {
   final CardModel card;
   final bool isFolded;
   final bool isHidden;
@@ -39,27 +39,22 @@ class CardTile extends StatefulWidget {
   });
 
   @override
-  State<CardTile> createState() => _CardTileState();
-}
-
-class _CardTileState extends State<CardTile> {
-  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final answerVisible = !widget.isHidden || widget.isRevealed;
+    final answerVisible = !isHidden || isRevealed;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       color: null,
-      shape: widget.isHighlighted
+      shape: isHighlighted
           ? RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
               side: BorderSide(color: colorScheme.primary, width: 2.5),
             )
           : null,
       child: InkWell(
-        onTap: widget.onTap,
-        onLongPress: widget.onLongPress,
+        onTap: onTap,
+        onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -67,11 +62,11 @@ class _CardTileState extends State<CardTile> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Card number
-              if (widget.cardNumber != null)
+              if (cardNumber != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Text(
-                    '#${widget.cardNumber}',
+                    '#$cardNumber',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -80,47 +75,48 @@ class _CardTileState extends State<CardTile> {
               // Question row
               Row(
                 children: [
-                  if (widget.isSelectionMode)
+                  if (isSelectionMode)
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: Icon(
-                        widget.isSelected
+                        isSelected
                             ? Icons.check_circle
                             : Icons.circle_outlined,
-                        color: widget.isSelected
+                        color: isSelected
                             ? colorScheme.primary
                             : colorScheme.outline,
                       ),
                     ),
                   Expanded(
                     child: GestureDetector(
-                      onTap: widget.onQuestionTap,
+                      onTap: onQuestionTap,
                       behavior: HitTestBehavior.opaque,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _buildHighlightedText(
-                            widget.card.question.isEmpty &&
-                                    widget.card.questionImagePaths.isEmpty
+                            context,
+                            card.question.isEmpty &&
+                                    card.questionImagePaths.isEmpty
                                 ? '(내용 없음)'
-                                : widget.card.question,
-                            widget.searchQuery,
+                                : card.question,
+                            searchQuery,
                             const TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.bold,
                             ),
-                            maxLines: widget.isFolded ? 1 : null,
-                            overflow: widget.isFolded
+                            maxLines: isFolded ? 1 : null,
+                            overflow: isFolded
                                 ? TextOverflow.ellipsis
                                 : null,
                           ),
-                          if (!widget.isFolded &&
-                              widget.card.questionImagePaths.isNotEmpty)
+                          if (!isFolded &&
+                              card.questionImagePaths.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: Column(
                                 children:
-                                    widget.card.questionImagePaths.map((path) {
+                                    card.questionImagePaths.map((path) {
                                   return Padding(
                                     padding: const EdgeInsets.only(bottom: 6),
                                     child: ClipRRect(
@@ -149,10 +145,10 @@ class _CardTileState extends State<CardTile> {
                       ),
                     ),
                   ),
-                  if (!widget.isSelectionMode && widget.onMenuAction != null)
+                  if (!isSelectionMode && onMenuAction != null)
                     PopupMenuButton<String>(
                       icon: const Icon(Icons.more_vert, size: 20),
-                      onSelected: widget.onMenuAction,
+                      onSelected: onMenuAction,
                       itemBuilder: (ctx) => [
                         const PopupMenuItem(value: 'edit', child: Text('편집')),
                         const PopupMenuItem(value: 'duplicate', child: Text('복제')),
@@ -166,8 +162,8 @@ class _CardTileState extends State<CardTile> {
                 ],
               ),
               // Answer area (collapsible)
-              if (!widget.isFolded)
-                _buildAnswerArea(colorScheme, answerVisible),
+              if (!isFolded)
+                _buildAnswerArea(context, colorScheme, answerVisible),
             ],
           ),
         ),
@@ -176,6 +172,7 @@ class _CardTileState extends State<CardTile> {
   }
 
   Widget _buildHighlightedText(
+    BuildContext context,
     String text,
     String? query,
     TextStyle style, {
@@ -215,26 +212,27 @@ class _CardTileState extends State<CardTile> {
     );
   }
 
-  Widget _buildAnswerArea(ColorScheme colorScheme, bool answerVisible) {
+  Widget _buildAnswerArea(BuildContext context, ColorScheme colorScheme, bool answerVisible) {
     return GestureDetector(
-      onTap: widget.onAnswerTap,
+      onTap: onAnswerTap,
       behavior: HitTestBehavior.opaque,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Divider(height: 16),
           if (answerVisible) ...[
-            if (widget.card.answer.isNotEmpty)
+            if (card.answer.isNotEmpty)
               _buildHighlightedText(
-                widget.card.answer,
-                widget.searchQuery,
+                context,
+                card.answer,
+                searchQuery,
                 const TextStyle(fontSize: 16),
               ),
-            if (widget.card.answerImagePaths.isNotEmpty)
+            if (card.answerImagePaths.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Column(
-                  children: widget.card.answerImagePaths.map((path) {
+                  children: card.answerImagePaths.map((path) {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: ClipRRect(

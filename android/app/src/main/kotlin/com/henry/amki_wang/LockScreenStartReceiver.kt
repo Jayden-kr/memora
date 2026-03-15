@@ -67,6 +67,8 @@ class LockScreenStartReceiver : BroadcastReceiver() {
             Log.i(TAG, "Push notification service restored after boot")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to restore push service: ${e.message}")
+            // 서비스 시작 실패 시 사용자에게 알림 (수동 재시작 유도)
+            showRestoreNotification(context)
         }
     }
 

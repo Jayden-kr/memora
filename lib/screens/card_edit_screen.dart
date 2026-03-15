@@ -298,16 +298,16 @@ class _CardEditScreenState extends State<CardEditScreen> {
           finished: _finished,
           modified: modifiedStr,
         );
-        await DatabaseHelper.instance.updateCard(updated);
-        await _cleanupRemovedImages();
-
         final originalFolderId = widget.existingCard!.folderId;
         if (_currentFolderId != originalFolderId) {
-          await DatabaseHelper.instance
-              .updateFolderCardCount(originalFolderId);
-          await DatabaseHelper.instance
-              .updateFolderCardCount(_currentFolderId);
+          // 폴더 변경은 moveCard로 원자적 처리 (트랜잭션 내 card_count 갱신 포함)
+          await DatabaseHelper.instance.moveCard(widget.existingCard!.id!, _currentFolderId);
+          // 이동 후 나머지 필드 업데이트 (folderId는 이미 moveCard에서 변경됨)
+          await DatabaseHelper.instance.updateCard(updated);
+        } else {
+          await DatabaseHelper.instance.updateCard(updated);
         }
+        await _cleanupRemovedImages();
       } else {
         final uuid =
             '${const Uuid().v4()}-app-${DateTime.now().millisecondsSinceEpoch}';

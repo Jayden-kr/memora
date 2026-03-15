@@ -105,19 +105,19 @@ class _CardListScreenState extends State<CardListScreen> {
 
   Future<void> _initLoad() async {
     if (_isNotificationMode) {
-      // 알림 모드: 설정 + 카드 병렬 로드 (딜레이 최소화)
-      final results = await Future.wait([
-        DatabaseHelper.instance.getAllSettings(),
-        widget.allCards
-            ? DatabaseHelper.instance.getAllCards()
-            : DatabaseHelper.instance.getCardsByFolderIdSorted(
-                widget.folder.id!, _sortOrder),
-      ]);
+      // 알림 모드: 설정 먼저 로드하여 정렬 순서 반영 후 카드 로드
+      final settings = await DatabaseHelper.instance.getAllSettings();
       if (!mounted) return;
-
-      final settings = results[0] as Map<String, String>;
-      final cards = results[1] as List<CardModel>;
       _applySettings(settings);
+
+      final List<CardModel> cards;
+      if (widget.allCards) {
+        cards = await DatabaseHelper.instance.getAllCards();
+      } else {
+        cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
+            widget.folder.id!, _sortOrder);
+      }
+      if (!mounted) return;
 
       final targetId = widget.scrollToCardId!;
       final targetIndex = cards.indexWhere((c) => c.id == targetId);
@@ -216,12 +216,18 @@ class _CardListScreenState extends State<CardListScreen> {
     return firstVisible.index + 1;
   }
 
-  /// 카드 이미지를 백그라운드에서 미리 디코딩 (Glide 방식 프리캐시)
+  // precache 세대 토큰 (새 로드 시 이전 precache 중단)
+  int _precacheGeneration = 0;
+
+  /// 카드 이미지를 백그라운드에서 미리 디코딩 (처음 50장만 — OOM 방지)
   Future<void> _precacheCardImages() async {
-    for (final card in _cards) {
-      if (_disposed || !mounted) return;
+    final generation = ++_precacheGeneration;
+    final limit = _cards.length.clamp(0, 50);
+    for (int i = 0; i < limit; i++) {
+      if (_disposed || !mounted || generation != _precacheGeneration) return;
+      final card = _cards[i];
       for (final path in card.questionImagePaths) {
-        if (_disposed || !mounted) return;
+        if (_disposed || !mounted || generation != _precacheGeneration) return;
         try {
           await precacheImage(
             ResizeImage(FileImage(File(path)), width: 600),
@@ -230,7 +236,7 @@ class _CardListScreenState extends State<CardListScreen> {
         } catch (_) {}
       }
       for (final path in card.answerImagePaths) {
-        if (_disposed || !mounted) return;
+        if (_disposed || !mounted || generation != _precacheGeneration) return;
         try {
           await precacheImage(
             ResizeImage(FileImage(File(path)), width: 600),
@@ -353,6 +359,8 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   void _onSearchChanged(String query) {
+    // suffixIcon(X 버튼) 즉시 표시를 위해 리빌드
+    setState(() {});
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
@@ -539,7 +547,7 @@ class _CardListScreenState extends State<CardListScreen> {
       if (_selectedCardIds.length == _cards.length) {
         _selectedCardIds.clear();
       } else {
-        _selectedCardIds.addAll(_cards.map((c) => c.id!));
+        _selectedCardIds.addAll(_cards.where((c) => c.id != null).map((c) => c.id!));
       }
     });
   }
@@ -577,6 +585,7 @@ class _CardListScreenState extends State<CardListScreen> {
     await DatabaseHelper.instance
         .deleteCardsBatch(_selectedCardIds.toList());
     await _deleteFiles(allFilePaths);
+    if (!mounted) return;
     _exitSelectionMode();
     await _loadCards();
   }
@@ -602,6 +611,7 @@ class _CardListScreenState extends State<CardListScreen> {
     // moveCardsBatch 내부에서 트랜잭션으로 원본/대상 folder card_count 자동 갱신
     await DatabaseHelper.instance
         .moveCardsBatch(_selectedCardIds.toList(), target.id!);
+    if (!mounted) return;
     _exitSelectionMode();
     await _loadCards();
   }
@@ -823,7 +833,7 @@ class _CardListScreenState extends State<CardListScreen> {
             _isDraggingThumb.value = false;
             _scrollLabelTimer?.cancel();
             _scrollLabelTimer = Timer(const Duration(seconds: 1), () {
-              _scrollLabelNotifier.value = 0;
+              if (!_disposed) _scrollLabelNotifier.value = 0;
             });
           },
           child: ValueListenableBuilder<int>(

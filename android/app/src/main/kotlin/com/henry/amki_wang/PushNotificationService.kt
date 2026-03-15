@@ -32,7 +32,7 @@ class PushNotificationService : Service() {
     private var endTotal = 1320    // 22:00
     private var folderId: Int? = null
     private var soundEnabled = true
-    private var tickCount = 0
+    private val tickCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -77,7 +77,7 @@ class PushNotificationService : Service() {
 
         // 설정 읽기
         val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-        intervalMin = intent?.getIntExtra("intervalMin", prefs.getInt("intervalMin", 30)) ?: prefs.getInt("intervalMin", 30)
+        intervalMin = maxOf(5, intent?.getIntExtra("intervalMin", prefs.getInt("intervalMin", 30)) ?: prefs.getInt("intervalMin", 30))
         startTotal = intent?.getIntExtra("startTotal", prefs.getInt("startTotal", 540)) ?: prefs.getInt("startTotal", 540)
         endTotal = intent?.getIntExtra("endTotal", prefs.getInt("endTotal", 1320)) ?: prefs.getInt("endTotal", 1320)
         folderId = intent?.getIntExtra("folderId", prefs.getInt("folderId", -1))?.let { if (it == -1) null else it }
@@ -155,11 +155,28 @@ class PushNotificationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val am = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
-        am?.setExactAndAllowWhileIdle(
-            android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            android.os.SystemClock.elapsedRealtime() + 3000, // 3초 후 재시작
-            pi
-        )
+        // Android 14+: SCHEDULE_EXACT_ALARM 권한 체크 (없으면 inexact로 fallback)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
+            if (am.canScheduleExactAlarms()) {
+                am.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    android.os.SystemClock.elapsedRealtime() + 3000,
+                    pi
+                )
+            } else {
+                am.setAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    android.os.SystemClock.elapsedRealtime() + 3000,
+                    pi
+                )
+            }
+        } else {
+            am?.setExactAndAllowWhileIdle(
+                android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                android.os.SystemClock.elapsedRealtime() + 3000,
+                pi
+            )
+        }
     }
 
     private fun fireIfInRange() {
@@ -188,6 +205,7 @@ class PushNotificationService : Service() {
         var db: SQLiteDatabase? = null
         try {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+            try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용 (별도 :push 프로세스)
 
             // 랜덤 카드 조회
             val where = if (folderId != null) "folder_id = ?" else null
@@ -214,7 +232,8 @@ class PushNotificationService : Service() {
                     putExtra("notification_payload", payload)
                 }
             }
-            val pi = PendingIntent.getActivity(this, tickCount, launchIntent,
+            val currentTick = tickCount.getAndIncrement()
+            val pi = PendingIntent.getActivity(this, currentTick, launchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
             val builder = NotificationCompat.Builder(this, "review_notification_channel")
@@ -242,7 +261,7 @@ class PushNotificationService : Service() {
                         description = "설정한 시간에 랜덤 카드 알림"
                         enableVibration(true)
                     }
-                    nm.createNotificationChannel(channel)
+                    nm?.createNotificationChannel(channel)
                 }
             }
 
@@ -254,7 +273,7 @@ class PushNotificationService : Service() {
                     return
                 }
             }
-            nm?.notify(CARD_NOTIF_BASE + (tickCount++ % 500), builder.build())
+            nm?.notify(CARD_NOTIF_BASE + (currentTick % 500), builder.build())
             Log.d(TAG, "알림 표시 완료: $question")
         } catch (e: Exception) {
             Log.e(TAG, "알림 표시 실패", e)

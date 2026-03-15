@@ -272,9 +272,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return;
     }
 
-    final maxSeq = await DatabaseHelper.instance.getMaxFolderSequence();
-    final folder = Folder(name: name, sequence: maxSeq + 1);
-    await DatabaseHelper.instance.insertFolder(folder);
+    try {
+      final maxSeq = await DatabaseHelper.instance.getMaxFolderSequence();
+      final folder = Folder(name: name, sequence: maxSeq + 1);
+      await DatabaseHelper.instance.insertFolder(folder);
+    } catch (e) {
+      // UNIQUE 제약 위반 (빠른 연속 생성 등)
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('폴더 생성 실패: 이미 "$name" 폴더가 있습니다.')),
+      );
+      return;
+    }
     await _loadFolders();
     } finally {
       controller.dispose();
@@ -557,7 +566,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (mounted) await _loadFolders(); // 옵티미스틱 UI 롤백
     } finally {
       _isDeleting = false;
-      _selectedFolderIds.clear();
+      if (mounted) {
+        setState(() => _selectedFolderIds.clear());
+      } else {
+        _selectedFolderIds.clear();
+      }
     }
 
     if (!mounted) return;
@@ -706,8 +719,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                             },
                           ),
             if (_isPickingFile) ...[
-              const ModalBarrier(
-                  dismissible: false, color: Colors.black26),
+              ModalBarrier(
+                  dismissible: false,
+                  color: Theme.of(context).colorScheme.scrim.withValues(alpha: 0.32)),
               const Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

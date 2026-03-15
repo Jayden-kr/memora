@@ -15,6 +15,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.initialize();
 
+  // 이전 실행에서 남은 stale 상태 정리 (앱 강제 종료 시 foreground 알림 잔류 방지)
+  ImportExportController.instance.cleanupStaleState();
+
   // 저장된 테마 모드 로드
   try {
     final settings = await DatabaseHelper.instance.getAllSettings();

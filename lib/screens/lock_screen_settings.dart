@@ -152,6 +152,18 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _onEnabledChanged(bool value) async {
+    if (value && _selectedFolderIds.isEmpty && _folders.isNotEmpty) {
+      // 폴더 미선택 시 첫 번째 폴더 자동 선택
+      _selectedFolderIds.add(_folders.first.id!);
+    }
+    if (value && _selectedFolderIds.isEmpty) {
+      // 폴더가 아예 없으면 활성화 불가
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('폴더를 먼저 만들어주세요.')),
+      );
+      return;
+    }
     setState(() => _enabled = value);
     if (value) {
       await _checkOverlayAndStart();

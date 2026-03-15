@@ -63,7 +63,12 @@ class MemkImportService {
   /// .memk 경로에서 파일명만 추출 (/ 및 \ 모두 처리)
   static String extractFileName(String memkPath) {
     if (memkPath.isEmpty) return '';
-    return memkPath.split('/').last.split('\\').last;
+    final name = memkPath.split('/').last.split('\\').last;
+    // 경로 순회 공격 방지 (.., /, \ 포함 파일명 거부)
+    if (name.contains('..') || name.contains('/') || name.contains('\\')) {
+      return '';
+    }
+    return name;
   }
 
   /// 로컬 이미지 경로 생성
@@ -205,6 +210,7 @@ class MemkImportService {
               modified: folder.modified,
               parent: false, // parentFolderId 리매핑 미지원이므로 리셋
               isSpecialFolder: folder.isSpecialFolder,
+              isBundle: folder.isBundle,
             ),
           );
           folderIdMap[memkFolderId] = newId;
@@ -590,7 +596,8 @@ class MemkImportService {
         final dataStart = offset + 30 + localFnameLen + localExtraLen;
         if (dataStart < offset) continue; // 정수 오버플로우 감지
         final compSize = t.compSize;
-        if (compSize < 0 || dataStart + compSize > zipBytes.length) {
+        // 단일 파일 100MB 제한 (악의적 ZIP 대응)
+        if (compSize > 100 * 1024 * 1024 || dataStart + compSize > zipBytes.length) {
           debugPrint('[IMPORT] data out of bounds for $fileName: start=$dataStart size=$compSize total=${zipBytes.length}');
           continue;
         }
