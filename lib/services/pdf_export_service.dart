@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -9,11 +10,15 @@ import '../database/database_helper.dart';
 
 /// PDF 내보내기 진행 상태
 class PdfExportProgress {
+  final int currentCards;
+  final int totalCards;
   final int currentFolders;
   final int totalFolders;
   final String? message;
 
   const PdfExportProgress({
+    this.currentCards = 0,
+    this.totalCards = 0,
     this.currentFolders = 0,
     this.totalFolders = 0,
     this.message,
@@ -36,20 +41,6 @@ class PdfExportService {
     return _koreanFont!;
   }
 
-  /// 이미지 파일을 비동기로 미리 읽어 캐싱
-  Future<Map<String, Uint8List>> _preloadImages(List<String> paths) async {
-    final cache = <String, Uint8List>{};
-    for (final path in paths) {
-      try {
-        final file = File(path);
-        if (await file.exists()) {
-          cache[path] = await file.readAsBytes();
-        }
-      } catch (_) {}
-    }
-    return cache;
-  }
-
   /// 선택된 폴더의 카드를 PDF로 내보내기
   Future<void> exportPdf({
     required String outputPath,
@@ -61,36 +52,38 @@ class PdfExportService {
 
     final doc = pw.Document();
     int processedFolders = 0;
+    int processedCards = 0;
+    int grandTotalCards = 0;
 
-    const pdfBatchSize = 100;
+    // 전체 카드 수 미리 계산 (진행률용)
+    for (final folderId in folderIds) {
+      grandTotalCards += await db.countCardsByFolderId(folderId);
+    }
+    if (grandTotalCards == 0) grandTotalCards = 1; // division by zero 방지
+
+    const batchSize = 20;
 
     for (final folderId in folderIds) {
       final folder = await db.getFolderById(folderId);
       if (folder == null) continue;
 
       final totalCards = await db.countCardsByFolderId(folderId);
-
       processedFolders++;
-      onProgress(PdfExportProgress(
-        currentFolders: processedFolders,
-        totalFolders: folderIds.length,
-        message: '${folder.name} 처리 중... ($totalCards장)',
-      ));
 
-      // 배치 단위로 카드 로드 + 이미지 캐싱 → 위젯 리스트 수집 (메모리 절약)
-      // 폴더당 단일 MultiPage → 페이지 번호가 연속으로 표시됨
-      final allCardWidgets = <pw.Widget>[];
-      for (int batchStart = 0;
-          batchStart < totalCards;
-          batchStart += pdfBatchSize) {
+      if (totalCards == 0) continue;
+
+      int batchStart = 0;
+      bool isFirstBatch = true;
+
+      while (batchStart < totalCards) {
         final batch = await db.getCardsByFolderId(
           folderId,
-          limit: pdfBatchSize,
+          limit: batchSize,
           offset: batchStart,
         );
         if (batch.isEmpty) break;
 
-        // 이 배치의 이미지만 캐싱
+        // 이 배치의 이미지만 로드 (대용량 이미지 제한: 500KB)
         final batchImagePaths = <String>[];
         for (final card in batch) {
           batchImagePaths.addAll(card.questionImagePaths);
@@ -98,8 +91,9 @@ class PdfExportService {
         }
         final imageCache = await _preloadImages(batchImagePaths);
 
+        final batchWidgets = <pw.Widget>[];
         for (final card in batch) {
-          allCardWidgets.add(_buildCardWidget(
+          batchWidgets.add(_buildCardWidget(
             card.question,
             card.answer,
             card.questionImagePaths,
@@ -107,80 +101,149 @@ class PdfExportService {
             font,
             imageCache,
           ));
+          processedCards++;
         }
-        // imageCache는 스코프를 벗어나며 GC 대상
-        // (MemoryImage 참조는 위젯 트리에 유지됨)
-      }
 
-      if (allCardWidgets.isEmpty) continue;
+        // 카드 단위 진행률 보고
+        onProgress(PdfExportProgress(
+          currentCards: processedCards,
+          totalCards: grandTotalCards,
+          currentFolders: processedFolders,
+          totalFolders: folderIds.length,
+          message: '${folder.name} ($processedCards/$grandTotalCards)',
+        ));
 
-      doc.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a4,
-          header: (context) => pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
-              if (context.pageNumber == 1) ...[
-                pw.Text(
-                  folder.name,
-                  style: pw.TextStyle(font: font, fontSize: 24,
-                      fontWeight: pw.FontWeight.bold),
+        final showHeader = isFirstBatch;
+        final folderName = folder.name;
+
+        doc.addPage(
+          pw.MultiPage(
+            pageFormat: PdfPageFormat.a4,
+            header: showHeader
+                ? (context) => pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        if (context.pageNumber == 1) ...[
+                          pw.Text(
+                            folderName,
+                            style: pw.TextStyle(
+                              font: font,
+                              fontSize: 24,
+                              fontWeight: pw.FontWeight.bold,
+                            ),
+                          ),
+                          pw.SizedBox(height: 4),
+                          pw.Text(
+                            '카드 $totalCards장',
+                            style: pw.TextStyle(
+                              font: font,
+                              fontSize: 12,
+                              color: PdfColors.grey600,
+                            ),
+                          ),
+                          pw.Divider(),
+                          pw.SizedBox(height: 8),
+                        ],
+                      ],
+                    )
+                : null,
+            build: (context) => batchWidgets,
+            footer: (context) => pw.Container(
+              alignment: pw.Alignment.centerRight,
+              child: pw.Text(
+                '${context.pageNumber}',
+                style: pw.TextStyle(
+                  font: font,
+                  fontSize: 9,
+                  color: PdfColors.grey500,
                 ),
-                pw.SizedBox(height: 4),
-                pw.Text(
-                  '카드 $totalCards장',
-                  style: pw.TextStyle(font: font, fontSize: 12,
-                      color: PdfColors.grey600),
-                ),
-                pw.Divider(),
-                pw.SizedBox(height: 8),
-              ],
-            ],
-          ),
-          build: (context) => allCardWidgets,
-          footer: (context) => pw.Container(
-            alignment: pw.Alignment.centerRight,
-            child: pw.Text(
-              '${context.pageNumber} / ${context.pagesCount}',
-              style: pw.TextStyle(font: font, fontSize: 9,
-                  color: PdfColors.grey500),
+              ),
             ),
           ),
-        ),
-      );
+        );
+
+        isFirstBatch = false;
+        batchStart += batchSize;
+        await Future.delayed(Duration.zero); // yield to event loop
+      }
     }
 
+    onProgress(PdfExportProgress(
+      currentCards: grandTotalCards,
+      totalCards: grandTotalCards,
+      currentFolders: folderIds.length,
+      totalFolders: folderIds.length,
+      message: 'PDF 파일 저장 중...',
+    ));
+
     final bytes = await doc.save();
-    await File(outputPath).writeAsBytes(bytes);
+    await File(outputPath).writeAsBytes(bytes, flush: true);
 
     onProgress(PdfExportProgress(
+      currentCards: grandTotalCards,
+      totalCards: grandTotalCards,
       currentFolders: folderIds.length,
       totalFolders: folderIds.length,
       message: 'PDF 생성 완료',
     ));
   }
 
+  /// 이미지를 PDF 표시 크기(70px)로 축소하여 로드 — OOM 방지
+  /// dart:ui 하드웨어 디코더로 축소 후 PNG 인코딩 → 원본 대비 ~1/20 크기
+  Future<Map<String, Uint8List>> _preloadImages(List<String> paths) async {
+    final cache = <String, Uint8List>{};
+    for (final path in paths) {
+      try {
+        final file = File(path);
+        if (!await file.exists()) continue;
+        final rawBytes = await file.readAsBytes();
+        final compressed = await _compressForPdf(rawBytes);
+        if (compressed != null) {
+          cache[path] = compressed;
+        }
+      } catch (_) {}
+    }
+    return cache;
+  }
+
+  /// dart:ui로 이미지를 70px 썸네일 PNG로 변환
+  Future<Uint8List?> _compressForPdf(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: 70,
+      );
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final byteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      image.dispose();
+      codec.dispose();
+      if (byteData == null) return null;
+      return byteData.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
+  }
+
   pw.Widget _buildImageRow(
     List<String> paths,
-    pw.Font font,
     Map<String, Uint8List> imageCache,
   ) {
-    return pw.Wrap(
-      spacing: 6,
-      runSpacing: 6,
-      children: paths.map((path) {
-        final bytes = imageCache[path];
-        if (bytes != null) {
-          final image = pw.MemoryImage(bytes);
+    final images = paths
+        .where((p) => imageCache.containsKey(p))
+        .map((path) {
+          final image = pw.MemoryImage(imageCache[path]!);
           return pw.Container(
-            width: 80,
-            height: 80,
+            width: 70,
+            height: 70,
             child: pw.Image(image, fit: pw.BoxFit.contain),
           );
-        }
-        return pw.SizedBox.shrink();
-      }).toList(),
-    );
+        })
+        .toList();
+    if (images.isEmpty) return pw.SizedBox.shrink();
+    return pw.Wrap(spacing: 6, runSpacing: 6, children: images);
   }
 
   pw.Widget _buildCardWidget(
@@ -203,13 +266,16 @@ class PdfExportService {
         children: [
           pw.Text(
             question.isEmpty ? '(내용 없음)' : question,
-            style: pw.TextStyle(font: font, fontSize: 12,
-                fontWeight: pw.FontWeight.bold),
+            style: pw.TextStyle(
+              font: font,
+              fontSize: 12,
+              fontWeight: pw.FontWeight.bold,
+            ),
           ),
           if (questionImagePaths.isNotEmpty)
             pw.Padding(
               padding: const pw.EdgeInsets.only(top: 4),
-              child: _buildImageRow(questionImagePaths, font, imageCache),
+              child: _buildImageRow(questionImagePaths, imageCache),
             ),
           pw.SizedBox(height: 4),
           pw.Divider(color: PdfColors.grey200),
@@ -222,7 +288,7 @@ class PdfExportService {
           if (answerImagePaths.isNotEmpty)
             pw.Padding(
               padding: const pw.EdgeInsets.only(top: 4),
-              child: _buildImageRow(answerImagePaths, font, imageCache),
+              child: _buildImageRow(answerImagePaths, imageCache),
             ),
         ],
       ),

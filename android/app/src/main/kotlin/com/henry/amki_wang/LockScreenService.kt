@@ -97,6 +97,20 @@ class LockScreenService : Service() {
                     showOverlay()
                     return START_NOT_STICKY
                 }
+                "RECREATE_NOTIFICATION" -> {
+                    // 알림이 스와이프로 제거된 경우 → 다시 표시
+                    val notification = createNotification()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                    return START_STICKY
+                }
                 "STOP_SERVICE" -> {
                     setServiceRunning(false)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -175,13 +189,26 @@ class LockScreenService : Service() {
             this, 0, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        // 알림이 스와이프로 제거되면 서비스가 다시 알림을 생성
+        val recreateIntent = Intent(this, LockScreenService::class.java).apply {
+            action = "RECREATE_NOTIFICATION"
+        }
+        val deletePendingIntent = PendingIntent.getService(
+            this, 100, recreateIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")
             .setContentText("잠금화면 학습 활성화")
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
+            .setDeleteIntent(deletePendingIntent)
             .setOngoing(true)
             .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 

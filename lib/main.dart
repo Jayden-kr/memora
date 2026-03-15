@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import 'app.dart';
 import 'database/database_helper.dart';
 import 'screens/card_list_screen.dart';
+import 'screens/export_screen.dart';
 import 'screens/import_screen.dart';
+import 'services/import_export_controller.dart';
 import 'services/lock_screen_service.dart';
 import 'services/notification_service.dart';
 import 'utils/constants.dart';
@@ -48,6 +50,15 @@ void main() async {
   importExportChannel.setMethodCallHandler((call) async {
     if (call.method == 'navigateToImport') {
       _handleImportNotificationTap();
+    } else if (call.method == 'navigateToExport') {
+      _handleExportNotificationTap();
+    } else if (call.method == 'pdfProgress') {
+      final args = call.arguments as Map;
+      ImportExportController.instance.handleNativePdfProgress(
+        args['current'] as int,
+        args['total'] as int,
+        args['message'] as String,
+      );
     }
   });
 
@@ -120,6 +131,18 @@ void _handleImportNotificationTap() {
 
   nav.push(MaterialPageRoute(
     builder: (_) => const ImportScreen(filePath: '', progressOnly: true),
+  ));
+}
+
+void _handleExportNotificationTap() {
+  // ExportScreen이 이미 열려 있으면 중복 push 방지
+  if (ExportScreen.isOpen) return;
+
+  final nav = navigatorKey.currentState;
+  if (nav == null) return;
+
+  nav.push(MaterialPageRoute(
+    builder: (_) => const ExportScreen(progressOnly: true),
   ));
 }
 

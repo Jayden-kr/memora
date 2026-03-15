@@ -198,27 +198,33 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           const Divider(),
 
           // 아래 설정은 항상 표시 (OFF 상태에서도 설정 가능)
-          // 폴더 선택
+          // 폴더 선택 (단일 선택)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: Text('폴더 선택',
                 style: Theme.of(context).textTheme.titleSmall),
           ),
-          ..._folders.map((folder) => CheckboxListTile(
-                title: Text(folder.name),
-                subtitle: Text('${folder.cardCount}장'),
-                value: _selectedFolderIds.contains(folder.id),
-                onChanged: (checked) {
-                  setState(() {
-                    if (checked == true) {
-                      _selectedFolderIds.add(folder.id!);
-                    } else {
-                      _selectedFolderIds.remove(folder.id);
-                    }
-                  });
-                  _onSettingChanged();
-                },
-              )),
+          RadioGroup<int>(
+            groupValue: _selectedFolderIds.length == 1
+                ? _selectedFolderIds.first
+                : -1,
+            onChanged: (id) {
+              if (id == null || id == -1) return;
+              setState(() {
+                _selectedFolderIds
+                  ..clear()
+                  ..add(id);
+              });
+              _onSettingChanged();
+            },
+            child: Column(
+              children: _folders.map((folder) => RadioListTile<int>(
+                    title: Text(folder.name),
+                    subtitle: Text('${folder.cardCount}장'),
+                    value: folder.id!,
+                  )).toList(),
+            ),
+          ),
           const Divider(),
 
           // 카드 순서

@@ -30,12 +30,16 @@ class ImportExportService : Service() {
             }
         }
 
-        fun updateProgress(context: Context, title: String, message: String, progress: Int, max: Int) {
+        fun updateProgress(context: Context, title: String, message: String, progress: Int, max: Int, type: String = "import") {
             val appContext = context.applicationContext
             ensureChannel(appContext)
             val intent = Intent(appContext, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra("navigate_to_import", true)
+                if (type == "import") {
+                    putExtra("navigate_to_import", true)
+                } else if (type == "export") {
+                    putExtra("navigate_to_export", true)
+                }
             }
             val pendingIntent = PendingIntent.getActivity(
                 appContext, 0, intent,
@@ -57,7 +61,7 @@ class ImportExportService : Service() {
             manager.notify(PROGRESS_NOTIFICATION_ID, notification)
         }
 
-        fun showComplete(context: Context, title: String, message: String) {
+        fun showComplete(context: Context, title: String, message: String, type: String = "import") {
             val appContext = context.applicationContext
             ensureChannel(appContext)
             // 진행 알림 제거 (이중 알림 방지)
@@ -65,6 +69,11 @@ class ImportExportService : Service() {
             mgr?.cancel(PROGRESS_NOTIFICATION_ID)
             val intent = Intent(appContext, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (type == "import") {
+                    putExtra("navigate_to_import", true)
+                } else if (type == "export") {
+                    putExtra("navigate_to_export", true)
+                }
             }
             val pendingIntent = PendingIntent.getActivity(
                 appContext, 1, intent,
@@ -119,11 +128,16 @@ class ImportExportService : Service() {
         }
 
         val title = intent?.getStringExtra("title") ?: "처리 중..."
+        val type = intent?.getStringExtra("type") ?: "import"
         val pi = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).apply {
                 this.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra("navigate_to_import", true)
+                if (type == "import") {
+                    putExtra("navigate_to_import", true)
+                } else if (type == "export") {
+                    putExtra("navigate_to_export", true)
+                }
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )

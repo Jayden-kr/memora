@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../database/database_helper.dart';
@@ -582,9 +583,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_isSelecting,
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _clearSelection();
+        if (didPop) return;
+        if (_isSelecting) {
+          _clearSelection();
+          return;
+        }
+        // Export/Import 진행 중이면 앱을 종료하지 않고 백그라운드로 보냄
+        if (ImportExportController.instance.isRunning) {
+          const MethodChannel('com.henry.amki_wang/import_export')
+              .invokeMethod('moveToBackground');
+          return;
+        }
+        // 기본: 앱 종료
+        SystemNavigator.pop();
       },
       child: Scaffold(
         appBar: _isSelecting

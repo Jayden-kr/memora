@@ -121,6 +121,8 @@ class NotificationService {
     final event = _parsePayload(payload);
     if (event != null) {
       debugPrint('[NOTIF] nav event folder=${event.folderId} card=${event.cardId}');
+      // 알림 탭 시 다음 알림에 새로운 카드가 표시되도록 전체 재스케줄링
+      rescheduleAll();
       if (onNavigate != null) {
         debugPrint('[NOTIF] calling onNavigate callback');
         onNavigate!(event);
@@ -320,7 +322,7 @@ class NotificationService {
           content.body,
           scheduled,
           notificationDetails,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
           matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
           payload: content.payload,
         );
@@ -397,9 +399,15 @@ class NotificationService {
       slots.add((hour: m ~/ 60, minute: m % 60));
     }
 
-    // Android exact alarm 제한(~500개) 초과 방지: 슬롯 최대 100개
-    const maxSlots = 100;
+    // Android exact alarm 제한(~500개) 초과 방지
+    // 요일별 스케줄 시 슬롯 × 요일 수 만큼 알림이 생성되므로 총합 기준으로 제한
+    final dayCount = (days == null || days.isEmpty || days.length == 7)
+        ? 1
+        : days.length;
+    final maxSlots = 400 ~/ dayCount; // 총 알림 수 ≤ 400
     if (slots.length > maxSlots) {
+      debugPrint('[NOTIF] Interval slots trimmed: ${slots.length} → $maxSlots '
+          '(days=$dayCount, total would be ${slots.length * dayCount})');
       slots.removeRange(maxSlots, slots.length);
     }
 
@@ -433,7 +441,7 @@ class NotificationService {
         final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + 8;
         await _plugin.zonedSchedule(
           notifId, content.title, content.body, scheduled, notificationDetails,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
           matchDateTimeComponents: DateTimeComponents.time,
           payload: content.payload,
         );
@@ -447,7 +455,7 @@ class NotificationService {
           final notifId = _intervalBase + _safeId(id) * _intervalMultiplier + i * _intervalDayMultiplier + day; // day 0-6, all-days=8 → 충돌 없음
           await _plugin.zonedSchedule(
             notifId, content.title, content.body, scheduled, notificationDetails,
-            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
             payload: content.payload,
           );

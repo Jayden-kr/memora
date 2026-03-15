@@ -1,7 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
+import '../database/database_helper.dart';
+import '../models/folder.dart';
 import '../services/memk_import_service.dart';
 import '../services/memk_export_service.dart';
 
@@ -22,11 +27,43 @@ class ImportExportController {
   // 동시 실행 방지 락
   Completer<void>? _operationLock;
 
-  // 상태
+  // 공통 상태
   bool isRunning = false;
   String? currentOperation; // 'import' or 'export'
+
+  // Import 상태
   ImportResult? lastImportResult;
   ImportProgress currentImportProgress = const ImportProgress();
+
+  // Export 상태
+  String exportProgressMessage = '';
+  double exportProgressValue = 0.0;
+  List<String>? lastExportFileNames;
+  List<String>? lastExportFilePaths;
+  Object? lastExportError;
+
+  void clearExportResult() {
+    lastExportFileNames = null;
+    lastExportFilePaths = null;
+    lastExportError = null;
+  }
+
+  /// 진행 중인 작업을 강제 취소 (OOM/stuck 복구용)
+  void forceCancel() {
+    if (!isRunning) return;
+    isRunning = false;
+    currentOperation = null;
+    _operationLock?.complete();
+    clearExportResult();
+    _cancel();
+    _notify();
+  }
+
+  /// 앱 시작 시 잔여 상태 정리
+  void cleanupStaleState() {
+    if (isRunning) forceCancel();
+    _cancel(); // 잔여 foreground service 알림 제거
+  }
 
   // 리스너 (UI 갱신용)
   final List<void Function()> _listeners = [];
@@ -41,29 +78,40 @@ class ImportExportController {
 
   // ─── Foreground Service 제어 ───
 
-  Future<void> _startService(String title) async {
+  Future<void> _startService(String title, {String type = 'import'}) async {
     try {
-      await _channel.invokeMethod('startService', {'title': title});
+      await _channel.invokeMethod('startService', {
+        'title': title,
+        'type': type,
+      });
     } catch (_) {}
   }
 
   Future<void> _updateProgress(
-      String title, String message, int progress, int max) async {
+    String title,
+    String message,
+    int progress,
+    int max, {
+    String type = 'import',
+  }) async {
     try {
       await _channel.invokeMethod('updateProgress', {
         'title': title,
         'message': message,
         'progress': progress,
         'max': max,
+        'type': type,
       });
     } catch (_) {}
   }
 
-  Future<void> _complete(String title, String message) async {
+  Future<void> _complete(String title, String message,
+      {String type = 'import'}) async {
     try {
       await _channel.invokeMethod('complete', {
         'title': title,
         'message': message,
+        'type': type,
       });
     } catch (_) {}
   }
@@ -147,51 +195,242 @@ class ImportExportController {
     }
   }
 
-  // ─── Export ───
+  // ─── Export (Memk per folder) ───
 
-  Future<void> startExport({
-    required String outputPath,
-    List<int>? folderIds,
+  static String _sanitizeFileName(String name) {
+    final sanitized =
+        name.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    return sanitized.isEmpty ? 'export' : sanitized;
+  }
+
+  Future<void> startMemkPerFolderExport({
+    required List<Folder> selectedFolders,
+    required String exportDirPath,
   }) async {
     if (_operationLock != null && !_operationLock!.isCompleted) return;
     _operationLock = Completer<void>();
 
     isRunning = true;
     currentOperation = 'export';
+    clearExportResult();
+    exportProgressMessage = '준비 중...';
+    exportProgressValue = 0.0;
     _notify();
 
-    await _startService('Export 진행 중');
+    await _startService('Export 진행 중', type: 'export');
 
     try {
-      await _exportService.exportMemk(
-        outputPath: outputPath,
-        folderIds: folderIds,
-        onProgress: (progress) {
-          _notify();
+      final totalFolders = selectedFolders.length;
+      final createdFiles = <String>[];
+      final createdFileNames = <String>[];
 
-          final total = progress.total > 0 ? progress.total : 1;
-          _updateProgress(
-            'Export 진행 중',
-            progress.message ?? '처리 중...',
-            progress.current,
-            total,
+      for (int i = 0; i < selectedFolders.length; i++) {
+        final folder = selectedFolders[i];
+        final folderProgressBase = i / totalFolders;
+        final folderWeight = 1.0 / totalFolders;
+
+        final safeName = _sanitizeFileName(folder.name);
+        final fileName = '$safeName.memk';
+        final outputPath = p.join(exportDirPath, fileName);
+
+        // 같은 이름 파일이 있으면 삭제 후 덮어쓰기
+        final existing = File(outputPath);
+        if (existing.existsSync()) {
+          try { existing.deleteSync(); } catch (_) {}
+        }
+
+        await _exportService.exportMemk(
+          outputPath: outputPath,
+          folderIds: [folder.id!],
+          onProgress: (progress) {
+            double subProgress;
+            switch (progress.phase) {
+              case 'cards':
+                final total = progress.total > 0 ? progress.total : 1;
+                subProgress = 0.05 + (progress.current / total) * 0.65;
+              case 'images':
+                final total = progress.total > 0 ? progress.total : 1;
+                subProgress = 0.70 + (progress.current / total) * 0.20;
+              case 'zipping':
+                subProgress = 0.92;
+              case 'done':
+                subProgress = 1.0;
+              default:
+                subProgress = 0.02;
+            }
+            final overallProgress =
+                (folderProgressBase + subProgress * folderWeight)
+                    .clamp(0.0, 1.0);
+            final msg =
+                '${folder.name} (${i + 1}/$totalFolders) - ${progress.message ?? "처리 중..."}';
+
+            exportProgressValue = overallProgress;
+            exportProgressMessage = msg;
+            _notify();
+
+            _updateProgress(
+              'Export 진행 중',
+              msg,
+              (overallProgress * 100).round(),
+              100,
+              type: 'export',
+            );
+          },
+        );
+
+        // exported_files DB 기록
+        final file = File(outputPath);
+        final fileSize = await file.length();
+        try {
+          await DatabaseHelper.instance.insertExportedFile(
+            fileName: fileName,
+            filePath: outputPath,
+            fileSize: fileSize,
+            fileType: 'memk',
           );
-        },
-      );
+        } catch (dbErr) {
+          debugPrint('[EXPORT] DB 기록 실패: $dbErr');
+        }
 
+        createdFiles.add(outputPath);
+        createdFileNames.add(fileName);
+      }
+
+      lastExportFileNames = createdFileNames;
+      lastExportFilePaths = createdFiles;
       isRunning = false;
       currentOperation = null;
       _operationLock?.complete();
       _notify();
 
-      await _complete('Export 완료', '파일이 생성되었습니다.');
+      await _complete(
+        'Export 완료',
+        '${createdFileNames.length}개 파일 생성',
+        type: 'export',
+      );
     } catch (e) {
+      lastExportError = e;
       isRunning = false;
       currentOperation = null;
       _operationLock?.complete();
       _notify();
       await _cancel();
-      rethrow;
+    }
+  }
+
+  // ─── Export (PDF per folder — Android 네이티브) ───
+
+  /// 네이티브 PDF 진행률 수신 (main.dart에서 호출)
+  void handleNativePdfProgress(int current, int total, String message) {
+    final t = total > 0 ? total : 1;
+    // 현재 폴더의 진행률을 전체 진행률에 반영
+    final sub = current / t;
+    final overall =
+        (_pdfFolderBase + sub * _pdfFolderWeight).clamp(0.0, 1.0);
+    final msg = '$_pdfCurrentFolderName (${_pdfFolderIndex + 1}/$_pdfTotalFolders) - $message';
+
+    exportProgressValue = overall;
+    exportProgressMessage = msg;
+    _notify();
+
+    _updateProgress(
+      'Export 진행 중', msg,
+      (overall * 100).round(), 100,
+      type: 'export',
+    );
+  }
+
+  // 네이티브 PDF 진행률 계산용 임시 상태
+  double _pdfFolderBase = 0;
+  double _pdfFolderWeight = 1;
+  int _pdfFolderIndex = 0;
+  int _pdfTotalFolders = 1;
+  String _pdfCurrentFolderName = '';
+
+  Future<void> startPdfExport({
+    required List<Folder> selectedFolders,
+    required String exportDirPath,
+  }) async {
+    if (_operationLock != null && !_operationLock!.isCompleted) return;
+    _operationLock = Completer<void>();
+
+    isRunning = true;
+    currentOperation = 'export';
+    clearExportResult();
+    exportProgressMessage = '준비 중...';
+    exportProgressValue = 0.0;
+    _notify();
+
+    await _startService('Export 진행 중', type: 'export');
+
+    try {
+      final totalFolders = selectedFolders.length;
+      _pdfTotalFolders = totalFolders;
+      final createdFiles = <String>[];
+      final createdFileNames = <String>[];
+
+      for (int i = 0; i < selectedFolders.length; i++) {
+        final folder = selectedFolders[i];
+        _pdfFolderBase = i / totalFolders;
+        _pdfFolderWeight = 1.0 / totalFolders;
+        _pdfFolderIndex = i;
+        _pdfCurrentFolderName = folder.name;
+
+        final safeName = _sanitizeFileName(folder.name);
+        final fileName = '$safeName.pdf';
+        final outputPath = p.join(exportDirPath, fileName);
+
+        // 같은 이름 파일이 있으면 삭제 후 덮어쓰기
+        final existing = File(outputPath);
+        if (existing.existsSync()) {
+          try { existing.deleteSync(); } catch (_) {}
+        }
+
+        // Android 네이티브 PDF 생성 (Dart VM 힙 사용 안 함)
+        await _channel.invokeMethod('generatePdf', {
+          'outputPath': outputPath,
+          'folderId': folder.id!,
+          'folderIndex': i,
+          'totalFolders': totalFolders,
+        });
+
+        // exported_files DB 기록
+        final file = File(outputPath);
+        final fileSize = await file.length();
+        try {
+          await DatabaseHelper.instance.insertExportedFile(
+            fileName: fileName,
+            filePath: outputPath,
+            fileSize: fileSize,
+            fileType: 'pdf',
+          );
+        } catch (dbErr) {
+          debugPrint('[EXPORT] DB 기록 실패: $dbErr');
+        }
+
+        createdFiles.add(outputPath);
+        createdFileNames.add(fileName);
+      }
+
+      lastExportFileNames = createdFileNames;
+      lastExportFilePaths = createdFiles;
+      isRunning = false;
+      currentOperation = null;
+      _operationLock?.complete();
+      _notify();
+
+      await _complete(
+        'Export 완료',
+        '${createdFileNames.length}개 파일 생성',
+        type: 'export',
+      );
+    } catch (e) {
+      lastExportError = e;
+      isRunning = false;
+      currentOperation = null;
+      _operationLock?.complete();
+      _notify();
+      await _cancel();
     }
   }
 }

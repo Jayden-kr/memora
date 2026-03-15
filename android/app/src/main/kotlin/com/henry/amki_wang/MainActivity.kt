@@ -32,10 +32,12 @@ class MainActivity : FlutterActivity() {
                     when (call.method) {
                         "startService" -> {
                             val title = call.argument<String>("title") ?: "처리 중..."
+                            val type = call.argument<String>("type") ?: "import"
                             // 알림을 즉시 표시 (foreground service 시작 전)
-                            ImportExportService.updateProgress(this, title, "준비 중...", 0, 0)
+                            ImportExportService.updateProgress(this, title, "준비 중...", 0, 0, type)
                             val intent = Intent(this, ImportExportService::class.java)
                             intent.putExtra("title", title)
+                            intent.putExtra("type", type)
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)
                             } else {
@@ -48,12 +50,14 @@ class MainActivity : FlutterActivity() {
                             val message = call.argument<String>("message") ?: ""
                             val progress = call.argument<Int>("progress") ?: 0
                             val max = call.argument<Int>("max") ?: 0
-                            ImportExportService.updateProgress(this, title, message, progress, max)
+                            val type = call.argument<String>("type") ?: "import"
+                            ImportExportService.updateProgress(this, title, message, progress, max, type)
                             result.success(true)
                         }
                         "complete" -> {
                             val title = call.argument<String>("title") ?: "완료"
                             val message = call.argument<String>("message") ?: ""
+                            val type = call.argument<String>("type") ?: "import"
                             // Stop foreground service
                             val stopIntent = Intent(this, ImportExportService::class.java)
                             stopIntent.action = "STOP"
@@ -67,7 +71,7 @@ class MainActivity : FlutterActivity() {
                                 Log.w(TAG, "Failed to send STOP to ImportExportService: ${e.message}")
                             }
                             // Show completion notification
-                            ImportExportService.showComplete(this, title, message)
+                            ImportExportService.showComplete(this, title, message, type)
                             result.success(true)
                         }
                         "cancel" -> {
@@ -82,6 +86,40 @@ class MainActivity : FlutterActivity() {
                             } catch (e: Exception) {
                                 Log.w(TAG, "Failed to send STOP to ImportExportService: ${e.message}")
                             }
+                            result.success(true)
+                        }
+                        "generatePdf" -> {
+                            val outputPath = call.argument<String>("outputPath")!!
+                            val folderId = call.argument<Int>("folderId")!!
+                            val folderIndex = call.argument<Int>("folderIndex") ?: 0
+                            val totalFolders = call.argument<Int>("totalFolders") ?: 1
+                            val channel = ieChannel
+                            Thread {
+                                try {
+                                    PdfGenerator(this).generate(
+                                        outputPath = outputPath,
+                                        folderId = folderId,
+                                        folderIndex = folderIndex,
+                                        totalFolders = totalFolders,
+                                        onProgress = { current, total, message ->
+                                            runOnUiThread {
+                                                channel?.invokeMethod("pdfProgress", mapOf(
+                                                    "current" to current,
+                                                    "total" to total,
+                                                    "message" to message,
+                                                ))
+                                            }
+                                        }
+                                    )
+                                    runOnUiThread { result.success(true) }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "PDF generation failed", e)
+                                    runOnUiThread { result.error("PDF_ERROR", e.message, null) }
+                                }
+                            }.start()
+                        }
+                        "moveToBackground" -> {
+                            moveTaskToBack(true)
                             result.success(true)
                         }
                         "saveToDownloads" -> {
@@ -267,6 +305,10 @@ class MainActivity : FlutterActivity() {
         if (intent.getBooleanExtra("navigate_to_import", false)) {
             intent.removeExtra("navigate_to_import")
             importExportChannel?.invokeMethod("navigateToImport", null)
+        }
+        if (intent.getBooleanExtra("navigate_to_export", false)) {
+            intent.removeExtra("navigate_to_export")
+            importExportChannel?.invokeMethod("navigateToExport", null)
         }
     }
 

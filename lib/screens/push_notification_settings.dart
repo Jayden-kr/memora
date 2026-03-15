@@ -129,6 +129,10 @@ class _PushNotificationSettingsScreenState
   // ─── Interval mode ───
 
   Future<void> _saveIntervalAlarm() async {
+    // 알림 설정 저장 시 enabled 상태도 DB에 기록 (최초 저장 시 누락 방지)
+    await DatabaseHelper.instance
+        .upsertSetting(_settingNotificationEnabled, _enabled.toString());
+
     final intervalMin = int.tryParse(_intervalMinController.text);
     if (intervalMin == null || intervalMin < 5) {
       if (!mounted) return;
@@ -302,7 +306,7 @@ class _PushNotificationSettingsScreenState
   String _formatTime(TimeOfDay t) =>
       '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
-  int get _intervalNotificationCount {
+  int get _intervalSlotCount {
     final intervalMin = int.tryParse(_intervalMinController.text) ?? 0;
     if (intervalMin < 5) return 0;
     final startTotal =
@@ -311,6 +315,19 @@ class _PushNotificationSettingsScreenState
     if (endTotal <= startTotal) return 0;
     return ((endTotal - startTotal) ~/ intervalMin) + 1;
   }
+
+  /// 요일 수를 고려한 실제 스케줄링될 슬롯 수
+  int get _effectiveSlotCount {
+    final raw = _intervalSlotCount;
+    if (raw == 0) return 0;
+    final dayCount = (_selectedDays.isEmpty || _selectedDays.length == 7)
+        ? 1
+        : _selectedDays.length;
+    final maxSlots = 400 ~/ dayCount;
+    return raw > maxSlots ? maxSlots : raw;
+  }
+
+  bool get _intervalSlotsTrimmed => _intervalSlotCount > _effectiveSlotCount;
 
   // ─── Build ───
 
@@ -464,7 +481,7 @@ class _PushNotificationSettingsScreenState
   }
 
   List<Widget> _buildIntervalModeUI() {
-    final count = _intervalNotificationCount;
+    final count = _effectiveSlotCount;
 
     return [
       Padding(
@@ -575,6 +592,18 @@ class _PushNotificationSettingsScreenState
             '${_formatTime(_intervalStartTime)} ~ ${_formatTime(_intervalEndTime)}, ${_intervalMinController.text}분마다',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.primary,
+                ),
+          ),
+        ),
+
+      // 슬롯 초과 경고
+      if (_intervalSlotsTrimmed)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: Text(
+            '시스템 제한으로 하루 최대 $count회까지 알림이 발송됩니다.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
                 ),
           ),
         ),
