@@ -153,7 +153,7 @@ class _ImportScreenState extends State<ImportScreen> {
       } else {
         _selectedFolderNames.clear();
         _selectedFolderNames.addAll(
-          _memkFolders.map((f) => f['name'] as String),
+          _memkFolders.map((f) => (f['name'] as String?) ?? ''),
         );
       }
     });
@@ -271,7 +271,7 @@ class _ImportScreenState extends State<ImportScreen> {
                   ),
                 ),
                 ..._memkFolders.map((folder) {
-                  final name = folder['name'] as String;
+                  final name = (folder['name'] as String?) ?? '';
                   final cardCount = folder['cardCount'] as int? ?? 0;
                   final isSelected = _selectedFolderNames.contains(name);
                   return CheckboxListTile(
@@ -326,9 +326,9 @@ class _ImportScreenState extends State<ImportScreen> {
                   const SizedBox(height: 8),
                   ..._memkFolders.where((f) {
                     return _selectedFolderNames
-                        .contains(f['name'] as String);
+                        .contains((f['name'] as String?) ?? '');
                   }).map((memkFolder) {
-                    final name = memkFolder['name'] as String;
+                    final name = (memkFolder['name'] as String?) ?? '';
                     final memkId = (memkFolder['id'] as num?)?.toInt();
                     if (memkId == null) return const SizedBox.shrink();
                     return Padding(

@@ -218,7 +218,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               _onSettingChanged();
             },
             child: Column(
-              children: _folders.map((folder) => RadioListTile<int>(
+              children: _folders.where((f) => f.id != null).map((folder) => RadioListTile<int>(
                     title: Text(folder.name),
                     subtitle: Text('${folder.cardCount}장'),
                     value: folder.id!,

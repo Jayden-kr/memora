@@ -24,6 +24,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // Cold start: 알림 탭으로 앱이 시작된 경우 payload를 Flutter에 전달하기 위해 저장
+        val initialPayload = intent?.getStringExtra("notification_payload")
+        intent?.removeExtra("notification_payload")
+
         // Import/Export Foreground Service MethodChannel
         val ieChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
         importExportChannel = ieChannel
@@ -89,8 +93,12 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         }
                         "generatePdf" -> {
-                            val outputPath = call.argument<String>("outputPath")!!
-                            val folderId = call.argument<Int>("folderId")!!
+                            val outputPath = call.argument<String>("outputPath")
+                            val folderId = call.argument<Int>("folderId")
+                            if (outputPath == null || folderId == null) {
+                                result.error("ERROR", "outputPath and folderId required", null)
+                                return@setMethodCallHandler
+                            }
                             val folderIndex = call.argument<Int>("folderIndex") ?: 0
                             val totalFolders = call.argument<Int>("totalFolders") ?: 1
                             val channel = ieChannel
@@ -111,10 +119,16 @@ class MainActivity : FlutterActivity() {
                                             }
                                         }
                                     )
-                                    runOnUiThread { result.success(true) }
+                                    runOnUiThread {
+                                        try { result.success(true) }
+                                        catch (e2: Exception) { Log.w(TAG, "Result already replied", e2) }
+                                    }
                                 } catch (e: Exception) {
                                     Log.e(TAG, "PDF generation failed", e)
-                                    runOnUiThread { result.error("PDF_ERROR", e.message, null) }
+                                    runOnUiThread {
+                                        try { result.error("PDF_ERROR", e.message, null) }
+                                        catch (e2: Exception) { Log.w(TAG, "Result already replied", e2) }
+                                    }
                                 }
                             }.start()
                         }
@@ -146,15 +160,21 @@ class MainActivity : FlutterActivity() {
                                     )
                                     if (uri != null) {
                                         try {
-                                            contentResolver.openOutputStream(uri)?.use { output ->
-                                                sourceFile.inputStream().use { input ->
-                                                    input.copyTo(output)
+                                            val outputStream = contentResolver.openOutputStream(uri)
+                                            if (outputStream != null) {
+                                                outputStream.use { output ->
+                                                    sourceFile.inputStream().use { input ->
+                                                        input.copyTo(output)
+                                                    }
                                                 }
+                                                values.clear()
+                                                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                                                contentResolver.update(uri, values, null, null)
+                                                result.success(true)
+                                            } else {
+                                                contentResolver.delete(uri, null, null)
+                                                result.error("ERROR", "Failed to open output stream", null)
                                             }
-                                            values.clear()
-                                            values.put(MediaStore.Downloads.IS_PENDING, 0)
-                                            contentResolver.update(uri, values, null, null)
-                                            result.success(true)
                                         } catch (e: Exception) {
                                             // 실패 시 IS_PENDING 고아 레코드 정리
                                             contentResolver.delete(uri, null, null)
@@ -180,6 +200,71 @@ class MainActivity : FlutterActivity() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "ImportExport MethodChannel error: ${call.method}", e)
+                    result.error("ERROR", e.message, e.stackTraceToString())
+                }
+            }
+
+        // Push Notification Interval Service MethodChannel
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.henry.amki_wang/push_notif")
+            .setMethodCallHandler { call, result ->
+                try {
+                    when (call.method) {
+                        "startService" -> {
+                            val args = call.arguments as? Map<String, Any?> ?: emptyMap()
+                            val intent = Intent(this, PushNotificationService::class.java).apply {
+                                putExtra("intervalMin", (args["intervalMin"] as? Number)?.toInt() ?: 30)
+                                putExtra("startTotal", (args["startTotal"] as? Number)?.toInt() ?: 540)
+                                putExtra("endTotal", (args["endTotal"] as? Number)?.toInt() ?: 1320)
+                                putExtra("folderId", (args["folderId"] as? Number)?.toInt() ?: -1)
+                                putExtra("soundEnabled", args["soundEnabled"] as? Boolean ?: true)
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            result.success(true)
+                        }
+                        "stopService" -> {
+                            try {
+                                val intent = Intent(this, PushNotificationService::class.java)
+                                intent.action = PushNotificationService.ACTION_STOP
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    startForegroundService(intent)
+                                } else {
+                                    startService(intent)
+                                }
+                            } catch (_: Exception) {
+                                // 서비스가 없으면 prefs만 정리
+                                getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                                    .edit().putBoolean("running", false).apply()
+                            }
+                            result.success(true)
+                        }
+                        "isRunning" -> {
+                            val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                            result.success(prefs.getBoolean("running", false))
+                        }
+                        "requestBatteryOptimization" -> {
+                            try {
+                                val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                                    @Suppress("BatteryLife")
+                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                    intent.data = android.net.Uri.parse("package:$packageName")
+                                    startActivity(intent)
+                                    result.success(false)
+                                } else {
+                                    result.success(true) // 이미 제외됨
+                                }
+                            } catch (e: Exception) {
+                                result.error("ERROR", e.message, null)
+                            }
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "PushNotif MethodChannel error: ${call.method}", e)
                     result.error("ERROR", e.message, e.stackTraceToString())
                 }
             }
@@ -228,6 +313,25 @@ class MainActivity : FlutterActivity() {
                     result.error("ERROR", e.message, e.stackTraceToString())
                 }
             }
+
+        // Cold start: 알림 탭으로 앱 시작된 경우 Flutter 준비 후 payload 전달
+        if (initialPayload != null) {
+            val parts = initialPayload.split(":")
+            if (parts.size >= 2) {
+                val folderId = parts[0].toIntOrNull()
+                val cardId = parts[1].toIntOrNull()
+                if (folderId != null && cardId != null) {
+                    Log.d(TAG, "Cold start push payload: $initialPayload")
+                    // Flutter 엔진이 준비될 때까지 약간 딜레이
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        importExportChannel?.invokeMethod("navigateToPushCard", mapOf(
+                            "folderId" to folderId,
+                            "cardId" to cardId
+                        ))
+                    }, 1500)
+                }
+            }
+        }
     }
 
     private fun saveSettings(settings: Map<String, Any?>) {
@@ -298,7 +402,9 @@ class MainActivity : FlutterActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleImportNavigationIntent(intent)
+        handlePushNotificationIntent(intent)
     }
 
     private fun handleImportNavigationIntent(intent: Intent) {
@@ -309,6 +415,22 @@ class MainActivity : FlutterActivity() {
         if (intent.getBooleanExtra("navigate_to_export", false)) {
             intent.removeExtra("navigate_to_export")
             importExportChannel?.invokeMethod("navigateToExport", null)
+        }
+    }
+
+    private fun handlePushNotificationIntent(intent: Intent) {
+        val payload = intent.getStringExtra("notification_payload") ?: return
+        intent.removeExtra("notification_payload")
+        Log.d(TAG, "Push notification payload: $payload")
+        // payload = "folderId:cardId" → Flutter의 onNavigate 콜백으로 전달
+        val parts = payload.split(":")
+        if (parts.size >= 2) {
+            val folderId = parts[0].toIntOrNull() ?: return
+            val cardId = parts[1].toIntOrNull() ?: return
+            importExportChannel?.invokeMethod("navigateToPushCard", mapOf(
+                "folderId" to folderId,
+                "cardId" to cardId
+            ))
         }
     }
 

@@ -45,16 +45,24 @@
                 <data android:mimeType="application/memk" />
                 <data android:mimeType="application/x-memk" />
             </intent-filter>
-            <!-- .memk 파일 확장자로 열기 -->
+            <!-- .memk 파일 확장자로 열기 (content:// URI) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="content" />
-                <data android:scheme="file" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.memk" />
-                <data android:mimeType="*/*" />
+                <data android:scheme="content"
+                      android:host="*"
+                      android:mimeType="*/*"
+                      android:pathPattern=".*\\.memk" />
+            </intent-filter>
+            <!-- .memk 파일 확장자로 열기 (file:// URI) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file"
+                      android:host="*"
+                      android:mimeType="*/*"
+                      android:pathPattern=".*\\.memk" />
             </intent-filter>
         </activity>
         <!-- 잠금화면 Foreground Service -->
@@ -66,6 +74,18 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Lock screen card overlay for study" />
+        </service>
+
+        <!-- 푸시 알림 간격 반복 Foreground Service (별도 프로세스) -->
+        <service
+            android:name=".PushNotificationService"
+            android:enabled="true"
+            android:exported="false"
+            android:process=":push"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Periodic study card push notification" />
         </service>
 
         <!-- Import/Export Foreground Service -->

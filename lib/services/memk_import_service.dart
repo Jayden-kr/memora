@@ -315,7 +315,8 @@ class MemkImportService {
           // UI 갱신 기회
           await Future.delayed(Duration.zero);
         }
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[IMPORT] card parse error: $e');
         skippedCards++;
       }
     }

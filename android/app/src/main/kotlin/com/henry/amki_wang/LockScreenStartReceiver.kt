@@ -22,6 +22,9 @@ class LockScreenStartReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
             intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
 
+        // 푸시 알림 서비스 복원 (잠금화면 무관)
+        restorePushNotificationService(context)
+
         val prefs = context.getSharedPreferences("lock_screen_prefs", Context.MODE_PRIVATE)
         val enabled = prefs.getBoolean("enabled", false)
         if (!enabled) return
@@ -47,8 +50,24 @@ class LockScreenStartReceiver : BroadcastReceiver() {
             Log.i(TAG, "Lock screen service started after ${intent.action}")
         } catch (e: Exception) {
             Log.w(TAG, "Cannot start FGS from background: ${e.message}")
-            // 서비스 시작 실패 시 사용자에게 안내 알림
             showRestoreNotification(context)
+        }
+    }
+
+    private fun restorePushNotificationService(context: Context) {
+        val pushPrefs = context.getSharedPreferences("push_notif_prefs", Context.MODE_PRIVATE)
+        if (!pushPrefs.getBoolean("running", false)) return
+
+        try {
+            val pushIntent = Intent(context, PushNotificationService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(pushIntent)
+            } else {
+                context.startService(pushIntent)
+            }
+            Log.i(TAG, "Push notification service restored after boot")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to restore push service: ${e.message}")
         }
     }
 

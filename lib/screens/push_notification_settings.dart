@@ -22,7 +22,6 @@ class _PushNotificationSettingsScreenState
   List<Folder> _folders = [];
   int? _selectedFolderId;
   bool _soundEnabled = true;
-  final Set<int> _selectedDays = {1, 2, 3, 4, 5}; // 월~금
   bool _loading = true;
 
   // 간격 반복 설정
@@ -30,11 +29,10 @@ class _PushNotificationSettingsScreenState
   TimeOfDay _intervalEndTime = const TimeOfDay(hour: 22, minute: 0);
   final TextEditingController _intervalMinController =
       TextEditingController(text: '30');
-  int? _intervalAlarmId; // DB에 저장된 interval alarm의 id
+  int? _intervalAlarmId;
   bool _intervalEnabled = true;
 
   static const _settingNotificationEnabled = 'notification_enabled';
-  static const _dayLabels = ['일', '월', '화', '수', '목', '금', '토'];
 
   @override
   void initState() {
@@ -44,7 +42,7 @@ class _PushNotificationSettingsScreenState
 
   @override
   void dispose() {
-    _globalSettingsDebounce?.cancel();
+    _settingsDebounce?.cancel();
     _intervalMinController.dispose();
     super.dispose();
   }
@@ -63,26 +61,16 @@ class _PushNotificationSettingsScreenState
     // interval 알람 찾기
     Map<String, dynamic>? intervalAlarm;
     for (final alarm in alarms) {
-      final mode = alarm['mode'] as String? ?? 'fixed';
-      if (mode == 'interval') {
+      if ((alarm['mode'] as String? ?? 'fixed') == 'interval') {
         intervalAlarm = alarm;
         break;
       }
     }
 
-    // 글로벌 설정 복원 (첫 번째 알람 기준)
+    // 글로벌 설정 복원
     if (alarms.isNotEmpty) {
       final first = alarms.first;
-      final daysStr = first['days'] as String?;
-      if (daysStr != null && daysStr.isNotEmpty) {
-        _selectedDays.clear();
-        for (final d in daysStr.split(',')) {
-          final parsed = int.tryParse(d.trim());
-          if (parsed != null) _selectedDays.add(parsed);
-        }
-      }
       final restoredFolderId = first['folder_id'] as int?;
-      // 삭제된 폴더를 참조하면 DropdownButton assertion 에러 발생 → 검증
       if (restoredFolderId != null &&
           folders.any((f) => f.id == restoredFolderId)) {
         _selectedFolderId = restoredFolderId;
@@ -129,10 +117,6 @@ class _PushNotificationSettingsScreenState
   // ─── Interval mode ───
 
   Future<void> _saveIntervalAlarm() async {
-    // 알림 설정 저장 시 enabled 상태도 DB에 기록 (최초 저장 시 누락 방지)
-    await DatabaseHelper.instance
-        .upsertSetting(_settingNotificationEnabled, _enabled.toString());
-
     final intervalMin = int.tryParse(_intervalMinController.text);
     if (intervalMin == null || intervalMin < 5) {
       if (!mounted) return;
@@ -153,154 +137,85 @@ class _PushNotificationSettingsScreenState
       return;
     }
 
-    final startStr =
-        '${_intervalStartTime.hour.toString().padLeft(2, '0')}:${_intervalStartTime.minute.toString().padLeft(2, '0')}';
-    final endStr =
-        '${_intervalEndTime.hour.toString().padLeft(2, '0')}:${_intervalEndTime.minute.toString().padLeft(2, '0')}';
+    try {
+      await DatabaseHelper.instance
+          .upsertSetting(_settingNotificationEnabled, _enabled.toString());
 
-    if (_intervalAlarmId != null) {
-      await DatabaseHelper.instance.updatePushAlarm(_intervalAlarmId!, {
-        'start_time': startStr,
-        'end_time': endStr,
-        'interval_min': intervalMin,
-        'time': startStr,
-        'folder_id': _selectedFolderId,
-        'days': _selectedDays.join(','),
-        'sound_enabled': _soundEnabled ? 1 : 0,
-      });
-    } else {
-      await DatabaseHelper.instance.insertPushAlarm(
+      final startStr =
+          '${_intervalStartTime.hour.toString().padLeft(2, '0')}:${_intervalStartTime.minute.toString().padLeft(2, '0')}';
+      final endStr =
+          '${_intervalEndTime.hour.toString().padLeft(2, '0')}:${_intervalEndTime.minute.toString().padLeft(2, '0')}';
+
+      // 기존 interval 알람 삭제 후 새로 1개만 생성 (누적 방지)
+      final existingAlarms = await DatabaseHelper.instance.getAllPushAlarms();
+      for (final alarm in existingAlarms) {
+        if ((alarm['mode'] as String? ?? 'fixed') == 'interval') {
+          await DatabaseHelper.instance.deletePushAlarm(alarm['id'] as int);
+        }
+      }
+
+      final newId = await DatabaseHelper.instance.insertPushAlarm(
         time: startStr,
         mode: 'interval',
         startTime: startStr,
         endTime: endStr,
         intervalMin: intervalMin,
         folderId: _selectedFolderId,
-        days: _selectedDays.join(','),
         soundEnabled: _soundEnabled ? 1 : 0,
       );
+      _intervalAlarmId = newId;
+
+      await _loadData();
+      await NotificationService.rescheduleAll();
+
+      // Samsung 등에서 배터리 최적화 해제 요청
+      try {
+        const channel = MethodChannel('com.henry.amki_wang/push_notif');
+        await channel.invokeMethod<bool>('requestBatteryOptimization');
+      } catch (_) {}
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('간격 반복 알림이 저장되었습니다.')),
+      );
+    } catch (e) {
+      debugPrint('[PUSH_SETTINGS] 저장 실패: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('저장 실패: $e')),
+      );
     }
-
-    await _loadData();
-    await _scheduleAll();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('간격 반복 알림이 저장되었습니다.')),
-    );
-  }
-
-  Future<void> _deleteIntervalAlarm() async {
-    if (_intervalAlarmId == null) return;
-    await DatabaseHelper.instance.deletePushAlarm(_intervalAlarmId!);
-    await NotificationService.rescheduleAll();
-    if (!mounted) return;
-    setState(() {
-      _intervalAlarmId = null;
-      _intervalEnabled = true;
-      _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
-      _intervalEndTime = const TimeOfDay(hour: 22, minute: 0);
-      _intervalMinController.text = '30';
-    });
-    await _loadData();
   }
 
   Future<void> _toggleIntervalAlarm(bool enabled) async {
     if (_intervalAlarmId == null) return;
-    _intervalEnabled = enabled;
+    setState(() => _intervalEnabled = enabled);
     await DatabaseHelper.instance.updatePushAlarm(_intervalAlarmId!, {
       'enabled': enabled ? 1 : 0,
     });
-    await _loadData();
-    await _scheduleAll();
+    await NotificationService.rescheduleAll();
   }
 
   // ─── Common ───
 
-  Timer? _globalSettingsDebounce;
+  Timer? _settingsDebounce;
 
   void _updateGlobalSettings() {
-    // 디바운싱: 빠른 연속 변경 시 마지막만 실제 적용 (500ms)
-    _globalSettingsDebounce?.cancel();
-    _globalSettingsDebounce = Timer(const Duration(milliseconds: 500), () {
+    _settingsDebounce?.cancel();
+    _settingsDebounce = Timer(const Duration(milliseconds: 500), () {
       if (mounted) _applyGlobalSettings();
     });
   }
 
   Future<void> _applyGlobalSettings() async {
-    final daysStr = _selectedDays.join(',');
-    // 모든 알람 (fixed + interval) 업데이트
     final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
     for (final alarm in allAlarms) {
       await DatabaseHelper.instance.updatePushAlarm(alarm['id'] as int, {
         'folder_id': _selectedFolderId,
-        'days': daysStr,
         'sound_enabled': _soundEnabled ? 1 : 0,
       });
     }
-    await _scheduleAll();
-  }
-
-  Future<void> _scheduleAll() async {
-    await NotificationService.cancelAllNotifications();
-    if (!_enabled) return;
-
-    final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
-    for (final alarm in allAlarms) {
-      if ((alarm['enabled'] as int? ?? 1) != 1) continue;
-
-      final id = alarm['id'] as int;
-      final daysStr = alarm['days'] as String?;
-      Set<int>? days;
-      if (daysStr != null && daysStr.isNotEmpty) {
-        days = daysStr
-            .split(',')
-            .map((d) => int.tryParse(d.trim()))
-            .whereType<int>()
-            .toSet();
-      }
-      final folderId = alarm['folder_id'] as int?;
-      final soundEnabled = (alarm['sound_enabled'] as int? ?? 1) == 1;
-      final mode = alarm['mode'] as String? ?? 'fixed';
-
-      // 선택된 요일이 없으면 알림을 스케줄링하지 않음
-      if (days != null && days.isEmpty) continue;
-
-      if (mode == 'interval') {
-        final startTime = alarm['start_time'] as String?;
-        final endTime = alarm['end_time'] as String?;
-        final intervalMin = alarm['interval_min'] as int?;
-        if (startTime == null || endTime == null || intervalMin == null) {
-          continue;
-        }
-        final sp = startTime.split(':');
-        final ep = endTime.split(':');
-        if (sp.length < 2 || ep.length < 2) continue;
-        await NotificationService.scheduleIntervalNotifications(
-          id: id,
-          startHour: int.tryParse(sp[0]) ?? 0,
-          startMinute: int.tryParse(sp[1]) ?? 0,
-          endHour: int.tryParse(ep[0]) ?? 0,
-          endMinute: int.tryParse(ep[1]) ?? 0,
-          intervalMin: intervalMin,
-          days: days,
-          folderId: folderId,
-          soundEnabled: soundEnabled,
-        );
-      } else {
-        final timeStr = alarm['time'] as String? ?? '08:00';
-        final parts = timeStr.split(':');
-        if (parts.length < 2) continue;
-        await NotificationService.scheduleDailyNotification(
-          id: id,
-          hour: int.tryParse(parts[0]) ?? 0,
-          minute: int.tryParse(parts[1]) ?? 0,
-          days: days,
-          folderId: folderId,
-          soundEnabled: soundEnabled,
-        );
-      }
-    }
+    await NotificationService.rescheduleAll();
   }
 
   String _formatTime(TimeOfDay t) =>
@@ -315,19 +230,6 @@ class _PushNotificationSettingsScreenState
     if (endTotal <= startTotal) return 0;
     return ((endTotal - startTotal) ~/ intervalMin) + 1;
   }
-
-  /// 요일 수를 고려한 실제 스케줄링될 슬롯 수
-  int get _effectiveSlotCount {
-    final raw = _intervalSlotCount;
-    if (raw == 0) return 0;
-    final dayCount = (_selectedDays.isEmpty || _selectedDays.length == 7)
-        ? 1
-        : _selectedDays.length;
-    final maxSlots = 400 ~/ dayCount;
-    return raw > maxSlots ? maxSlots : raw;
-  }
-
-  bool get _intervalSlotsTrimmed => _intervalSlotCount > _effectiveSlotCount;
 
   // ─── Build ───
 
@@ -357,8 +259,7 @@ class _PushNotificationSettingsScreenState
                             if (!mounted) return;
                             messenger.showSnackBar(
                               SnackBar(
-                                content:
-                                    const Text('알림 권한이 필요합니다.'),
+                                content: const Text('알림 권한이 필요합니다.'),
                                 action: SnackBarAction(
                                   label: '설정 열기',
                                   onPressed: () => openAppSettings(),
@@ -372,41 +273,9 @@ class _PushNotificationSettingsScreenState
                         setState(() => _enabled = v);
                         await DatabaseHelper.instance.upsertSetting(
                             _settingNotificationEnabled, v.toString());
-                        await _scheduleAll();
+                        await NotificationService.rescheduleAll();
                       },
                     ),
-                  ),
-                ),
-                const Divider(),
-
-                // 반복 요일
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                  child: Text('반복 요일',
-                      style: Theme.of(context).textTheme.titleSmall),
-                ),
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Wrap(
-                    spacing: 8,
-                    children: List.generate(7, (index) {
-                      final selected = _selectedDays.contains(index);
-                      return ChoiceChip(
-                        label: Text(_dayLabels[index]),
-                        selected: selected,
-                        onSelected: (s) {
-                          setState(() {
-                            if (s) {
-                              _selectedDays.add(index);
-                            } else {
-                              _selectedDays.remove(index);
-                            }
-                          });
-                          _updateGlobalSettings();
-                        },
-                      );
-                    }),
                   ),
                 ),
                 const Divider(),
@@ -481,7 +350,7 @@ class _PushNotificationSettingsScreenState
   }
 
   List<Widget> _buildIntervalModeUI() {
-    final count = _effectiveSlotCount;
+    final count = _intervalSlotCount;
 
     return [
       Padding(
@@ -494,21 +363,12 @@ class _PushNotificationSettingsScreenState
       if (_intervalAlarmId != null)
         ListTile(
           title: const Text('간격 반복 알림'),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Transform.scale(
-                scale: 0.8,
-                child: Switch(
-                  value: _intervalEnabled,
-                  onChanged: (v) => _toggleIntervalAlarm(v),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: _deleteIntervalAlarm,
-              ),
-            ],
+          trailing: Transform.scale(
+            scale: 0.8,
+            child: Switch(
+              value: _intervalEnabled,
+              onChanged: (v) => _toggleIntervalAlarm(v),
+            ),
           ),
         ),
 
@@ -596,25 +456,13 @@ class _PushNotificationSettingsScreenState
           ),
         ),
 
-      // 슬롯 초과 경고
-      if (_intervalSlotsTrimmed)
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: Text(
-            '시스템 제한으로 하루 최대 $count회까지 알림이 발송됩니다.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
-                ),
-          ),
-        ),
-
       // 저장 버튼
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: FilledButton.icon(
           onPressed: _saveIntervalAlarm,
           icon: const Icon(Icons.save),
-          label: Text(_intervalAlarmId != null ? '저장' : '설정 저장'),
+          label: const Text('저장'),
         ),
       ),
     ];

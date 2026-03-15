@@ -55,6 +55,7 @@ class MemkExportService {
     final folderNameMap = <int, String>{}; // folderId → name
     final foldersJsonList = <Map<String, dynamic>>[];
     for (final folder in folders) {
+      if (folder.id == null) continue;
       folderNameMap[folder.id!] = folder.name;
       foldersJsonList.add(folder.toJson());
     }

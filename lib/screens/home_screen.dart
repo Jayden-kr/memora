@@ -385,10 +385,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _folders.insert(newIndex, folder);
     });
     // DB 시퀀스 업데이트 후 로컬 객체도 동기화
-    _updateFolderSequences().then((_) => _loadFolders()).catchError((e) {
-      debugPrint('[HOME] reorder error: $e');
-      _loadFolders(); // 에러 시에도 DB에서 리로드하여 일관성 유지
-    });
+    () async {
+      try {
+        await _updateFolderSequences();
+      } catch (e) {
+        debugPrint('[HOME] reorder error: $e');
+      } finally {
+        if (mounted) _loadFolders();
+      }
+    }();
   }
 
   Future<void> _updateFolderSequences() async {
@@ -544,9 +549,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (mounted) await _loadFolders(); // 옵티미스틱 UI 롤백
     } finally {
       _isDeleting = false;
+      _selectedFolderIds.clear();
     }
 
-    _selectedFolderIds.clear();
     if (!mounted) return;
     await _loadFolders();
   }

@@ -175,23 +175,19 @@ class CardModel {
         answerImagePath5,
       ].where((p) => p != null && p.isNotEmpty).cast<String>().toList();
 
-  /// 앞면 이미지 비율 리스트 (경로와 1:1 매칭)
-  List<double?> get questionImageRatios => [
-        questionImageRatio,
-        questionImageRatio2,
-        questionImageRatio3,
-        questionImageRatio4,
-        questionImageRatio5,
-      ];
+  /// 앞면 이미지 비율 리스트 (경로와 1:1 매칭 — non-null path에 대응하는 ratio만)
+  List<double?> get questionImageRatios {
+    final paths = [questionImagePath, questionImagePath2, questionImagePath3, questionImagePath4, questionImagePath5];
+    final ratios = [questionImageRatio, questionImageRatio2, questionImageRatio3, questionImageRatio4, questionImageRatio5];
+    return [for (int i = 0; i < 5; i++) if (paths[i] != null && paths[i]!.isNotEmpty) ratios[i]];
+  }
 
-  /// 뒷면 이미지 비율 리스트 (경로와 1:1 매칭)
-  List<double?> get answerImageRatios => [
-        answerImageRatio,
-        answerImageRatio2,
-        answerImageRatio3,
-        answerImageRatio4,
-        answerImageRatio5,
-      ];
+  /// 뒷면 이미지 비율 리스트 (경로와 1:1 매칭 — non-null path에 대응하는 ratio만)
+  List<double?> get answerImageRatios {
+    final paths = [answerImagePath, answerImagePath2, answerImagePath3, answerImagePath4, answerImagePath5];
+    final ratios = [answerImageRatio, answerImageRatio2, answerImageRatio3, answerImageRatio4, answerImageRatio5];
+    return [for (int i = 0; i < 5; i++) if (paths[i] != null && paths[i]!.isNotEmpty) ratios[i]];
+  }
 
   /// .memk JSON → Dart
   factory CardModel.fromJson(Map<String, dynamic> json) {

@@ -120,7 +120,8 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _restoreFile(Map<String, dynamic> file) async {
-    final filePath = file['file_path'] as String;
+    final filePath = file['file_path'] as String?;
+    if (filePath == null) return;
     if (!filePath.endsWith('.memk')) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -359,12 +360,17 @@ class _FileListScreenState extends State<FileListScreen> {
     if (confirm != true) return;
 
     for (final file in selected) {
-      await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
+      if (!mounted) return;
+      // 파일 먼저 삭제 (실패해도 DB 레코드는 유지 — 데이터 추적 보존)
       try {
-        final filePath = file['file_path'] as String;
-        final f = File(filePath);
-        if (await f.exists()) await f.delete();
+        final filePath = file['file_path'] as String?;
+        if (filePath != null) {
+          final f = File(filePath);
+          if (await f.exists()) await f.delete();
+        }
       } catch (_) {}
+      // 파일 삭제 후 DB 레코드 삭제
+      await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
     }
 
     _selectedIds.clear();
@@ -376,8 +382,9 @@ class _FileListScreenState extends State<FileListScreen> {
     final selected = _selectedFiles;
     final xFiles = <XFile>[];
     for (final file in selected) {
-      final filePath = file['file_path'] as String;
-      final fileName = file['file_name'] as String;
+      final filePath = file['file_path'] as String?;
+      final fileName = file['file_name'] as String?;
+      if (filePath == null || fileName == null) continue;
       if (await File(filePath).exists()) {
         xFiles.add(XFile(filePath, name: fileName));
       }
@@ -396,8 +403,9 @@ class _FileListScreenState extends State<FileListScreen> {
     final selected = _selectedFiles;
     int saved = 0;
     for (final file in selected) {
-      final filePath = file['file_path'] as String;
-      final fileName = file['file_name'] as String;
+      final filePath = file['file_path'] as String?;
+      final fileName = file['file_name'] as String?;
+      if (filePath == null || fileName == null) continue;
       if (!await File(filePath).exists()) continue;
       try {
         await _channel.invokeMethod('saveToDownloads', {

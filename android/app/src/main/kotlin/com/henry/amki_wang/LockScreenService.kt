@@ -184,7 +184,9 @@ class LockScreenService : Service() {
 
     private fun createNotification(): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, MainActivity::class.java)
+            ?: Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
         val pendingIntent = PendingIntent.getActivity(
             this, 0, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -285,6 +287,7 @@ class LockScreenService : Service() {
         var db: SQLiteDatabase? = null
         try {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+            try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용
             val whereParts = mutableListOf<String>()
             val whereArgs = mutableListOf<String>()
 
@@ -302,16 +305,19 @@ class LockScreenService : Service() {
             val args = if (whereArgs.isNotEmpty()) whereArgs.toTypedArray() else null
 
             val result = mutableListOf<CardData>()
-            db.query("cards", null, where, args, null, null, "sequence ASC").use { cursor ->
+            val columns = arrayOf("id", "question", "answer", "finished",
+                "question_image_path", "question_image_path_2", "question_image_path_3", "question_image_path_4", "question_image_path_5",
+                "answer_image_path", "answer_image_path_2", "answer_image_path_3", "answer_image_path_4", "answer_image_path_5")
+            db.query("cards", columns, where, args, null, null, "sequence ASC").use { cursor ->
                 while (cursor.moveToNext()) {
                     val qImages = mutableListOf<String>()
                     val aImages = mutableListOf<String>()
                     for (suffix in listOf("", "_2", "_3", "_4", "_5")) {
                         cursor.getColumnIndex("question_image_path$suffix").let { idx ->
-                            if (idx >= 0) cursor.getString(idx)?.let { qImages.add(it) }
+                            if (idx >= 0) cursor.getString(idx)?.takeIf { it.isNotEmpty() }?.let { qImages.add(it) }
                         }
                         cursor.getColumnIndex("answer_image_path$suffix").let { idx ->
-                            if (idx >= 0) cursor.getString(idx)?.let { aImages.add(it) }
+                            if (idx >= 0) cursor.getString(idx)?.takeIf { it.isNotEmpty() }?.let { aImages.add(it) }
                         }
                     }
                     result.add(CardData(
@@ -720,13 +726,24 @@ class LockScreenService : Service() {
     }
 
     private fun loadImages(container: LinearLayout?, images: List<String>) {
-        // 이전 Bitmap 재활용 후 뷰 제거
+        // 이전 Bitmap을 drawable 해제 후 다음 프레임에서 recycle (draw pipeline 완료 보장)
         container?.let { c ->
+            val oldBitmaps = mutableListOf<Bitmap>()
             for (i in 0 until c.childCount) {
-                recycleViewBitmaps(c.getChildAt(i))
+                val child = c.getChildAt(i)
+                if (child is ImageView) {
+                    val drawable = child.drawable
+                    child.setImageDrawable(null)
+                    if (drawable is android.graphics.drawable.BitmapDrawable) {
+                        drawable.bitmap?.let { if (!it.isRecycled) oldBitmaps.add(it) }
+                    }
+                }
+            }
+            c.removeAllViews()
+            if (oldBitmaps.isNotEmpty()) {
+                mainHandler.post { oldBitmaps.forEach { if (!it.isRecycled) it.recycle() } }
             }
         }
-        container?.removeAllViews()
         if (images.isEmpty() || container == null) return
         val screenWidth = maxOf(resources.displayMetrics.widthPixels, 360)
         val service = this

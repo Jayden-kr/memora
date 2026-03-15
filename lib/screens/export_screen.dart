@@ -114,8 +114,12 @@ class _ExportScreenState extends State<ExportScreen> {
     );
 
     if (shouldShare == true) {
-      await Share.shareXFiles(
-          filePaths.map((path) => XFile(path)).toList());
+      try {
+        await Share.shareXFiles(
+            filePaths.map((path) => XFile(path)).toList());
+      } catch (e) {
+        debugPrint('[EXPORT] share failed: $e');
+      }
     }
 
     if (!mounted) return;
@@ -143,7 +147,7 @@ class _ExportScreenState extends State<ExportScreen> {
       if (_selectedFolderIds.length == _folders.length) {
         _selectedFolderIds.clear();
       } else {
-        _selectedFolderIds.addAll(_folders.map((f) => f.id!));
+        _selectedFolderIds.addAll(_folders.where((f) => f.id != null).map((f) => f.id!));
       }
     });
   }
@@ -245,7 +249,7 @@ class _ExportScreenState extends State<ExportScreen> {
                                   _selectedFolderIds.contains(folder.id),
                               onChanged: (checked) {
                                 setState(() {
-                                  if (checked == true) {
+                                  if (checked == true && folder.id != null) {
                                     _selectedFolderIds.add(folder.id!);
                                   } else {
                                     _selectedFolderIds.remove(folder.id);

@@ -96,7 +96,13 @@ class _CardEditScreenState extends State<CardEditScreen> {
   Future<void> _loadFolders() async {
     final folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
-    setState(() => _folders = folders);
+    setState(() {
+      _folders = folders;
+      // 현재 folderId가 로드된 폴더 목록에 없으면 첫 번째 폴더로 보정
+      if (_folders.isNotEmpty && !_folders.any((f) => f.id == _currentFolderId)) {
+        _currentFolderId = _folders.first.id ?? _currentFolderId;
+      }
+    });
   }
 
   Future<String> _copyImageToAppDir(String sourcePath) async {
@@ -291,9 +297,10 @@ class _CardEditScreenState extends State<CardEditScreen> {
         await DatabaseHelper.instance.updateCard(updated);
         await _cleanupRemovedImages();
 
-        if (_currentFolderId != widget.folderId) {
+        final originalFolderId = widget.existingCard!.folderId;
+        if (_currentFolderId != originalFolderId) {
           await DatabaseHelper.instance
-              .updateFolderCardCount(widget.folderId);
+              .updateFolderCardCount(originalFolderId);
           await DatabaseHelper.instance
               .updateFolderCardCount(_currentFolderId);
         }
@@ -356,7 +363,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
   }
 
   bool _listChanged(List<String?> current, List<String?> original) {
-    for (int i = 0; i < current.length && i < original.length; i++) {
+    if (current.length != original.length) return true;
+    for (int i = 0; i < current.length; i++) {
       if (current[i] != original[i]) return true;
     }
     return false;

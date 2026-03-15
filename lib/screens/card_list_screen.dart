@@ -129,12 +129,18 @@ class _CardListScreenState extends State<CardListScreen> {
   Future<void> _loadAllAndScrollToTarget() async {
     final targetId = widget.scrollToCardId!;
 
-    _totalCount = await DatabaseHelper.instance
-        .countCardsByFolderId(widget.folder.id!);
-    final cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
-      widget.folder.id!,
-      _sortOrder,
-    );
+    List<CardModel> cards;
+    if (widget.allCards) {
+      _totalCount = await DatabaseHelper.instance.getTotalCardCount();
+      cards = await DatabaseHelper.instance.getAllCards();
+    } else {
+      _totalCount = await DatabaseHelper.instance
+          .countCardsByFolderId(widget.folder.id!);
+      cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
+        widget.folder.id!,
+        _sortOrder,
+      );
+    }
 
     final targetIndex = cards.indexWhere((c) => c.id == targetId);
 
@@ -242,12 +248,18 @@ class _CardListScreenState extends State<CardListScreen> {
   Future<void> _loadCards() async {
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {
-      _totalCount = await DatabaseHelper.instance
-          .countCardsByFolderId(widget.folder.id!);
-      final cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
-        widget.folder.id!,
-        _sortOrder,
-      );
+      List<CardModel> cards;
+      if (widget.allCards) {
+        _totalCount = await DatabaseHelper.instance.getTotalCardCount();
+        cards = await DatabaseHelper.instance.getAllCards();
+      } else {
+        _totalCount = await DatabaseHelper.instance
+            .countCardsByFolderId(widget.folder.id!);
+        cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
+          widget.folder.id!,
+          _sortOrder,
+        );
+      }
       if (!mounted) return;
       setState(() {
         _cards
@@ -446,8 +458,7 @@ class _CardListScreenState extends State<CardListScreen> {
     if (target == null) return;
 
     await DatabaseHelper.instance.moveCard(card.id!, target.id!);
-    await DatabaseHelper.instance.updateFolderCardCount(sourceFolderId);
-    await DatabaseHelper.instance.updateFolderCardCount(target.id!);
+    // moveCard이 내부 트랜잭션에서 양쪽 폴더 카운트를 갱신하므로 별도 호출 불필요
     await _loadCards();
   }
 
@@ -481,6 +492,7 @@ class _CardListScreenState extends State<CardListScreen> {
   // ─── Selection mode ───
 
   void _enterSelectionMode(CardModel card) {
+    if (card.id == null) return;
     setState(() {
       _isSelectionMode = true;
       _selectedCardIds.add(card.id!);
@@ -495,6 +507,7 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   void _toggleCardSelection(CardModel card) {
+    if (card.id == null) return;
     setState(() {
       if (_selectedCardIds.contains(card.id!)) {
         _selectedCardIds.remove(card.id!);

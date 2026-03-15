@@ -52,13 +52,24 @@ void main() async {
       _handleImportNotificationTap();
     } else if (call.method == 'navigateToExport') {
       _handleExportNotificationTap();
+    } else if (call.method == 'navigateToPushCard') {
+      final args = call.arguments as Map?;
+      if (args != null) {
+        final folderId = (args['folderId'] as num?)?.toInt();
+        final cardId = (args['cardId'] as num?)?.toInt();
+        if (folderId != null && cardId != null) {
+          _handleNotificationNav(NotificationNavEvent(folderId, cardId));
+        }
+      }
     } else if (call.method == 'pdfProgress') {
-      final args = call.arguments as Map;
-      ImportExportController.instance.handleNativePdfProgress(
-        args['current'] as int,
-        args['total'] as int,
-        args['message'] as String,
-      );
+      final args = call.arguments as Map?;
+      if (args != null) {
+        ImportExportController.instance.handleNativePdfProgress(
+          (args['current'] as num?)?.toInt() ?? 0,
+          (args['total'] as num?)?.toInt() ?? 0,
+          (args['message'] as String?) ?? '',
+        );
+      }
     }
   });
 

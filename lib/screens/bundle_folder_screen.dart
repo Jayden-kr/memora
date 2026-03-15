@@ -216,9 +216,9 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                         onChanged: available
                             ? (value) {
                                 setState(() {
-                                  if (value == true) {
+                                  if (value == true && folder.id != null) {
                                     _selectedFolderIds.add(folder.id!);
-                                  } else {
+                                  } else if (folder.id != null) {
                                     _selectedFolderIds.remove(folder.id!);
                                   }
                                 });

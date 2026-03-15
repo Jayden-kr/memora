@@ -500,31 +500,43 @@ class DatabaseHelper {
 
   Future<int> moveCard(int cardId, int newFolderId) async {
     final db = await database;
-    // 이동 전 원래 폴더 ID 조회
-    final card = await db.query(
-      AppConstants.tableCards,
-      columns: ['folder_id'],
-      where: 'id = ?',
-      whereArgs: [cardId],
-      limit: 1,
-    );
-    final oldFolderId = card.isNotEmpty ? card.first['folder_id'] as int? : null;
+    int result = 0;
+    await db.transaction((txn) async {
+      // 이동 전 원래 폴더 ID 조회
+      final card = await txn.query(
+        AppConstants.tableCards,
+        columns: ['folder_id'],
+        where: 'id = ?',
+        whereArgs: [cardId],
+        limit: 1,
+      );
+      final oldFolderId = card.isNotEmpty ? card.first['folder_id'] as int? : null;
 
-    final result = await db.update(
-      AppConstants.tableCards,
-      {'folder_id': newFolderId},
-      where: 'id = ?',
-      whereArgs: [cardId],
-    );
+      result = await txn.update(
+        AppConstants.tableCards,
+        {'folder_id': newFolderId},
+        where: 'id = ?',
+        whereArgs: [cardId],
+      );
 
-    // 원본/대상 폴더의 card_count 갱신
-    if (result > 0) {
-      if (oldFolderId != null && oldFolderId != newFolderId) {
-        await updateFolderCardCount(oldFolderId);
+      // 원본/대상 폴더의 card_count 갱신 (트랜잭션 내 원자적 실행)
+      if (result > 0) {
+        if (oldFolderId != null && oldFolderId != newFolderId) {
+          final oldCount = Sqflite.firstIntValue(await txn.rawQuery(
+            'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
+            [oldFolderId],
+          )) ?? 0;
+          await txn.update(AppConstants.tableFolders, {'card_count': oldCount},
+              where: 'id = ?', whereArgs: [oldFolderId]);
+        }
+        final newCount = Sqflite.firstIntValue(await txn.rawQuery(
+          'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
+          [newFolderId],
+        )) ?? 0;
+        await txn.update(AppConstants.tableFolders, {'card_count': newCount},
+            where: 'id = ?', whereArgs: [newFolderId]);
       }
-      await updateFolderCardCount(newFolderId);
-    }
-
+    });
     return result;
   }
 

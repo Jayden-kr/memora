@@ -53,7 +53,9 @@ class ImportExportController {
     if (!isRunning) return;
     isRunning = false;
     currentOperation = null;
-    _operationLock?.complete();
+    if (_operationLock != null && !_operationLock!.isCompleted) {
+      _operationLock!.complete();
+    }
     clearExportResult();
     _cancel();
     _notify();
