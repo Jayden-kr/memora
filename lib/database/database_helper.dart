@@ -40,8 +40,6 @@ class DatabaseHelper {
       onUpgrade: _upgradeDB,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
-        // WAL 모드: Kotlin 서비스(LockScreen, PushNotification)와 동시 읽기 허용
-        await db.execute('PRAGMA journal_mode = WAL');
       },
     );
   }
@@ -627,13 +625,26 @@ class DatabaseHelper {
   }
 
   /// 모든 카드 조회 (export용 — 페이지네이션)
-  Future<List<CardModel>> getAllCards({int? limit, int? offset}) async {
+  Future<List<CardModel>> getAllCards({int? limit, int? offset, String? sortBy}) async {
     final db = await database;
+    String orderBy;
+    switch (sortBy) {
+      case 'newest':
+        orderBy = 'id DESC';
+      case 'oldest':
+        orderBy = 'id ASC';
+      case 'name_asc':
+        orderBy = 'question ASC';
+      case 'random':
+        orderBy = 'RANDOM()';
+      default:
+        orderBy = 'folder_id, sequence';
+    }
     final maps = await db.query(
       AppConstants.tableCards,
       limit: limit,
       offset: offset,
-      orderBy: 'folder_id, sequence',
+      orderBy: orderBy,
     );
     return maps.map((m) => CardModel.fromDb(m)).toList();
   }

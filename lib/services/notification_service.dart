@@ -316,7 +316,9 @@ class NotificationService {
   }) async {
     final startTotal = startHour * 60 + startMinute;
     final endTotal = endHour * 60 + endMinute;
-    if (endTotal <= startTotal || intervalMin < 5) {
+    // intervalMin 최소 5분 방어 (endTotal == startTotal은 무의미하므로 거부)
+    // overnight 스케줄 (예: 22:00~06:00)은 endTotal < startTotal 이므로 허용
+    if (intervalMin < 5 || endTotal == startTotal) {
       debugPrint('[NOTIF] 서비스 시작 건너뜀: '
           'start=$startTotal, end=$endTotal, interval=$intervalMin');
       return;

@@ -44,6 +44,8 @@ class _ExportScreenState extends State<ExportScreen> {
       // 이미 진행 중이거나 알림 탭으로 열린 경우 — 폴더 로딩 불필요
       _loading = false;
     } else {
+      // 새 Export 화면: 이전 결과 정리 (재진입 시 이전 완료 다이얼로그 방지)
+      _controller.clearExportResult();
       _loadFolders();
     }
 

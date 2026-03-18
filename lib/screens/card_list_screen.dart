@@ -112,7 +112,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
       final List<CardModel> cards;
       if (widget.allCards) {
-        cards = await DatabaseHelper.instance.getAllCards();
+        cards = await DatabaseHelper.instance.getAllCards(sortBy: _sortOrder);
       } else {
         cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
             widget.folder.id!, _sortOrder);
@@ -254,7 +254,7 @@ class _CardListScreenState extends State<CardListScreen> {
       List<CardModel> cards;
       if (widget.allCards) {
         _totalCount = await DatabaseHelper.instance.getTotalCardCount();
-        cards = await DatabaseHelper.instance.getAllCards();
+        cards = await DatabaseHelper.instance.getAllCards(sortBy: _sortOrder);
       } else {
         _totalCount = await DatabaseHelper.instance
             .countCardsByFolderId(widget.folder.id!);
@@ -302,7 +302,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
     if (widget.allCards) {
       _totalCount = await DatabaseHelper.instance.getTotalCardCount();
-      final cards = await DatabaseHelper.instance.getAllCards();
+      final cards = await DatabaseHelper.instance.getAllCards(sortBy: _sortOrder);
       if (!mounted) return;
       setState(() {
         _cards
@@ -983,11 +983,19 @@ class _CardListScreenState extends State<CardListScreen> {
                   _allAnswersFolded = !_allAnswersFolded;
                   _foldedCards.clear();
                 });
+                DatabaseHelper.instance.upsertSetting(
+                  AppConstants.settingAnswerFold,
+                  _allAnswersFolded ? 'collapsed' : 'expanded',
+                );
               case 'hide_toggle':
                 setState(() {
                   _allAnswersHidden = !_allAnswersHidden;
                   _revealedCards.clear();
                 });
+                DatabaseHelper.instance.upsertSetting(
+                  AppConstants.settingAnswerVisibility,
+                  _allAnswersHidden ? 'hidden' : 'visible',
+                );
             }
           },
           itemBuilder: (_) => [

@@ -141,10 +141,10 @@ class _PushNotificationSettingsScreenState
     final startMinutes =
         _intervalStartTime.hour * 60 + _intervalStartTime.minute;
     final endMinutes = _intervalEndTime.hour * 60 + _intervalEndTime.minute;
-    if (endMinutes <= startMinutes) {
+    if (endMinutes == startMinutes) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('종료 시간은 시작 시간보다 이후여야 합니다.')),
+        const SnackBar(content: Text('시작 시간과 종료 시간이 같습니다.')),
       );
       return;
     }
@@ -181,9 +181,7 @@ class _PushNotificationSettingsScreenState
       if (!mounted) return;
       // _loadData 대신 직접 상태 업데이트 (불필요한 rescheduleAll 연쇄 방지)
       setState(() {
-        // _enabled 상태는 사용자가 설정한 값 유지 (강제 변경 안 함)
         _intervalAlarmId = newId;
-        _intervalEnabled = true;
       });
 
       // 서비스 시작은 딱 1번만
@@ -269,8 +267,11 @@ class _PushNotificationSettingsScreenState
     final startTotal =
         _intervalStartTime.hour * 60 + _intervalStartTime.minute;
     final endTotal = _intervalEndTime.hour * 60 + _intervalEndTime.minute;
-    if (endTotal <= startTotal) return 0;
-    return ((endTotal - startTotal) ~/ intervalMin) + 1;
+    if (endTotal == startTotal) return 0;
+    final span = endTotal > startTotal
+        ? endTotal - startTotal
+        : (1440 - startTotal) + endTotal; // overnight wrap
+    return (span ~/ intervalMin) + 1;
   }
 
   // ─── Build ───

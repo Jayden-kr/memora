@@ -370,6 +370,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         return;
       }
       await _navigateToImport(filePath);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('파일 선택 실패: $e')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isPickingFile = false);
     }

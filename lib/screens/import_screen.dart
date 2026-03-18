@@ -112,6 +112,15 @@ class _ImportScreenState extends State<ImportScreen> {
   Future<void> _startImport() async {
     if (_selectedFolderNames.isEmpty) return;
 
+    if (_controller.isRunning) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('다른 작업이 진행 중입니다.')),
+        );
+      }
+      return;
+    }
+
     setState(() => _stage = _ImportStage.importing);
 
     // folderMapping 구성 (기존 폴더 선택 모드)

@@ -213,7 +213,7 @@ class PdfExportService {
     try {
       codec = await ui.instantiateImageCodec(
         bytes,
-        targetWidth: 70,
+        targetWidth: 300,
       );
       final frame = await codec.getNextFrame();
       image = frame.image;
