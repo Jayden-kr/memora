@@ -111,29 +111,10 @@ class PushNotificationService : Service() {
 
         saveRunning(true)
 
-        // 타이머 시작 — 시간대에 맞춰 정확한 딜레이 계산
+        // 타이머 시작 — 토글 시점 기준으로 interval 간격 반복
         handler.removeCallbacks(tickRunnable)
-        val cal = java.util.Calendar.getInstance()
-        val nowMin = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
-
-        val delayMin: Int = when {
-            nowMin < startTotal -> {
-                // 시작 시간 전 → startTotal까지 대기
-                startTotal - nowMin
-            }
-            nowMin > endTotal -> {
-                // 종료 시간 후 → 다음날 startTotal까지 대기
-                (1440 - nowMin) + startTotal
-            }
-            else -> {
-                // 범위 내 → 다음 interval 시점까지
-                val elapsed = (nowMin - startTotal) % intervalMin
-                if (elapsed == 0) intervalMin else (intervalMin - elapsed)
-            }
-        }
-
-        val delayMs = delayMin * 60 * 1000L
-        Log.d(TAG, "${delayMin}분 후 첫 알림 (현재분=$nowMin, start=$startTotal, end=$endTotal)")
+        val delayMs = intervalMin * 60 * 1000L
+        Log.d(TAG, "${intervalMin}분 후 첫 알림 (토글 시점 기준, start=$startTotal, end=$endTotal)")
         handler.postDelayed(tickRunnable, delayMs)
 
         return START_STICKY
@@ -183,8 +164,14 @@ class PushNotificationService : Service() {
         val cal = java.util.Calendar.getInstance()
         val nowTotal = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
 
-        // end inclusive: 22:00 설정 시 22:00까지 발사
-        if (nowTotal < startTotal || nowTotal > endTotal) {
+        // 시간 범위 체크 (overnight 지원: start > end인 경우 자정 넘김)
+        val inRange = if (startTotal <= endTotal) {
+            nowTotal in startTotal..endTotal
+        } else {
+            // overnight: 22:00~06:00 → nowTotal >= 22:00 OR nowTotal <= 06:00
+            nowTotal >= startTotal || nowTotal <= endTotal
+        }
+        if (!inRange) {
             Log.d(TAG, "시간 범위 밖 ($nowTotal not in [$startTotal, $endTotal]), 스킵")
             return
         }
