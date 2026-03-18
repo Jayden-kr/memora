@@ -424,7 +424,7 @@ class MemkImportService {
         if (counterJson is List && counterJson.isNotEmpty) {
           final counterData = counterJson[0] as Map<String, dynamic>;
           final current = await db.getCounter();
-          // snake_case / camelCase 양쪽 키 호환 (암기짱 원본은 camelCase)
+          // snake_case / camelCase 양쪽 키 호환 (.memk 원본은 camelCase)
           // num → int 안전 캐스트 (JSON 파싱 결과가 num일 수 있음)
           int counterVal(String snakeKey, String camelKey) =>
               (counterData[snakeKey] as num?)?.toInt() ??

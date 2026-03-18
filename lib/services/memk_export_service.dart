@@ -24,7 +24,7 @@ class ExportProgress {
 }
 
 class MemkExportService {
-  /// 로컬 경로를 암기짱 호환 경로로 변환
+  /// 로컬 경로를 .memk 호환 경로로 변환
   static String toMemkImagePath(String localPath) {
     if (localPath.isEmpty) return '';
     final fileName = localPath.split('/').last.split('\\').last;
@@ -201,7 +201,7 @@ class MemkExportService {
     onProgress(const ExportProgress(phase: 'done', message: 'Export 완료'));
   }
 
-  /// JSON 맵의 로컬 이미지 경로를 암기짱 호환 경로로 변환
+  /// JSON 맵의 로컬 이미지 경로를 .memk 호환 경로로 변환
   void _convertToMemkPaths(
     Map<String, dynamic> cardJson,
     Set<String> imageFileNames,

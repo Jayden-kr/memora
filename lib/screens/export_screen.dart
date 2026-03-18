@@ -287,7 +287,7 @@ class _ExportScreenState extends State<ExportScreen> {
                                 RadioListTile<String>(
                                   title: const Text('.memk'),
                                   subtitle: const Text(
-                                      '암기짱/Memora 호환 백업 파일'),
+                                      'Memora 백업 파일'),
                                   value: 'memk',
                                 ),
                                 RadioListTile<String>(

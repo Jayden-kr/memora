@@ -1,3 +1,12 @@
+# Claude Code
+.claude/
+
+# Build artifacts
+*.apk
+
+# Test output
+test_results.txt
+
 # Miscellaneous
 *.class
 *.log

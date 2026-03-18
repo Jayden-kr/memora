@@ -16,7 +16,7 @@ class AppConstants {
   // 이미지 저장 디렉토리
   static const String imageDir = 'images';
 
-  // 암기짱 호환 이미지 경로 prefix
+  // .memk 호환 이미지 경로 prefix (레거시)
   static const String amkizzangImagePrefix =
       '/data/user/0/com.metastudiolab.memorize/files/image/';
 

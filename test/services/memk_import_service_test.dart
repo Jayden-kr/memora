@@ -9,7 +9,7 @@ import 'package:amki_wang/utils/constants.dart';
 
 void main() {
   group('MemkImportService - extractFileName', () {
-    test('암기짱 경로에서 파일명 추출', () {
+    test('.memk 경로에서 파일명 추출', () {
       expect(
         MemkImportService.extractFileName(
           '/data/user/0/com.metastudiolab.memorize/files/image/R_119076ce-app-1567343095060.jpg',

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-**Memora** (구 암기왕)는 Flutter + SQLite 기반의 Android 플래시카드 학습 앱이다. 암기짱(com.metastudiolab.memorize)의 기능을 기반으로 하되, 불필요한 기능을 제거하고 UX를 개선한 앱. `.memk` 파일 호환성을 유지하며, 카드 CRUD, 폴더 관리, 검색, 푸시 알림, 잠금화면 기능을 제공한다.
+**Memora**는 Flutter + SQLite 기반의 Android 플래시카드 학습 앱이다. `.memk` 파일 호환성을 유지하며, 카드 CRUD, 폴더 관리, 검색, 푸시 알림, 잠금화면 기능을 제공한다.
 
 **PRD**: `PRD.md` 참조 (전체 기능 명세, 화면별 상세, 구현 Phase)
 
@@ -290,7 +290,7 @@ group('CardModel.fromJson → toJson round-trip', () {
 
 ## .memk File Format
 
-암기짱과 호환되는 ZIP 파일:
+.memk 형식 ZIP 파일:
 ```
 *.memk (ZIP)
 ├── folders.json      # 폴더 배열 (camelCase JSON)
@@ -300,7 +300,7 @@ group('CardModel.fromJson → toJson round-trip', () {
 └── images/           # 이미지 파일들
 ```
 
-**호환성 경로**: 암기짱 이미지 경로 `/data/user/0/com.metastudiolab.memorize/files/image/`에서 파일명만 추출하여 로컬 저장
+**호환성 경로**: 레거시 이미지 경로 `/data/user/0/com.metastudiolab.memorize/files/image/`에서 파일명만 추출하여 로컬 저장
 
 ---
 
@@ -336,8 +336,8 @@ ThemeData(
 
 - **한글 경로 빌드 이슈**: 반드시 `/tmp/`에 복사 후 빌드. `C:\flutter\` SDK 사용
 - **DB 버전 관리**: 새 테이블/컬럼 추가 시 `dbVersion` 올리고 `onUpgrade`에서 `ALTER TABLE` 사용
-- **.memk 호환성**: 암기짱 .memk 파일을 그대로 가져올 수 있어야 함. JSON 키는 camelCase 유지
-- **전체 로드**: 카드 리스트는 폴더 진입 시 전체 카드를 한번에 로드 (암기짱 방식). `ScrollablePositionedList`로 정확한 위치 추적 + 실시간 스크롤 라벨
+- **.memk 호환성**: .memk 파일을 그대로 가져올 수 있어야 함. JSON 키는 camelCase 유지
+- **전체 로드**: 카드 리스트는 폴더 진입 시 전체 카드를 한번에 로드. `ScrollablePositionedList`로 정확한 위치 추적 + 실시간 스크롤 라벨
 - **Boolean ↔ Integer**: SQLite에 bool 저장 시 반드시 0/1 int로 변환
 - **mounted 체크**: async 작업 후 `setState()` 전에 반드시 `if (!mounted) return;` 체크
 - **MethodChannel**: `com.henry.amki_wang/lockscreen` 채널로 Flutter ↔ Kotlin 통신
@@ -357,6 +357,6 @@ ThemeData(
 
 | ID | File | Description |
 |----|------|-------------|
-| REF-01 | `.claude/reference/amkizzang-apk-analysis.md` | 암기짱 APK 역공학 분석 (Activities, DB 스키마, 잠금화면 구현, .memk 파일 처리, 서드파티 라이브러리 등) |
+<!-- REF-01 제거됨 -->|
 <!-- | REF-02 | `.claude/reference/your-file.md` | 설명 | -->
 <!-- | REF-03 | `.claude/reference/your-file.md` | 설명 | -->

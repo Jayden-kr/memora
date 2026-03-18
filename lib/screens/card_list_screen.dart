@@ -247,7 +247,7 @@ class _CardListScreenState extends State<CardListScreen> {
     }
   }
 
-  /// 전체 카드 로드 (페이지네이션 없음 — 암기짱 방식)
+  /// 전체 카드 로드 (페이지네이션 없음 — 전체 로드 방식)
   Future<void> _loadCards() async {
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {

@@ -9,7 +9,7 @@ import 'package:amki_wang/utils/constants.dart';
 
 void main() {
   group('MemkExportService - toMemkImagePath', () {
-    test('로컬 경로를 암기짱 호환 경로로 변환', () {
+    test('로컬 경로를 .memk 호환 경로로 변환', () {
       final result = MemkExportService.toMemkImagePath(
         '/data/data/com.example/files/images/R_abc.jpg',
       );
@@ -48,7 +48,7 @@ void main() {
       expect(json['cardCount'], 13992);
       expect(json['parent'], false);
       expect(json['isSpecialFolder'], false);
-      // 암기짱 호환 필드
+      // .memk 호환 필드
       expect(json['isDirty'], false);
       expect(json['isSelected'], false);
     });
