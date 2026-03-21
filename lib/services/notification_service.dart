@@ -181,8 +181,9 @@ class NotificationService {
   }
 
   static Future<void> _rescheduleAllImpl() async {
-    // flutter_local_notifications 정리 (실패해도 계속 진행)
-    try { await _plugin.cancelAll(); } catch (_) {}
+    // NOTE: _plugin.cancelAll()은 NotificationManager.cancelAll()을 호출하여
+    // 네이티브 PushNotificationService 카드 알림(50000+)까지 전부 삭제함.
+    // 이 앱은 flutter_local_notifications 스케줄링을 사용하지 않으므로 cancelAll() 불필요.
 
     // 알람 먼저 조회 (설정 마이그레이션에 필요)
     List<Map<String, dynamic>> alarms;
@@ -355,11 +356,11 @@ class NotificationService {
   }
 
   static Future<void> cancelAllNotifications() async {
-    final errors = <String>[];
-    try { await stopIntervalService(); } catch (e) { errors.add('stopService: $e'); }
-    try { await _plugin.cancelAll(); } catch (e) { errors.add('cancelAll: $e'); }
-    if (errors.isNotEmpty) {
-      debugPrint('[NOTIF] cancelAllNotifications 오류: $errors');
+    // 서비스 중지만 수행. _plugin.cancelAll()은 네이티브 push 알림까지 삭제하므로 사용하지 않음.
+    try {
+      await stopIntervalService();
+    } catch (e) {
+      debugPrint('[NOTIF] cancelAllNotifications 오류: $e');
     }
   }
 }
