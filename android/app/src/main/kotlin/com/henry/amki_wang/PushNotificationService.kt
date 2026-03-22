@@ -14,7 +14,7 @@ import androidx.core.content.ContextCompat
 /**
  * 간격 반복 푸시 알림 Foreground Service
  * - 앱을 스와이프해서 날려도 살아남음 (START_STICKY)
- * - Handler.postDelayed로 정확한 간격 알림
+ * - AlarmManager.setExactAndAllowWhileIdle로 프로세스 사망에도 정확한 간격 알림
  * - SQLite 직접 접근으로 랜덤 카드 조회
  */
 class PushNotificationService : Service() {
@@ -24,24 +24,17 @@ class PushNotificationService : Service() {
         const val SERVICE_NOTIF_ID = 3
         const val CARD_NOTIF_BASE = 50000
         const val ACTION_STOP = "STOP"
+        const val ACTION_TICK = "TICK"
+        const val REQUEST_CODE_TICK = 10000
+        const val REQUEST_CODE_RESTART = 9999
     }
 
-    private val handler = Handler(Looper.getMainLooper())
     private var intervalMin = 30
     private var startTotal = 540   // 09:00
     private var endTotal = 1320    // 22:00
     private var folderId: Int? = null
     private var soundEnabled = true
     private val tickCount = java.util.concurrent.atomic.AtomicInteger(0)
-
-    private val tickRunnable = object : Runnable {
-        override fun run() {
-            fireIfInRange()
-            val delayMs = intervalMin * 60 * 1000L
-            saveNextFireTime(System.currentTimeMillis() + delayMs)
-            handler.postDelayed(this, delayMs)
-        }
-    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,10 +58,13 @@ class PushNotificationService : Service() {
 
         if (intent?.action == ACTION_STOP) {
             Log.d(TAG, "STOP 수신 — 서비스 종료")
-            handler.removeCallbacks(tickRunnable)
+            // AlarmManager PendingIntent 취소 (tick + restart)
+            cancelTickAlarm()
+            cancelRestartAlarm()
             // nextFireTime 정리 (OFF→ON 시 새 타이머 시작을 위해)
             getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
                 .edit().remove("nextFireTime").remove("timingKey").commit()
+            saveRunning(false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             } else {
@@ -76,8 +72,40 @@ class PushNotificationService : Service() {
                 stopForeground(true)
             }
             stopSelf()
-            saveRunning(false)
             return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_TICK) {
+            Log.d(TAG, "TICK 수신 — 알림 체크")
+            // 설정 복원 (프로세스가 재생성됐을 수 있으므로)
+            loadSettingsFromPrefs()
+
+            // startForeground 필수: getForegroundService PendingIntent로 시작되므로
+            // 프로세스 재생성(cold start) 시 startForeground 미호출 → ForegroundServiceDidNotStartInTimeException 방지
+            createNotificationChannel()
+            val notification = createServiceNotification()
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(SERVICE_NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                } else {
+                    startForeground(SERVICE_NOTIF_ID, notification)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "TICK startForeground 실패", e)
+                return START_NOT_STICKY
+            }
+
+            saveRunning(true)
+
+            // 다음 알람을 먼저 예약 (프로세스가 fireIfInRange 도중 죽어도 체인 유지)
+            val delayMs = intervalMin * 60 * 1000L
+            saveNextFireTime(System.currentTimeMillis() + delayMs)
+            scheduleNextAlarm(delayMs)
+
+            // 예약 완료 후 발화 (프로세스 사망 시 이번 알림만 유실, 체인은 유지)
+            fireIfInRange()
+
+            return START_STICKY
         }
 
         // 설정 읽기
@@ -122,8 +150,8 @@ class PushNotificationService : Service() {
 
         saveRunning(true)
 
-        // 타이머 로직: 설정 변경 여부에 따라 리셋 or 유지
-        handler.removeCallbacks(tickRunnable)
+        // 기존 tick 알람 취소
+        cancelTickAlarm()
 
         if (wasRunning && timingKey == savedTimingKey) {
             // 설정 동일 + 이미 실행 중이었음 → 남은 시간만 대기
@@ -132,18 +160,21 @@ class PushNotificationService : Service() {
             val remaining = nextFireTime - now
 
             if (remaining > 0) {
-                handler.postDelayed(tickRunnable, remaining)
+                scheduleNextAlarm(remaining)
                 Log.d(TAG, "타이머 유지: ${remaining / 60000}분 ${(remaining % 60000) / 1000}초 남음")
             } else {
                 // 이미 지남 → 즉시 실행
-                handler.post(tickRunnable)
+                fireIfInRange()
+                val delayMs = intervalMin * 60 * 1000L
+                saveNextFireTime(System.currentTimeMillis() + delayMs)
+                scheduleNextAlarm(delayMs)
                 Log.d(TAG, "타이머 만료 → 즉시 실행")
             }
         } else {
             // 새로 시작 or 설정 변경 → 전체 interval 타이머
             val delayMs = intervalMin * 60 * 1000L
             saveNextFireTime(System.currentTimeMillis() + delayMs)
-            handler.postDelayed(tickRunnable, delayMs)
+            scheduleNextAlarm(delayMs)
             Log.d(TAG, "${intervalMin}분 후 첫 알림 (설정 변경, start=$startTotal, end=$endTotal)")
         }
 
@@ -151,43 +182,124 @@ class PushNotificationService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(tickRunnable)
         Log.d(TAG, "onDestroy")
         super.onDestroy()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        // running 상태가 아니면 재시작 불필요
+        val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+        if (!prefs.getBoolean("running", false)) {
+            Log.d(TAG, "onTaskRemoved — running=false, 재시작 예약 안 함")
+            return
+        }
         Log.d(TAG, "onTaskRemoved — AlarmManager로 서비스 재시작 예약")
-        // Samsung에서 직접 startService 호출은 무시될 수 있으므로 AlarmManager로 예약
         val restartIntent = Intent(applicationContext, PushNotificationService::class.java)
         val pi = PendingIntent.getForegroundService(
-            applicationContext, 9999, restartIntent,
+            applicationContext, REQUEST_CODE_RESTART, restartIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val am = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
-        // Android 14+: SCHEDULE_EXACT_ALARM 권한 체크 (없으면 inexact로 fallback)
+        val triggerAt = System.currentTimeMillis() + 3000
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
             if (am.canScheduleExactAlarms()) {
                 am.setExactAndAllowWhileIdle(
-                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    android.os.SystemClock.elapsedRealtime() + 3000,
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerAt,
                     pi
                 )
             } else {
                 am.setAndAllowWhileIdle(
-                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    android.os.SystemClock.elapsedRealtime() + 3000,
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerAt,
                     pi
                 )
             }
         } else {
             am?.setExactAndAllowWhileIdle(
-                android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                android.os.SystemClock.elapsedRealtime() + 3000,
+                android.app.AlarmManager.RTC_WAKEUP,
+                triggerAt,
                 pi
             )
         }
+    }
+
+    /**
+     * AlarmManager를 사용하여 delayMs 후 ACTION_TICK Intent를 예약
+     */
+    private fun scheduleNextAlarm(delayMs: Long) {
+        val tickIntent = Intent(applicationContext, PushNotificationService::class.java).apply {
+            action = ACTION_TICK
+        }
+        val pi = PendingIntent.getForegroundService(
+            applicationContext, REQUEST_CODE_TICK, tickIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val am = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+        val triggerAt = System.currentTimeMillis() + delayMs
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
+            if (am.canScheduleExactAlarms()) {
+                am.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pi
+                )
+            } else {
+                am.setAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pi
+                )
+            }
+        } else {
+            am?.setExactAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                triggerAt,
+                pi
+            )
+        }
+        Log.d(TAG, "다음 알람 예약: ${delayMs / 60000}분 ${(delayMs % 60000) / 1000}초 후")
+    }
+
+    /**
+     * Tick 알람 PendingIntent 취소
+     */
+    private fun cancelTickAlarm() {
+        val tickIntent = Intent(applicationContext, PushNotificationService::class.java).apply {
+            action = ACTION_TICK
+        }
+        val pi = PendingIntent.getForegroundService(
+            applicationContext, REQUEST_CODE_TICK, tickIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val am = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+        am?.cancel(pi)
+    }
+
+    /**
+     * Restart 알람 PendingIntent 취소
+     */
+    private fun cancelRestartAlarm() {
+        val restartIntent = Intent(applicationContext, PushNotificationService::class.java)
+        val pi = PendingIntent.getForegroundService(
+            applicationContext, REQUEST_CODE_RESTART, restartIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val am = getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+        am?.cancel(pi)
+    }
+
+    /**
+     * SharedPreferences에서 설정값 복원 (TICK 액션에서 프로세스 재생성 시 사용)
+     */
+    private fun loadSettingsFromPrefs() {
+        val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+        intervalMin = maxOf(5, prefs.getInt("intervalMin", 30))
+        startTotal = prefs.getInt("startTotal", 540)
+        endTotal = prefs.getInt("endTotal", 1320)
+        folderId = prefs.getInt("folderId", -1).let { if (it == -1) null else it }
+        soundEnabled = prefs.getBoolean("soundEnabled", true)
     }
 
     private fun fireIfInRange() {
