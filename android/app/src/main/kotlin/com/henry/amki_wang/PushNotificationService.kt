@@ -163,12 +163,12 @@ class PushNotificationService : Service() {
                 scheduleNextAlarm(remaining)
                 Log.d(TAG, "타이머 유지: ${remaining / 60000}분 ${(remaining % 60000) / 1000}초 남음")
             } else {
-                // 이미 지남 → 즉시 실행
-                fireIfInRange()
+                // 이전 예약 시간이 이미 지남 → 새 interval 시작 (즉시 발화 X)
+                // 알림은 TICK 알람만 발사해야 함. 앱 열기 = 알림 트리거 아님.
                 val delayMs = intervalMin * 60 * 1000L
                 saveNextFireTime(System.currentTimeMillis() + delayMs)
                 scheduleNextAlarm(delayMs)
-                Log.d(TAG, "타이머 만료 → 즉시 실행")
+                Log.d(TAG, "타이머 만료 → ${intervalMin}분 후 다음 알림 예약")
             }
         } else {
             // 새로 시작 or 설정 변경 → 전체 interval 타이머
