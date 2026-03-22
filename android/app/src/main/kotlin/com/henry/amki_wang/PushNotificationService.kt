@@ -37,7 +37,9 @@ class PushNotificationService : Service() {
     private val tickRunnable = object : Runnable {
         override fun run() {
             fireIfInRange()
-            handler.postDelayed(this, intervalMin * 60 * 1000L)
+            val delayMs = intervalMin * 60 * 1000L
+            saveNextFireTime(System.currentTimeMillis() + delayMs)
+            handler.postDelayed(this, delayMs)
         }
     }
 
@@ -64,6 +66,9 @@ class PushNotificationService : Service() {
         if (intent?.action == ACTION_STOP) {
             Log.d(TAG, "STOP 수신 — 서비스 종료")
             handler.removeCallbacks(tickRunnable)
+            // nextFireTime 정리 (OFF→ON 시 새 타이머 시작을 위해)
+            getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                .edit().remove("nextFireTime").remove("timingKey").commit()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             } else {
@@ -85,6 +90,11 @@ class PushNotificationService : Service() {
         soundEnabled = intent?.getBooleanExtra("soundEnabled", prefs.getBoolean("soundEnabled", true))
             ?: prefs.getBoolean("soundEnabled", true)
 
+        // 타이밍 설정 변경 여부 판별 (폴더/알림음은 타이밍과 무관)
+        val timingKey = "$intervalMin:$startTotal:$endTotal"
+        val savedTimingKey = prefs.getString("timingKey", "") ?: ""
+        val wasRunning = prefs.getBoolean("running", false)
+
         // 설정 저장 (재시작 시 복원용)
         prefs.edit()
             .putInt("intervalMin", intervalMin)
@@ -92,6 +102,7 @@ class PushNotificationService : Service() {
             .putInt("endTotal", endTotal)
             .putInt("folderId", folderId ?: -1)
             .putBoolean("soundEnabled", soundEnabled)
+            .putString("timingKey", timingKey)
             .commit()  // apply() 대신 commit() — 서비스 kill 전 데이터 보존 보장
 
         Log.d(TAG, "시작: ${startTotal/60}:${String.format(java.util.Locale.US, "%02d", startTotal%60)}~${endTotal/60}:${String.format(java.util.Locale.US, "%02d", endTotal%60)}, ${intervalMin}분 간격")
@@ -111,11 +122,30 @@ class PushNotificationService : Service() {
 
         saveRunning(true)
 
-        // 타이머 시작 — 토글 시점 기준으로 interval 간격 반복
+        // 타이머 로직: 설정 변경 여부에 따라 리셋 or 유지
         handler.removeCallbacks(tickRunnable)
-        val delayMs = intervalMin * 60 * 1000L
-        Log.d(TAG, "${intervalMin}분 후 첫 알림 (토글 시점 기준, start=$startTotal, end=$endTotal)")
-        handler.postDelayed(tickRunnable, delayMs)
+
+        if (wasRunning && timingKey == savedTimingKey) {
+            // 설정 동일 + 이미 실행 중이었음 → 남은 시간만 대기
+            val nextFireTime = prefs.getLong("nextFireTime", 0L)
+            val now = System.currentTimeMillis()
+            val remaining = nextFireTime - now
+
+            if (remaining > 0) {
+                handler.postDelayed(tickRunnable, remaining)
+                Log.d(TAG, "타이머 유지: ${remaining / 60000}분 ${(remaining % 60000) / 1000}초 남음")
+            } else {
+                // 이미 지남 → 즉시 실행
+                handler.post(tickRunnable)
+                Log.d(TAG, "타이머 만료 → 즉시 실행")
+            }
+        } else {
+            // 새로 시작 or 설정 변경 → 전체 interval 타이머
+            val delayMs = intervalMin * 60 * 1000L
+            saveNextFireTime(System.currentTimeMillis() + delayMs)
+            handler.postDelayed(tickRunnable, delayMs)
+            Log.d(TAG, "${intervalMin}분 후 첫 알림 (설정 변경, start=$startTotal, end=$endTotal)")
+        }
 
         return START_STICKY
     }
@@ -332,6 +362,11 @@ class PushNotificationService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
+    }
+
+    private fun saveNextFireTime(time: Long) {
+        getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+            .edit().putLong("nextFireTime", time).commit()
     }
 
     private fun saveRunning(running: Boolean) {
