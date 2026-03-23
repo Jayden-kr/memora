@@ -98,9 +98,17 @@ class PushNotificationService : Service() {
             saveRunning(true)
 
             // 다음 알람을 먼저 예약 (프로세스가 fireIfInRange 도중 죽어도 체인 유지)
-            val delayMs = intervalMin * 60 * 1000L
-            saveNextFireTime(System.currentTimeMillis() + delayMs)
-            scheduleNextAlarm(delayMs)
+            // 핵심: 예정시각(savedNextFireTime) 기준으로 다음 계산 → 드리프트 누적 방지
+            val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+            val intervalMs = intervalMin * 60 * 1000L
+            val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
+            var nextFireTime = savedFireTime + intervalMs
+            // 만약 nextFireTime이 이미 과거면 → 다음 슬롯까지 건너뛰기
+            while (nextFireTime <= System.currentTimeMillis()) {
+                nextFireTime += intervalMs
+            }
+            saveNextFireTime(nextFireTime)
+            scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
 
             // 예약 완료 후 발화 (프로세스 사망 시 이번 알림만 유실, 체인은 유지)
             fireIfInRange()
