@@ -6,6 +6,8 @@ import 'database/database_helper.dart';
 import 'screens/card_list_screen.dart';
 import 'screens/export_screen.dart';
 import 'screens/import_screen.dart';
+import 'screens/lock_screen_settings.dart' show LockScreenSettingsScreen;
+import 'screens/push_notification_settings.dart' show PushNotificationSettingsScreen;
 import 'services/import_export_controller.dart';
 import 'services/lock_screen_service.dart';
 import 'services/notification_service.dart';
@@ -64,6 +66,11 @@ void main() async {
           _handleNotificationNav(NotificationNavEvent(folderId, cardId));
         }
       }
+    } else if (call.method == 'navigateToSettings') {
+      final target = call.arguments as String?;
+      if (target != null) {
+        _handleSettingsNavigation(target);
+      }
     } else if (call.method == 'pdfProgress') {
       final args = call.arguments as Map?;
       if (args != null) {
@@ -85,8 +92,18 @@ void main() async {
       debugPrint('[MAIN] processing cold-start pending event');
       _handleNotificationNav(pending);
     }
+    // 포그라운드 서비스 알림 탭 → 설정 화면 pending 처리
+    final settingsTarget = _pendingSettingsTarget;
+    if (settingsTarget != null) {
+      _pendingSettingsTarget = null;
+      debugPrint('[MAIN] processing cold-start pending settings: $settingsTarget');
+      _handleSettingsNavigation(settingsTarget);
+    }
   });
 }
+
+/// Cold-start 시 navigator 준비 전에 도착한 설정 네비게이션 대상
+String? _pendingSettingsTarget;
 
 Future<void> _handleNotificationNav(NotificationNavEvent event) async {
   debugPrint(
@@ -162,6 +179,28 @@ void _handleExportNotificationTap() {
   nav.push(MaterialPageRoute(
     builder: (_) => const ExportScreen(progressOnly: true),
   ));
+}
+
+void _handleSettingsNavigation(String target) {
+  final nav = navigatorKey.currentState;
+  if (nav == null) {
+    // Cold-start: navigator 아직 준비 안 됨 → addPostFrameCallback에서 처리
+    _pendingSettingsTarget = target;
+    return;
+  }
+
+  Widget screen;
+  switch (target) {
+    case 'lock_screen_settings':
+      screen = const LockScreenSettingsScreen();
+    case 'push_notification_settings':
+      screen = const PushNotificationSettingsScreen();
+    default:
+      return;
+  }
+
+  nav.popUntil((route) => route.isFirst);
+  nav.push(MaterialPageRoute(builder: (_) => screen));
 }
 
 Future<void> _restoreLockScreenService() async {

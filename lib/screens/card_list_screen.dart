@@ -810,6 +810,9 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   /// 스크롤 위치 인디케이터 (드래그로 빠른 이동 지원)
+  /// GestureDetector는 전체 트랙 높이를 차지하되, deferToChild로
+  /// 인디케이터 위치에 직접 터치했을 때만 제스처가 시작됨.
+  /// 드래그 시작 후에는 전체 트랙에서 자유롭게 이동 가능.
   Widget _buildScrollIndicator() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -818,7 +821,7 @@ class _CardListScreenState extends State<CardListScreen> {
         final maxOffset = trackHeight - indicatorHeight;
 
         return GestureDetector(
-          behavior: HitTestBehavior.translucent,
+          behavior: HitTestBehavior.deferToChild,
           onVerticalDragStart: (details) {
             _isDraggingThumb.value = true;
             _scrollLabelTimer?.cancel();
@@ -859,29 +862,32 @@ class _CardListScreenState extends State<CardListScreen> {
                             Positioned(
                               top: top,
                               right: 0,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primary
-                                      .withValues(alpha: 0.25),
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(14),
-                                    bottomLeft: Radius.circular(14),
-                                  ),
-                                ),
-                                child: Text(
-                                  '$currentIndex/${_cards.length}',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontFamily: 'Pretendard',
-                                    fontWeight: FontWeight.w600,
+                              child: Listener(
+                                behavior: HitTestBehavior.opaque,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 4),
+                                  decoration: BoxDecoration(
                                     color: Theme.of(context)
                                         .colorScheme
-                                        .onSurface
-                                        .withValues(alpha: 0.7),
+                                        .primary
+                                        .withValues(alpha: 0.25),
+                                    borderRadius: const BorderRadius.only(
+                                      topLeft: Radius.circular(14),
+                                      bottomLeft: Radius.circular(14),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    '$currentIndex/${_cards.length}',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontFamily: 'Pretendard',
+                                      fontWeight: FontWeight.w600,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurface
+                                          .withValues(alpha: 0.7),
+                                    ),
                                   ),
                                 ),
                               ),

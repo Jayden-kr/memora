@@ -27,6 +27,8 @@ class MainActivity : FlutterActivity() {
         // Cold start: 알림 탭으로 앱이 시작된 경우 payload를 Flutter에 전달하기 위해 저장
         val initialPayload = intent?.getStringExtra("notification_payload")
         intent?.removeExtra("notification_payload")
+        val initialNavigateTo = intent?.getStringExtra("navigate_to")
+        intent?.removeExtra("navigate_to")
 
         // Import/Export Foreground Service MethodChannel
         val ieChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
@@ -370,6 +372,49 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+
+        // Cold start: 포그라운드 서비스 상주 알림 탭 → 설정 화면 네비게이션
+        if (initialNavigateTo != null) {
+            Log.d(TAG, "Cold start navigate_to: $initialNavigateTo")
+            val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+            var retryCount = 0
+            val maxRetries = 5
+            var retryRef: Runnable? = null
+            val retryRunnable = object : Runnable {
+                override fun run() {
+                    try {
+                        val channel = importExportChannel
+                        if (channel != null) {
+                            val self = retryRef ?: return
+                            channel.invokeMethod("navigateToSettings", initialNavigateTo, object : MethodChannel.Result {
+                                override fun success(result: Any?) {
+                                    Log.d(TAG, "Cold start navigateToSettings succeeded")
+                                }
+                                override fun error(code: String, message: String?, details: Any?) {
+                                    Log.w(TAG, "Cold start navigateToSettings error: $code $message")
+                                }
+                                override fun notImplemented() {
+                                    retryCount++
+                                    if (retryCount < maxRetries) {
+                                        Log.d(TAG, "Cold start navigateToSettings notImplemented, retry $retryCount/$maxRetries")
+                                        mainHandler.postDelayed(self, 500)
+                                    }
+                                }
+                            })
+                        } else {
+                            retryCount++
+                            if (retryCount < maxRetries) {
+                                mainHandler.postDelayed(this, 500)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Cold start navigateToSettings failed: ${e.message}")
+                    }
+                }
+            }
+            retryRef = retryRunnable
+            mainHandler.postDelayed(retryRunnable, 300)
+        }
     }
 
     private fun saveSettings(settings: Map<String, Any?>) {
@@ -442,7 +487,15 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleImportNavigationIntent(intent)
+        handleSettingsNavigationIntent(intent)
         handlePushNotificationIntent(intent)
+    }
+
+    private fun handleSettingsNavigationIntent(intent: Intent) {
+        val target = intent.getStringExtra("navigate_to") ?: return
+        intent.removeExtra("navigate_to")
+        Log.d(TAG, "Settings navigation: $target")
+        importExportChannel?.invokeMethod("navigateToSettings", target)
     }
 
     private fun handleImportNavigationIntent(intent: Intent) {
