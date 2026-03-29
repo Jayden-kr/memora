@@ -432,19 +432,6 @@ class _PushNotificationSettingsScreenState
             style: Theme.of(context).textTheme.titleSmall),
       ),
 
-      // ON/OFF (저장된 간격 알람이 있을 때만)
-      if (_intervalAlarmId != null)
-        ListTile(
-          title: const Text('간격 반복 알림'),
-          trailing: Transform.scale(
-            scale: 0.8,
-            child: Switch(
-              value: _intervalEnabled && _enabled,
-              onChanged: _enabled ? (v) => _toggleIntervalAlarm(v) : null,
-            ),
-          ),
-        ),
-
       // 시작 시간
       ListTile(
         title: const Text('시작 시간'),
@@ -533,7 +520,7 @@ class _PushNotificationSettingsScreenState
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: FilledButton.icon(
-          onPressed: _saving ? null : _saveIntervalAlarm,
+          onPressed: (_enabled && !_saving) ? _saveIntervalAlarm : null,
           icon: _saving
               ? const SizedBox(
                   width: 18,
