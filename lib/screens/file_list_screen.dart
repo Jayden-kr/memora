@@ -16,7 +16,7 @@ class FileListScreen extends StatefulWidget {
 
 class _FileListScreenState extends State<FileListScreen> {
   static const _channel =
-      MethodChannel('com.henry.amki_wang/import_export');
+      MethodChannel('com.henry.memora/import_export');
 
   List<Map<String, dynamic>> _files = [];
   bool _loading = true;
@@ -133,10 +133,10 @@ class _FileListScreenState extends State<FileListScreen> {
   Future<void> _restoreFile(Map<String, dynamic> file) async {
     final filePath = file['file_path'] as String?;
     if (filePath == null) return;
-    if (!filePath.endsWith('.memk')) {
+    if (!filePath.endsWith('.memk') && !filePath.endsWith('.mra')) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('.memk 파일만 복원할 수 있습니다.')),
+        const SnackBar(content: Text('.mra 또는 .memk 파일만 복원할 수 있습니다.')),
       );
       return;
     }
@@ -451,7 +451,7 @@ class _FileListScreenState extends State<FileListScreen> {
     if (memkFiles.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('복원 가능한 .memk 파일이 없습니다.')),
+        const SnackBar(content: Text('복원 가능한 파일이 없습니다.')),
       );
       return;
     }

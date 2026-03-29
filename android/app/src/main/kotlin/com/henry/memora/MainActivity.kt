@@ -1,4 +1,4 @@
-package com.henry.amki_wang
+package com.henry.memora
 
 import android.app.NotificationManager
 import android.content.ContentValues
@@ -15,8 +15,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.henry.amki_wang/lockscreen"
-    private val IMPORT_EXPORT_CHANNEL = "com.henry.amki_wang/import_export"
+    private val CHANNEL = "com.henry.memora/lockscreen"
+    private val IMPORT_EXPORT_CHANNEL = "com.henry.memora/import_export"
     private val TAG = "AmkiWang"
 
     private var importExportChannel: MethodChannel? = null
@@ -209,7 +209,7 @@ class MainActivity : FlutterActivity() {
             }
 
         // Push Notification Interval Service MethodChannel
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.henry.amki_wang/push_notif")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.henry.memora/push_notif")
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
@@ -350,7 +350,7 @@ class MainActivity : FlutterActivity() {
                                             retryCount++
                                             if (retryCount < maxRetries) {
                                                 Log.d(TAG, "Cold start nav notImplemented, retry $retryCount/$maxRetries")
-                                                mainHandler.postDelayed(self, 1000)
+                                                mainHandler.postDelayed(self, 500)
                                             } else {
                                                 Log.w(TAG, "Cold start nav: gave up after $maxRetries retries")
                                             }
@@ -359,7 +359,7 @@ class MainActivity : FlutterActivity() {
                                 } else {
                                     retryCount++
                                     if (retryCount < maxRetries) {
-                                        mainHandler.postDelayed(this, 1000)
+                                        mainHandler.postDelayed(this, 500)
                                     }
                                 }
                             } catch (e: Exception) {
@@ -368,7 +368,7 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     retryRef = retryRunnable
-                    mainHandler.postDelayed(retryRunnable, 1500)
+                    mainHandler.postDelayed(retryRunnable, 300)
                 }
             }
         }

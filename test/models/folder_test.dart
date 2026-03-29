@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:amki_wang/models/folder.dart';
+import 'package:memora/models/folder.dart';
 
 void main() {
   final sampleJson = {

@@ -28,7 +28,7 @@ class MemkExportService {
   static String toMemkImagePath(String localPath) {
     if (localPath.isEmpty) return '';
     final fileName = localPath.split('/').last.split('\\').last;
-    return '${AppConstants.amkizzangImagePrefix}$fileName';
+    return '${AppConstants.legacyImagePrefix}$fileName';
   }
 
   /// DB 데이터를 .memk ZIP 파일로 export
@@ -216,7 +216,7 @@ class MemkExportService {
       if (fileName.isEmpty) continue;
 
       imageFileNames.add(fileName);
-      cardJson[key] = '${AppConstants.amkizzangImagePrefix}$fileName';
+      cardJson[key] = '${AppConstants.legacyImagePrefix}$fileName';
     }
   }
 

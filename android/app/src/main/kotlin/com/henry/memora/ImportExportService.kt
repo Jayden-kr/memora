@@ -1,4 +1,4 @@
-package com.henry.amki_wang
+package com.henry.memora
 
 import android.app.*
 import android.content.Context
@@ -86,7 +86,7 @@ class ImportExportService : Service() {
                 }
             }
             val pendingIntent = PendingIntent.getActivity(
-                appContext, 1, intent,
+                appContext, 3, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 

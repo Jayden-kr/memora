@@ -285,7 +285,7 @@ class _ExportScreenState extends State<ExportScreen> {
                             child: Column(
                               children: [
                                 RadioListTile<String>(
-                                  title: const Text('.memk'),
+                                  title: const Text('.mra'),
                                   subtitle: const Text(
                                       'Memora 백업 파일'),
                                   value: 'memk',

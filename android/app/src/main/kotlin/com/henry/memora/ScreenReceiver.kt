@@ -1,4 +1,4 @@
-package com.henry.amki_wang
+package com.henry.memora
 
 import android.content.BroadcastReceiver
 import android.content.Context

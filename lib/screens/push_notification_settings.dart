@@ -190,7 +190,7 @@ class _PushNotificationSettingsScreenState
 
       // Samsung 등에서 배터리 최적화 해제 요청
       try {
-        const channel = MethodChannel('com.henry.amki_wang/push_notif');
+        const channel = MethodChannel('com.henry.memora/push_notif');
         await channel.invokeMethod<bool>('requestBatteryOptimization');
       } catch (_) {}
 

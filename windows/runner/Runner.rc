@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.henry" "\0"
-            VALUE "FileDescription", "amki_wang" "\0"
+            VALUE "FileDescription", "memora" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "amki_wang" "\0"
+            VALUE "InternalName", "memora" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.henry. All rights reserved." "\0"
-            VALUE "OriginalFilename", "amki_wang.exe" "\0"
-            VALUE "ProductName", "amki_wang" "\0"
+            VALUE "OriginalFilename", "memora.exe" "\0"
+            VALUE "ProductName", "memora" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

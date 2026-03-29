@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:amki_wang/services/memk_import_service.dart';
-import 'package:amki_wang/models/card.dart';
-import 'package:amki_wang/models/folder.dart';
-import 'package:amki_wang/utils/constants.dart';
+import 'package:memora/services/memk_import_service.dart';
+import 'package:memora/models/card.dart';
+import 'package:memora/models/folder.dart';
+import 'package:memora/utils/constants.dart';
 
 void main() {
   group('MemkImportService - extractFileName', () {

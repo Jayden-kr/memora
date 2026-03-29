@@ -67,6 +67,34 @@
                       android:mimeType="*/*"
                       android:pathPattern=".*\\.memk" />
             </intent-filter>
+            <!-- .mra 파일 열기 (외부 앱에서 공유/열기) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/mra" />
+                <data android:mimeType="application/x-mra" />
+            </intent-filter>
+            <!-- .mra 파일 확장자로 열기 (content:// URI) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content"
+                      android:host="*"
+                      android:mimeType="*/*"
+                      android:pathPattern=".*\\.mra" />
+            </intent-filter>
+            <!-- .mra 파일 확장자로 열기 (file:// URI) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="file"
+                      android:host="*"
+                      android:mimeType="*/*"
+                      android:pathPattern=".*\\.mra" />
+            </intent-filter>
         </activity>
         <!-- 잠금화면 Foreground Service -->
         <service

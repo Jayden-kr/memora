@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class LockScreenService {
-  static const _channel = MethodChannel('com.henry.amki_wang/lockscreen');
+  static const _channel = MethodChannel('com.henry.memora/lockscreen');
 
   /// 설정 저장 + 서비스 시작
   static Future<void> startService({

@@ -94,20 +94,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   void _handleSharedFiles(List<SharedMediaFile> files) {
     if (files.isEmpty) return;
     if (!mounted) return;
-    // .memk 파일 찾기 (없으면 null)
-    SharedMediaFile? memkFile;
+    // .memk / .mra 파일 찾기 (없으면 null)
+    SharedMediaFile? importFile;
     for (final f in files) {
-      if (f.path.endsWith('.memk')) {
-        memkFile = f;
+      if (f.path.endsWith('.memk') || f.path.endsWith('.mra')) {
+        importFile = f;
         break;
       }
     }
-    if (memkFile != null) {
-      _navigateToImport(memkFile.path);
+    if (importFile != null) {
+      _navigateToImport(importFile.path);
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('.memk 파일만 가져올 수 있습니다.')),
+          const SnackBar(content: Text('.mra 또는 .memk 파일만 가져올 수 있습니다.')),
         );
       }
     }
@@ -223,7 +223,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ),
             ListTile(
               leading: const Icon(Icons.file_download),
-              title: const Text('파일(.memk) 가져오기',
+              title: const Text('파일 가져오기',
                   style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
@@ -362,10 +362,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       );
       if (result == null || result.files.single.path == null) return;
       final filePath = result.files.single.path!;
-      if (!filePath.endsWith('.memk')) {
+      if (!filePath.endsWith('.memk') && !filePath.endsWith('.mra')) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('.memk 파일만 선택할 수 있습니다.')),
+          const SnackBar(content: Text('.mra 또는 .memk 파일만 선택할 수 있습니다.')),
         );
         return;
       }
@@ -624,7 +624,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
         // Export/Import 진행 중이면 앱을 종료하지 않고 백그라운드로 보냄
         if (ImportExportController.instance.isRunning) {
-          const MethodChannel('com.henry.amki_wang/import_export')
+          const MethodChannel('com.henry.memora/import_export')
               .invokeMethod('moveToBackground');
           return;
         }

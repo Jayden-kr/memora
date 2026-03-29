@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 
 import 'app.dart';
 import 'database/database_helper.dart';
+import 'models/card.dart';
+import 'models/folder.dart';
 import 'screens/card_list_screen.dart';
 import 'screens/export_screen.dart';
 import 'screens/import_screen.dart';
@@ -51,7 +53,7 @@ void main() async {
 
   // Import/Export 알림 탭 → ImportScreen 네비게이션
   const importExportChannel =
-      MethodChannel('com.henry.amki_wang/import_export');
+      MethodChannel('com.henry.memora/import_export');
   importExportChannel.setMethodCallHandler((call) async {
     if (call.method == 'navigateToImport') {
       _handleImportNotificationTap();
@@ -128,27 +130,35 @@ Future<void> _handleNotificationNav(NotificationNavEvent event) async {
 Future<void> _doNavigate(
     NavigatorState nav, NotificationNavEvent event) async {
   try {
-    // DB에서 해당 카드를 직접 조회
-    final card =
-        await DatabaseHelper.instance.getCardById(event.cardId);
+    // 카드 조회 + 폴더 조회 병렬 실행 (event.folderId 활용)
+    final results = await Future.wait([
+      DatabaseHelper.instance.getCardById(event.cardId),
+      DatabaseHelper.instance.getFolderById(event.folderId),
+    ]);
+    final card = results[0] as CardModel?;
+    var folder = results[1] as Folder?;
+
     if (card == null) {
       debugPrint('[MAIN] card not found for id=${event.cardId}');
       return;
     }
 
-    // 폴더 조회
-    final folder =
-        await DatabaseHelper.instance.getFolderById(card.folderId);
-    if (folder == null) {
-      debugPrint('[MAIN] folder not found for id=${card.folderId}');
+    // 카드가 다른 폴더로 이동된 경우 → 현재 폴더로 보정
+    if (card.folderId != event.folderId) {
+      folder = await DatabaseHelper.instance.getFolderById(card.folderId);
+    }
+
+    final resolvedFolder = folder;
+    if (resolvedFolder == null) {
+      debugPrint('[MAIN] folder not found');
       return;
     }
 
-    debugPrint('[MAIN] navigating to folder="${folder.name}" scrollToCard=${card.id}');
+    debugPrint('[MAIN] navigating to folder="${resolvedFolder.name}" scrollToCard=${card.id}');
     nav.popUntil((route) => route.isFirst);
     nav.push(MaterialPageRoute(
       builder: (_) => CardListScreen(
-        folder: folder,
+        folder: resolvedFolder,
         scrollToCardId: card.id,
       ),
     ));

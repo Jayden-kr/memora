@@ -96,7 +96,7 @@ Service Layer (MemkImportService, NotificationService, etc.)
     ↓ calls
 Database Layer (DatabaseHelper singleton)
     ↓ reads/writes
-SQLite (amki_wang.db)
+SQLite (memora.db)
 
 Screen Layer
     ↓ MethodChannel
@@ -340,7 +340,7 @@ ThemeData(
 - **전체 로드**: 카드 리스트는 폴더 진입 시 전체 카드를 한번에 로드. `ScrollablePositionedList`로 정확한 위치 추적 + 실시간 스크롤 라벨
 - **Boolean ↔ Integer**: SQLite에 bool 저장 시 반드시 0/1 int로 변환
 - **mounted 체크**: async 작업 후 `setState()` 전에 반드시 `if (!mounted) return;` 체크
-- **MethodChannel**: `com.henry.amki_wang/lockscreen` 채널로 Flutter ↔ Kotlin 통신
+- **MethodChannel**: `com.henry.memora/lockscreen` 채널로 Flutter ↔ Kotlin 통신
 
 ---
 

@@ -1,4 +1,4 @@
-package com.henry.amki_wang
+package com.henry.memora
 
 import android.app.*
 import android.content.Context
@@ -370,7 +370,8 @@ class PushNotificationService : Service() {
                 }
             }
             val currentTick = tickCount.getAndIncrement()
-            val pi = PendingIntent.getActivity(this, currentTick, launchIntent,
+            val notifId = CARD_NOTIF_BASE + (currentTick % 500)
+            val pi = PendingIntent.getActivity(this, notifId, launchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
             val builder = NotificationCompat.Builder(this, "review_notification_channel")
@@ -423,10 +424,10 @@ class PushNotificationService : Service() {
         val dataDir = applicationInfo.dataDir
         // getDatabasePath를 우선 시도 (공식 API)
         val candidates = listOf(
-            getDatabasePath("amki_wang.db"),
-            java.io.File(dataDir, "app_flutter/amki_wang.db"),
-            java.io.File(filesDir, "app_flutter/amki_wang.db"),
-            java.io.File(filesDir, "amki_wang.db"),
+            getDatabasePath("memora.db"),
+            java.io.File(dataDir, "app_flutter/memora.db"),
+            java.io.File(filesDir, "app_flutter/memora.db"),
+            java.io.File(filesDir, "memora.db"),
         )
         for (candidate in candidates) {
             if (candidate.exists() && candidate.canRead()) return candidate

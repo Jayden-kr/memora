@@ -2,7 +2,7 @@ class AppConstants {
   AppConstants._();
 
   // DB
-  static const String dbName = 'amki_wang.db';
+  static const String dbName = 'memora.db';
   static const int dbVersion = 3;
 
   // 테이블 이름
@@ -17,7 +17,7 @@ class AppConstants {
   static const String imageDir = 'images';
 
   // .memk 호환 이미지 경로 prefix (레거시)
-  static const String amkizzangImagePrefix =
+  static const String legacyImagePrefix =
       '/data/user/0/com.metastudiolab.memorize/files/image/';
 
   // 페이지네이션

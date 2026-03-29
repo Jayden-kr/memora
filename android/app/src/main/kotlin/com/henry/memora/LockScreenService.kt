@@ -1,4 +1,4 @@
-package com.henry.amki_wang
+package com.henry.memora
 
 import android.app.*
 import android.content.*
@@ -273,10 +273,10 @@ class LockScreenService : Service() {
     private fun findDbFile(): java.io.File? {
         val dataDir = applicationInfo.dataDir
         val candidates = listOf(
-            java.io.File(dataDir, "app_flutter/amki_wang.db"),
-            java.io.File(filesDir, "app_flutter/amki_wang.db"),
-            java.io.File(filesDir, "amki_wang.db"),
-            getDatabasePath("amki_wang.db")
+            java.io.File(dataDir, "app_flutter/memora.db"),
+            java.io.File(filesDir, "app_flutter/memora.db"),
+            java.io.File(filesDir, "memora.db"),
+            getDatabasePath("memora.db")
         )
         for (candidate in candidates) {
             Log.d(TAG, "Trying DB path: ${candidate.path} exists=${candidate.exists()}")

@@ -1,4 +1,4 @@
-name: amki_wang
+name: memora
 description: "암기왕 - 플래시카드 암기 앱"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.

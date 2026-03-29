@@ -16,7 +16,7 @@ class ImportExportController {
   ImportExportController._();
 
   static const _channel =
-      MethodChannel('com.henry.amki_wang/import_export');
+      MethodChannel('com.henry.memora/import_export');
 
   final _importService = MemkImportService();
   final _exportService = MemkExportService();
@@ -235,11 +235,11 @@ class ImportExportController {
 
         final safeName = _sanitizeFileName(folder.name);
         // 파일명 충돌 방지: 동일 이름 존재 시 숫자 접미사 추가
-        var fileName = '$safeName.memk';
+        var fileName = '$safeName.mra';
         var outputPath = p.join(exportDirPath, fileName);
         var counter = 1;
         while (File(outputPath).existsSync()) {
-          fileName = '${safeName}_$counter.memk';
+          fileName = '${safeName}_$counter.mra';
           outputPath = p.join(exportDirPath, fileName);
           counter++;
         }

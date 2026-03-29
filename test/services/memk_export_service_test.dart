@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:amki_wang/services/memk_export_service.dart';
-import 'package:amki_wang/models/card.dart';
-import 'package:amki_wang/models/folder.dart';
-import 'package:amki_wang/utils/constants.dart';
+import 'package:memora/services/memk_export_service.dart';
+import 'package:memora/models/card.dart';
+import 'package:memora/models/folder.dart';
+import 'package:memora/utils/constants.dart';
 
 void main() {
   group('MemkExportService - toMemkImagePath', () {
@@ -14,7 +14,7 @@ void main() {
         '/data/data/com.example/files/images/R_abc.jpg',
       );
       expect(result,
-          '${AppConstants.amkizzangImagePrefix}R_abc.jpg');
+          '${AppConstants.legacyImagePrefix}R_abc.jpg');
     });
 
     test('Windows 스타일 경로도 처리', () {
@@ -22,7 +22,7 @@ void main() {
         'C:\\Users\\test\\images\\R_abc.jpg',
       );
       expect(result, contains('R_abc.jpg'));
-      expect(result, startsWith(AppConstants.amkizzangImagePrefix));
+      expect(result, startsWith(AppConstants.legacyImagePrefix));
     });
 
     test('빈 문자열은 빈 문자열 반환', () {

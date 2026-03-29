@@ -14,7 +14,7 @@ class NotificationNavEvent {
 class NotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static final _pushNotifChannel =
-      const MethodChannel('com.henry.amki_wang/push_notif');
+      const MethodChannel('com.henry.memora/push_notif');
 
   /// 알림 탭 → 네비게이션 콜백 (main.dart에서 등록)
   static Future<void> Function(NotificationNavEvent)? onNavigate;

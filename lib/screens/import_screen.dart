@@ -261,13 +261,13 @@ class _ImportScreenState extends State<ImportScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // .memk 내부 폴더 선택
+                // 파일 내부 폴더 선택
                 Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Row(
                     children: [
-                      Text('.memk 폴더 ${_memkFolders.length}개',
+                      Text('폴더 ${_memkFolders.length}개',
                           style: Theme.of(context).textTheme.titleMedium),
                       const Spacer(),
                       TextButton(

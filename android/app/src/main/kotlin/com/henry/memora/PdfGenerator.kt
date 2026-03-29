@@ -1,4 +1,4 @@
-package com.henry.amki_wang
+package com.henry.memora
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
@@ -209,9 +209,9 @@ class PdfGenerator(private val context: Context) {
     private fun openDb(): SQLiteDatabase? {
         val dir = context.applicationInfo.dataDir
         for (c in listOf(
-            File(dir, "app_flutter/amki_wang.db"),
-            File(context.filesDir, "app_flutter/amki_wang.db"),
-            context.getDatabasePath("amki_wang.db"),
+            File(dir, "app_flutter/memora.db"),
+            File(context.filesDir, "app_flutter/memora.db"),
+            context.getDatabasePath("memora.db"),
         )) { if (c.exists()) {
             val db = SQLiteDatabase.openDatabase(c.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
             try { db.enableWriteAheadLogging() } catch (_: Exception) {}
