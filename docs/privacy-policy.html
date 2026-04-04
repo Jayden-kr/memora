@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memora - Privacy Policy / 개인정보처리방침</title>
+    <style>
+        :root {
+            --bg: #fafafa;
+            --card: #ffffff;
+            --text: #1a1a1a;
+            --muted: #6b7280;
+            --accent: #2563eb;
+            --border: #e5e7eb;
+            --section-bg: #f3f4f6;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111827;
+                --card: #1f2937;
+                --text: #f3f4f6;
+                --muted: #9ca3af;
+                --accent: #60a5fa;
+                --border: #374151;
+                --section-bg: #1a2332;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans KR', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 40px 24px 80px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 48px;
+            padding-bottom: 32px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .app-name {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 4px;
+        }
+
+        .page-title {
+            font-size: 1rem;
+            color: var(--muted);
+            font-weight: 400;
+        }
+
+        .effective-date {
+            margin-top: 12px;
+            font-size: 0.875rem;
+            color: var(--muted);
+        }
+
+        .lang-toggle {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        .lang-toggle button {
+            padding: 6px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--card);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .lang-toggle button.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+
+        .lang-toggle button:hover:not(.active) {
+            border-color: var(--accent);
+        }
+
+        .lang-section {
+            display: none;
+        }
+
+        .lang-section.active {
+            display: block;
+        }
+
+        .highlight-box {
+            background: var(--section-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 40px;
+            text-align: center;
+        }
+
+        .highlight-box p {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .highlight-box .sub {
+            font-size: 0.9rem;
+            font-weight: 400;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+
+        section {
+            margin-bottom: 36px;
+        }
+
+        h2 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--accent);
+            display: inline-block;
+        }
+
+        p {
+            margin-bottom: 12px;
+            color: var(--text);
+        }
+
+        ul {
+            margin: 8px 0 16px 20px;
+        }
+
+        li {
+            margin-bottom: 6px;
+        }
+
+        .permission-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0 16px;
+            font-size: 0.9rem;
+        }
+
+        .permission-table th,
+        .permission-table td {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .permission-table th {
+            background: var(--section-bg);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--muted);
+        }
+
+        .permission-table td:first-child {
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        footer {
+            margin-top: 60px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                padding: 24px 16px 60px;
+            }
+
+            .app-name {
+                font-size: 1.6rem;
+            }
+
+            .permission-table {
+                font-size: 0.82rem;
+            }
+
+            .permission-table th,
+            .permission-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="app-name">Memora</div>
+            <div class="page-title">Privacy Policy / 개인정보처리방침</div>
+            <div class="effective-date">Effective Date / 시행일: 2026-04-04</div>
+            <div class="lang-toggle">
+                <button id="btn-ko" class="active" onclick="switchLang('ko')">한국어</button>
+                <button id="btn-en" onclick="switchLang('en')">English</button>
+            </div>
+        </header>
+
+        <!-- Korean -->
+        <div id="lang-ko" class="lang-section active">
+            <div class="highlight-box">
+                <p>Memora는 사용자의 개인정보를 수집하지 않습니다.</p>
+                <p class="sub">모든 데이터는 사용자의 기기에만 저장됩니다.</p>
+            </div>
+
+            <section>
+                <h2>1. 개요</h2>
+                <p>
+                    Memora(패키지명: com.henry.memora)는 개인 개발자 Henry가 개발한
+                    플래시카드 학습 앱입니다. 본 개인정보처리방침은 앱이 사용자의 정보를
+                    어떻게 처리하는지 설명합니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>2. 수집하는 개인정보</h2>
+                <p>
+                    <strong>수집하는 개인정보가 없습니다.</strong>
+                </p>
+                <p>
+                    Memora는 서버가 없으며, 어떠한 데이터도 외부로 전송하지 않습니다.
+                    회원가입이나 로그인이 필요하지 않으며, 분석(analytics) 도구나
+                    추적(tracking) 기술을 사용하지 않습니다.
+                </p>
+                <p>
+                    플래시카드 데이터, 이미지, 학습 기록, 앱 설정 등 모든 데이터는
+                    사용자의 기기 내 로컬 데이터베이스(SQLite)에만 저장됩니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>3. 앱 권한</h2>
+                <p>Memora는 다음 권한을 사용하며, 모든 권한은 앱 기능 제공 목적으로만 사용됩니다.</p>
+                <table class="permission-table">
+                    <thead>
+                        <tr>
+                            <th>권한</th>
+                            <th>사용 목적</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>알림 (POST_NOTIFICATIONS)</td>
+                            <td>학습 카드 푸시 알림 전송</td>
+                        </tr>
+                        <tr>
+                            <td>다른 앱 위에 표시 (SYSTEM_ALERT_WINDOW)</td>
+                            <td>잠금화면 카드 오버레이 표시</td>
+                        </tr>
+                        <tr>
+                            <td>저장소 (READ/WRITE_EXTERNAL_STORAGE)</td>
+                            <td>.memk / .mra 파일 가져오기/내보내기 (Android 9 이하에서만 사용)</td>
+                        </tr>
+                        <tr>
+                            <td>부팅 시 실행 (RECEIVE_BOOT_COMPLETED)</td>
+                            <td>기기 재시작 후 잠금화면 서비스 복원</td>
+                        </tr>
+                        <tr>
+                            <td>정확한 알람 (SCHEDULE_EXACT_ALARM)</td>
+                            <td>정확한 시간에 푸시 알림 전송</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>
+                    위 권한을 통해 수집되는 데이터는 없으며, 어떠한 정보도
+                    외부 서버로 전송되지 않습니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>4. 데이터 저장 및 삭제</h2>
+                <p>
+                    모든 데이터는 사용자의 기기에만 저장됩니다. 앱을 삭제하면
+                    모든 데이터가 함께 삭제됩니다.
+                </p>
+                <p>
+                    사용자는 앱 내 내보내기 기능을 통해 .mra 파일로 데이터를
+                    백업할 수 있으며, .memk 또는 .mra 파일을 가져올 수도 있습니다.
+                    이 파일 작업은 모두 사용자의 기기 내에서만 이루어집니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>5. 제3자 제공</h2>
+                <p>
+                    Memora는 제3자에게 어떠한 데이터도 제공하지 않습니다.
+                    외부 SDK, 광고, 분석 도구를 사용하지 않습니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>6. 아동 개인정보</h2>
+                <p>
+                    Memora는 사용자의 나이를 확인하지 않으며 개인정보를 수집하지 않으므로,
+                    아동의 개인정보가 수집될 가능성이 없습니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>7. 방침 변경</h2>
+                <p>
+                    본 개인정보처리방침이 변경될 경우, 이 페이지를 통해 공지합니다.
+                    중대한 변경이 있을 경우 앱 내 알림을 통해서도 안내합니다.
+                </p>
+            </section>
+
+            <section>
+                <h2>8. 문의</h2>
+                <p>
+                    개인정보처리방침에 대한 문의 사항이 있으시면 아래로 연락해 주세요.
+                </p>
+                <ul>
+                    <li>개발자: Henry</li>
+                    <li>이메일: <a href="mailto:jaydenhr.dev@gmail.com">jaydenhr.dev@gmail.com</a></li>
+                </ul>
+            </section>
+        </div>
+
+        <!-- English -->
+        <div id="lang-en" class="lang-section">
+            <div class="highlight-box">
+                <p>Memora does not collect any personal data.</p>
+                <p class="sub">All data is stored only on your device.</p>
+            </div>
+
+            <section>
+                <h2>1. Overview</h2>
+                <p>
+                    Memora (package: com.henry.memora) is a flashcard study app
+                    developed by Henry, an independent developer. This privacy policy
+                    explains how the app handles user information.
+                </p>
+            </section>
+
+            <section>
+                <h2>2. Data Collection</h2>
+                <p>
+                    <strong>We do not collect any personal data.</strong>
+                </p>
+                <p>
+                    Memora has no server and does not transmit any data externally.
+                    No account or login is required. We do not use any analytics
+                    or tracking technologies.
+                </p>
+                <p>
+                    All data, including flashcards, images, study records, and app
+                    settings, is stored only in the local database (SQLite) on your device.
+                </p>
+            </section>
+
+            <section>
+                <h2>3. App Permissions</h2>
+                <p>Memora uses the following permissions, all solely for app functionality.</p>
+                <table class="permission-table">
+                    <thead>
+                        <tr>
+                            <th>Permission</th>
+                            <th>Purpose</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Notifications (POST_NOTIFICATIONS)</td>
+                            <td>Send study card push notifications</td>
+                        </tr>
+                        <tr>
+                            <td>Display over other apps (SYSTEM_ALERT_WINDOW)</td>
+                            <td>Show flashcard overlay on lock screen</td>
+                        </tr>
+                        <tr>
+                            <td>Storage (READ/WRITE_EXTERNAL_STORAGE)</td>
+                            <td>Import/export .memk / .mra files (Android 9 and below only)</td>
+                        </tr>
+                        <tr>
+                            <td>Boot Completed (RECEIVE_BOOT_COMPLETED)</td>
+                            <td>Restore lock screen service after device restart</td>
+                        </tr>
+                        <tr>
+                            <td>Exact Alarm (SCHEDULE_EXACT_ALARM)</td>
+                            <td>Deliver push notifications at precise times</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p>
+                    No data is collected through these permissions, and no information
+                    is transmitted to any external server.
+                </p>
+            </section>
+
+            <section>
+                <h2>4. Data Storage and Deletion</h2>
+                <p>
+                    All data is stored solely on your device. Uninstalling the app
+                    will delete all associated data.
+                </p>
+                <p>
+                    You can back up your data as .mra files using the in-app export
+                    feature, and import .memk or .mra files. All file operations
+                    are performed entirely on your device.
+                </p>
+            </section>
+
+            <section>
+                <h2>5. Third-Party Sharing</h2>
+                <p>
+                    Memora does not share any data with third parties.
+                    We do not use any external SDKs, advertising, or analytics tools.
+                </p>
+            </section>
+
+            <section>
+                <h2>6. Children's Privacy</h2>
+                <p>
+                    Memora does not verify user age and does not collect any personal
+                    information, so there is no possibility of collecting children's
+                    personal data.
+                </p>
+            </section>
+
+            <section>
+                <h2>7. Changes to This Policy</h2>
+                <p>
+                    If this privacy policy is updated, the changes will be posted on
+                    this page. For significant changes, we will also notify users
+                    through the app.
+                </p>
+            </section>
+
+            <section>
+                <h2>8. Contact</h2>
+                <p>
+                    If you have any questions about this privacy policy, please contact us.
+                </p>
+                <ul>
+                    <li>Developer: Henry</li>
+                    <li>Email: <a href="mailto:jaydenhr.dev@gmail.com">jaydenhr.dev@gmail.com</a></li>
+                </ul>
+            </section>
+        </div>
+
+        <footer>
+            <p>&copy; 2026 Henry. All rights reserved.</p>
+            <p style="margin-top: 8px;">
+                <a href="https://github.com/Jayden-kr/memora">GitHub</a>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        function switchLang(lang) {
+            document.querySelectorAll('.lang-section').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.lang-toggle button').forEach(el => el.classList.remove('active'));
+            document.getElementById('lang-' + lang).classList.add('active');
+            document.getElementById('btn-' + lang).classList.add('active');
+        }
+
+        // Auto-detect browser language
+        if (navigator.language && !navigator.language.startsWith('ko')) {
+            switchLang('en');
+        }
+    </script>
+</body>
+</html>

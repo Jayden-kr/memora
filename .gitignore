@@ -3,6 +3,7 @@
 
 # Build artifacts
 *.apk
+*.aab
 
 # Test output
 test_results.txt
