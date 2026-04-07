@@ -31,7 +31,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ```bash
 # 빌드 (한글 경로 우회 필수)
-cp -r . /tmp/amki_wang && cd /tmp/amki_wang
+cp -r . /tmp/memora && cd /tmp/memora
 C:/flutter/bin/flutter build apk --debug
 
 # 테스트

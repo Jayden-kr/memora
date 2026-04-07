@@ -417,7 +417,7 @@ lib/
 - 클라우드 백업은 추후 구현 (MVP 범위 외)
 
 ### Configuration
-- DB 이름: `amki_wang.db` 유지 (개인 프로젝트이므로 마이그레이션 불필요, 내부 DB명은 그대로 유지)
+- DB 이름: `memora.db` 유지 (개인 프로젝트이므로 마이그레이션 불필요, 내부 DB명은 그대로 유지)
 - 이미지 디렉토리: `images/`
 - .memk 호환성: 레거시 경로 프리픽스 유지 (`/data/user/0/com.metastudiolab.memorize/files/image/`)
 - PDF 내보내기: `pdf` 패키지 사용 (Flutter 표준 PDF 생성 라이브러리)
@@ -627,7 +627,7 @@ CREATE TABLE push_alarms (
 - **완화**: Android 버전별 분기 처리, 배터리 최적화 가이드 제공
 
 ### Risk 5: DB 스키마 변경
-- **위험**: 기존 `amki_wang.db`에 새 테이블/컬럼 추가 시 기존 데이터와 충돌
+- **위험**: 기존 `memora.db`에 새 테이블/컬럼 추가 시 기존 데이터와 충돌
 - **완화**: SQLite `onUpgrade` 콜백에서 ALTER TABLE로 점진적 마이그레이션, DB 버전 번호 관리
 
 ---
@@ -645,6 +645,6 @@ CREATE TABLE push_alarms (
 - Material Design 3 + ColorScheme.fromSeed()
 
 ### 프로젝트 경로
-- 소스: `C:\Users\yhi55\OneDrive\바탕 화면\Python\project\amki_wang\`
+- 소스: `C:\Users\yhi55\OneDrive\바탕 화면\Python\project\memora\`
 - Flutter SDK: `C:\flutter\`
-- 빌드 경로: `/tmp/amki_wang/` (한글 경로 우회)
+- 빌드 경로: `/tmp/memora/` (한글 경로 우회)
