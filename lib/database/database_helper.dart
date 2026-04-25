@@ -358,6 +358,19 @@ class DatabaseHelper {
     );
   }
 
+  /// 삭제된 폴더를 참조하는 push_alarms의 folder_id를 NULL로 변경.
+  /// (알람 자체는 유지 — 사용자의 시간/간격 설정 보존, 동작은 '전체 폴더' 모드로 fallback)
+  /// 영향받은 행 수 반환.
+  Future<int> clearFolderRefInPushAlarms(int folderId) async {
+    final db = await database;
+    return await db.update(
+      AppConstants.tablePushAlarms,
+      {'folder_id': null},
+      where: 'folder_id = ?',
+      whereArgs: [folderId],
+    );
+  }
+
   /// 묶음 폴더 삭제: 자식 폴더 해제 + 묶음 삭제를 원자적으로 실행
   Future<void> deleteBundleFolder(int bundleId) async {
     final db = await database;
@@ -780,23 +793,38 @@ class DatabaseHelper {
     return deleted;
   }
 
-  /// 배치 이동 (원본/대상 폴더 card_count 자동 갱신)
+  /// SQLite IN 절 placeholder 한도(기본 999) 우회용 청크 사이즈
+  static const int _sqlInChunkSize = 800;
+
+  /// 배치 이동 (원본/대상 폴더 card_count 자동 갱신).
+  /// cardIds 개수에 제한 없음 — IN 절은 청크 단위로 분할 실행.
   Future<void> moveCardsBatch(List<int> cardIds, int newFolderId) async {
     if (cardIds.isEmpty) return;
     final db = await database;
-    final placeholders = List.filled(cardIds.length, '?').join(',');
     await db.transaction((txn) async {
-      // 이동 전 원본 폴더 ID 수집
-      final affected = await txn.rawQuery(
-        'SELECT DISTINCT folder_id FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
-        cardIds,
-      );
-      final oldFolderIds = affected.map((r) => r['folder_id'] as int).toSet();
+      final oldFolderIds = <int>{};
 
-      await txn.rawUpdate(
-        'UPDATE ${AppConstants.tableCards} SET folder_id = ? WHERE id IN ($placeholders)',
-        [newFolderId, ...cardIds],
-      );
+      for (var i = 0; i < cardIds.length; i += _sqlInChunkSize) {
+        final chunk = cardIds.sublist(
+            i,
+            i + _sqlInChunkSize > cardIds.length
+                ? cardIds.length
+                : i + _sqlInChunkSize);
+        final placeholders = List.filled(chunk.length, '?').join(',');
+
+        // 이동 전 원본 폴더 ID 수집 (청크별)
+        final affected = await txn.rawQuery(
+          'SELECT DISTINCT folder_id FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+          chunk,
+        );
+        oldFolderIds.addAll(affected.map((r) => r['folder_id'] as int));
+
+        // 청크별 UPDATE
+        await txn.rawUpdate(
+          'UPDATE ${AppConstants.tableCards} SET folder_id = ? WHERE id IN ($placeholders)',
+          [newFolderId, ...chunk],
+        );
+      }
 
       // 원본 + 대상 폴더 card_count 갱신
       final allFolderIds = {...oldFolderIds, newFolderId};
@@ -809,6 +837,45 @@ class DatabaseHelper {
             where: 'id = ?', whereArgs: [fid]);
       }
     });
+  }
+
+  /// 대상 폴더에 question이 같은 카드가 이미 있는 cardId들 반환.
+  /// 빈 question은 매칭 대상에서 제외 (false positive 방지).
+  /// cardIds 개수에 제한 없음 — IN 절은 청크 단위로 분할 실행.
+  Future<Set<int>> findDuplicateCardIdsInFolder(
+      List<int> cardIds, int targetFolderId) async {
+    if (cardIds.isEmpty) return {};
+    final db = await database;
+
+    // 대상 폴더의 기존 question은 folder_id 단일 조건이라 한 번에 조회
+    final existingCards = await db.rawQuery(
+      "SELECT question FROM ${AppConstants.tableCards} WHERE folder_id = ? AND question != ''",
+      [targetFolderId],
+    );
+    final existingQuestions =
+        existingCards.map((r) => r['question'] as String).toSet();
+
+    final duplicateIds = <int>{};
+    for (var i = 0; i < cardIds.length; i += _sqlInChunkSize) {
+      final chunk = cardIds.sublist(
+          i,
+          i + _sqlInChunkSize > cardIds.length
+              ? cardIds.length
+              : i + _sqlInChunkSize);
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final movingCards = await db.rawQuery(
+        'SELECT id, question FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+        chunk,
+      );
+      for (final c in movingCards) {
+        final q = (c['question'] as String?) ?? '';
+        if (q.isEmpty) continue;
+        if (existingQuestions.contains(q)) {
+          duplicateIds.add(c['id'] as int);
+        }
+      }
+    }
+    return duplicateIds;
   }
 
   /// 카드 복제

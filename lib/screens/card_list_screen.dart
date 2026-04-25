@@ -481,9 +481,86 @@ class _CardListScreenState extends State<CardListScreen> {
     );
     if (target == null || !mounted) return;
 
+    final duplicates = await DatabaseHelper.instance
+        .findDuplicateCardIdsInFolder([card.id!], target.id!);
+    if (!mounted) return;
+    if (duplicates.isNotEmpty) {
+      final action = await _showDuplicateMoveDialog(
+          duplicateCount: 1, totalCount: 1);
+      if (action == null || action == 'cancel' || !mounted) return;
+      if (action == 'skip') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('중복된 카드라 이동하지 않았습니다.')),
+        );
+        return;
+      }
+    }
+
     await DatabaseHelper.instance.moveCard(card.id!, target.id!);
     if (!mounted) return;
     await _loadCards();
+  }
+
+  /// 이동 시 중복 발견 → 사용자 선택. 'skip' / 'all' / 'cancel' / null 반환
+  Future<String?> _showDuplicateMoveDialog({
+    required int duplicateCount,
+    required int totalCount,
+  }) {
+    final msg = totalCount == 1
+        ? '대상 폴더에 같은 질문의 카드가 이미 있어요'
+        : '$totalCount개 중 $duplicateCount개가 대상 폴더에\n같은 질문으로 이미 있어요';
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return Dialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '중복 카드 발견',
+                  style: theme.textTheme.titleLarge
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 12),
+                Text(msg, style: theme.textTheme.bodyMedium),
+                const SizedBox(height: 20),
+                _DuplicateOption(
+                  icon: Icons.filter_alt_outlined,
+                  title: '중복은 건너뛰기',
+                  subtitle: totalCount == 1
+                      ? '이동하지 않음'
+                      : '중복 제외하고 나머지만 이동',
+                  onTap: () => Navigator.pop(ctx, 'skip'),
+                ),
+                const SizedBox(height: 8),
+                _DuplicateOption(
+                  icon: Icons.layers_outlined,
+                  title: '중복도 이동',
+                  subtitle: totalCount == 1
+                      ? '같은 질문이어도 이동'
+                      : '같은 질문이어도 전부 이동',
+                  onTap: () => Navigator.pop(ctx, 'all'),
+                  accent: true,
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(ctx, 'cancel'),
+                    child: const Text('취소'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _handleCardMenu(CardModel card, String action) {
@@ -608,12 +685,41 @@ class _CardListScreenState extends State<CardListScreen> {
     );
     if (target == null || !mounted) return;
 
+    final allIds = _selectedCardIds.toList();
+    final duplicates = await DatabaseHelper.instance
+        .findDuplicateCardIdsInFolder(allIds, target.id!);
+    if (!mounted) return;
+
+    var idsToMove = allIds;
+    var skipped = 0;
+    if (duplicates.isNotEmpty) {
+      final action = await _showDuplicateMoveDialog(
+          duplicateCount: duplicates.length, totalCount: allIds.length);
+      if (action == null || action == 'cancel' || !mounted) return;
+      if (action == 'skip') {
+        idsToMove = allIds.where((id) => !duplicates.contains(id)).toList();
+        skipped = allIds.length - idsToMove.length;
+        if (idsToMove.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('이동할 카드가 없습니다 (전부 중복).')),
+          );
+          _exitSelectionMode();
+          return;
+        }
+      }
+    }
+
     // moveCardsBatch 내부에서 트랜잭션으로 원본/대상 folder card_count 자동 갱신
-    await DatabaseHelper.instance
-        .moveCardsBatch(_selectedCardIds.toList(), target.id!);
+    await DatabaseHelper.instance.moveCardsBatch(idsToMove, target.id!);
     if (!mounted) return;
     _exitSelectionMode();
     await _loadCards();
+
+    if (skipped > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${idsToMove.length}개 이동, $skipped개 중복 건너뜀.')),
+      );
+    }
   }
 
   // ─── Answer fold/hide ───
@@ -1094,6 +1200,67 @@ class _CardListScreenState extends State<CardListScreen> {
             label: const Text('이동'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _DuplicateOption extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool accent;
+
+  const _DuplicateOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.accent = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = accent ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final fg = accent ? cs.onPrimaryContainer : cs.onSurface;
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(icon, color: fg.withValues(alpha: 0.85), size: 22),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: fg,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: fg.withValues(alpha: 0.7),
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

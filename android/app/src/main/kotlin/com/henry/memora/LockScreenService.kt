@@ -43,6 +43,7 @@ class LockScreenService : Service() {
 
     private data class CardData(
         val id: Int,
+        val folderId: Int,
         val question: String,
         val answer: String,
         val questionImages: List<String>,
@@ -315,7 +316,7 @@ class LockScreenService : Service() {
             val args = if (whereArgs.isNotEmpty()) whereArgs.toTypedArray() else null
 
             val result = mutableListOf<CardData>()
-            val columns = arrayOf("id", "question", "answer", "finished",
+            val columns = arrayOf("id", "folder_id", "question", "answer", "finished",
                 "question_image_path", "question_image_path_2", "question_image_path_3", "question_image_path_4", "question_image_path_5",
                 "answer_image_path", "answer_image_path_2", "answer_image_path_3", "answer_image_path_4", "answer_image_path_5")
             db.query("cards", columns, where, args, null, null, "sequence ASC").use { cursor ->
@@ -332,6 +333,7 @@ class LockScreenService : Service() {
                     }
                     result.add(CardData(
                         id = cursor.getInt(cursor.getColumnIndexOrThrow("id")),
+                        folderId = cursor.getInt(cursor.getColumnIndexOrThrow("folder_id")),
                         question = cursor.getString(cursor.getColumnIndexOrThrow("question")) ?: "",
                         answer = cursor.getString(cursor.getColumnIndexOrThrow("answer")) ?: "",
                         questionImages = qImages,
@@ -563,44 +565,45 @@ class LockScreenService : Service() {
         cardContent.addView(answerContainer)
         scrollView.addView(cardContent)
 
-        // ─── 하단: 스와이프 잠금 해제 ───
+        // ─── 하단: 미니멀 — Coral 막대만 (라벨 없음) ───
         val bottomContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(54))
         }
 
+        // Coral pill 막대 (앱 메인 컬러, fully rounded)
         val bottomDivider = View(this).apply {
-            setBackgroundColor(coralPrimary)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                cornerRadius = dp(3).toFloat()
+                setColor(coralPrimary)
+            }
         }
-        bottomContainer.addView(bottomDivider, LinearLayout.LayoutParams(dp(40), dp(3)).apply {
+        bottomContainer.addView(bottomDivider, LinearLayout.LayoutParams(dp(64), dp(5)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            bottomMargin = dp(8)
         })
 
-        val swipeHint = TextView(this).apply {
-            text = "좌우로 스와이프하여 잠금 해제"
-            setTextColor(textDimGray)
-            textSize = 11f
-            typeface = fontRegular
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(48))
-        }
-        bottomContainer.addView(swipeHint)
-
-        // 하단 영역 좌우 스와이프 → 잠금 해제
-        val unlockGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+        // 좌/우 슬라이드 분리 제스처
+        val bottomGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
                 if (e1 == null) return false
                 val diffX = e2.x - e1.x
                 if (abs(diffX) > 80 && abs(velocityX) > 80) {
-                    dismissOverlay()
+                    if (diffX > 0) {
+                        // → 우측 슬라이드: 잠금 해제
+                        dismissOverlay()
+                    } else {
+                        // ← 좌측 슬라이드: 현재 카드 편집 화면
+                        openCurrentCardForEditing()
+                    }
                     return true
                 }
                 return false
             }
         })
         bottomContainer.setOnTouchListener { _, event ->
-            unlockGesture.onTouchEvent(event)
+            bottomGesture.onTouchEvent(event)
             true
         }
 
@@ -627,6 +630,33 @@ class LockScreenService : Service() {
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    /**
+     * 현재 표시 중인 카드를 편집 화면으로 열기.
+     * 잠금화면을 dismiss하고 MainActivity를 시작하면서 cardId/folderId를 extra로 전달.
+     */
+    private fun openCurrentCardForEditing() {
+        val localCards = cards
+        if (localCards.isEmpty() || currentIndex >= localCards.size) {
+            dismissOverlay()
+            return
+        }
+        val card = localCards[currentIndex]
+        try {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("navigate_to_edit_card", true)
+                putExtra("card_id", card.id)
+                putExtra("folder_id", card.folderId)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open edit screen", e)
+        }
+        dismissOverlay()
     }
 
     private fun setupGestures(view: View) {

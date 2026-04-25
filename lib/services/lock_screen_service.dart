@@ -97,4 +97,69 @@ class LockScreenService {
       return {};
     }
   }
+
+  /// 삭제된 폴더 ID를 잠금화면 설정의 folderIds에서 제거.
+  /// - 남은 폴더가 있고 서비스 실행 중이면: 갱신된 설정으로 재시작
+  /// - 남은 폴더가 없으면: 서비스 중지 + enabled=false 로 저장
+  /// - 비활성화/미실행 상태면: 설정만 갱신
+  static Future<void> removeFolderFromSettings(int folderId) async {
+    try {
+      final settings = await getSettings();
+      final rawIds = settings['folderIds'];
+      final folderIds = <int>[];
+      if (rawIds is List) {
+        for (final v in rawIds) {
+          if (v is int) {
+            folderIds.add(v);
+          } else if (v != null) {
+            final parsed = int.tryParse(v.toString());
+            if (parsed != null) folderIds.add(parsed);
+          }
+        }
+      }
+      if (!folderIds.contains(folderId)) return;
+
+      final newFolderIds = folderIds.where((id) => id != folderId).toList();
+      final enabled = settings['enabled'] as bool? ?? false;
+      final finishedFilter = (settings['finishedFilter'] as num?)?.toInt() ?? -1;
+      final randomOrder = settings['randomOrder'] as bool? ?? true;
+      final reversed = settings['reversed'] as bool? ?? false;
+      final bgColor =
+          (settings['bgColor'] as num?)?.toInt() ?? 0xFF1A1A2E;
+
+      final running = await isRunning();
+
+      if (newFolderIds.isEmpty) {
+        if (running) await stopService();
+        await saveSettings(
+          enabled: false,
+          folderIds: const [],
+          finishedFilter: finishedFilter,
+          randomOrder: randomOrder,
+          reversed: reversed,
+          bgColor: bgColor,
+        );
+      } else if (running && enabled) {
+        await startService(
+          enabled: enabled,
+          folderIds: newFolderIds,
+          finishedFilter: finishedFilter,
+          randomOrder: randomOrder,
+          reversed: reversed,
+          bgColor: bgColor,
+        );
+      } else {
+        await saveSettings(
+          enabled: enabled,
+          folderIds: newFolderIds,
+          finishedFilter: finishedFilter,
+          randomOrder: randomOrder,
+          reversed: reversed,
+          bgColor: bgColor,
+        );
+      }
+    } catch (e) {
+      debugPrint('[LockScreenService] removeFolderFromSettings error: $e');
+    }
+  }
 }

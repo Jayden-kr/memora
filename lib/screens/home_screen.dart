@@ -20,6 +20,8 @@ import 'lock_screen_settings.dart';
 import 'push_notification_settings.dart';
 import 'settings_screen.dart';
 import '../services/import_export_controller.dart';
+import '../services/lock_screen_service.dart';
+import '../services/notification_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -505,6 +507,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
 
     try {
+      bool needsPushReschedule = false;
       for (final folder in selected) {
         if (folder.isBundle) {
           await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
@@ -559,6 +562,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             offset += batchSize;
           }
           await DatabaseHelper.instance.deleteFolder(folder.id!);
+          // 푸시/잠금화면 dangling 참조 정리
+          final cleared = await DatabaseHelper.instance
+              .clearFolderRefInPushAlarms(folder.id!);
+          if (cleared > 0) needsPushReschedule = true;
+          await LockScreenService.removeFolderFromSettings(folder.id!);
           for (final path in imagePaths) {
             try {
               final f = File(path);
@@ -566,6 +574,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             } catch (_) {}
           }
         }
+      }
+      // 푸시 알림 영향받았으면 한 번만 재스케줄 (folder_id NULL이라 알람 동작 변경됨)
+      if (needsPushReschedule) {
+        await NotificationService.rescheduleAll();
       }
     } catch (e) {
       debugPrint('[HOME] delete selected folders error: $e');

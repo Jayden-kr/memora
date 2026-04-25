@@ -5,6 +5,7 @@ import 'app.dart';
 import 'database/database_helper.dart';
 import 'models/card.dart';
 import 'models/folder.dart';
+import 'screens/card_edit_screen.dart';
 import 'screens/card_list_screen.dart';
 import 'screens/export_screen.dart';
 import 'screens/import_screen.dart';
@@ -66,6 +67,15 @@ void main() async {
         final cardId = (args['cardId'] as num?)?.toInt();
         if (folderId != null && cardId != null) {
           _handleNotificationNav(NotificationNavEvent(folderId, cardId));
+        }
+      }
+    } else if (call.method == 'navigateToEditCard') {
+      final args = call.arguments as Map?;
+      if (args != null) {
+        final folderId = (args['folderId'] as num?)?.toInt();
+        final cardId = (args['cardId'] as num?)?.toInt();
+        if (folderId != null && cardId != null) {
+          _handleEditCardNav(folderId, cardId);
         }
       }
     } else if (call.method == 'navigateToSettings') {
@@ -164,6 +174,62 @@ Future<void> _doNavigate(
     ));
   } catch (e) {
     debugPrint('[MAIN] _doNavigate 오류 (DB 연결 등): $e');
+  }
+}
+
+/// 잠금화면 좌측 슬라이드 → 해당 카드 편집 화면 이동.
+/// CardListScreen 위에 CardEditScreen을 push해서 편집 종료 시 자연스럽게 카드 리스트로 복귀.
+Future<void> _handleEditCardNav(int folderId, int cardId) async {
+  debugPrint('[MAIN] _handleEditCardNav: folder=$folderId card=$cardId');
+  final nav = navigatorKey.currentState;
+  if (nav == null) {
+    await Future.delayed(const Duration(milliseconds: 500));
+    final retryNav = navigatorKey.currentState;
+    if (retryNav == null) {
+      debugPrint('[MAIN] navigatorKey still null, giving up edit nav');
+      return;
+    }
+    return _doEditNavigate(retryNav, folderId, cardId);
+  }
+  return _doEditNavigate(nav, folderId, cardId);
+}
+
+Future<void> _doEditNavigate(
+    NavigatorState nav, int folderId, int cardId) async {
+  try {
+    final results = await Future.wait([
+      DatabaseHelper.instance.getCardById(cardId),
+      DatabaseHelper.instance.getFolderById(folderId),
+    ]);
+    final card = results[0] as CardModel?;
+    var folder = results[1] as Folder?;
+    if (card == null) {
+      debugPrint('[MAIN] edit card not found for id=$cardId');
+      return;
+    }
+    if (card.folderId != folderId) {
+      folder = await DatabaseHelper.instance.getFolderById(card.folderId);
+    }
+    final resolvedFolder = folder;
+    if (resolvedFolder == null) {
+      debugPrint('[MAIN] edit folder not found');
+      return;
+    }
+    nav.popUntil((route) => route.isFirst);
+    nav.push(MaterialPageRoute(
+      builder: (_) => CardListScreen(
+        folder: resolvedFolder,
+        scrollToCardId: card.id,
+      ),
+    ));
+    nav.push(MaterialPageRoute(
+      builder: (_) => CardEditScreen(
+        folderId: card.folderId,
+        existingCard: card,
+      ),
+    ));
+  } catch (e) {
+    debugPrint('[MAIN] _doEditNavigate 오류: $e');
   }
 }
 

@@ -29,6 +29,15 @@ class MainActivity : FlutterActivity() {
         intent?.removeExtra("notification_payload")
         val initialNavigateTo = intent?.getStringExtra("navigate_to")
         intent?.removeExtra("navigate_to")
+        // Cold start: 잠금화면에서 좌측 슬라이드로 카드 편집 진입한 경우
+        val initialEditCard = if (intent?.getBooleanExtra("navigate_to_edit_card", false) == true) {
+            val cId = intent.getIntExtra("card_id", -1)
+            val fId = intent.getIntExtra("folder_id", -1)
+            intent.removeExtra("navigate_to_edit_card")
+            intent.removeExtra("card_id")
+            intent.removeExtra("folder_id")
+            if (cId > 0 && fId > 0) Pair(fId, cId) else null
+        } else null
 
         // Import/Export Foreground Service MethodChannel
         val ieChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
@@ -373,6 +382,50 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // Cold start: 잠금화면 좌측 슬라이드 → 카드 편집 화면 네비게이션
+        if (initialEditCard != null) {
+            val (fId, cId) = initialEditCard
+            Log.d(TAG, "Cold start edit card: folder=$fId card=$cId")
+            val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+            val payload = mapOf("folderId" to fId, "cardId" to cId)
+            var retryCount = 0
+            val maxRetries = 5
+            var retryRef: Runnable? = null
+            val retryRunnable = object : Runnable {
+                override fun run() {
+                    try {
+                        val channel = importExportChannel
+                        if (channel != null) {
+                            val self = retryRef ?: return
+                            channel.invokeMethod("navigateToEditCard", payload, object : MethodChannel.Result {
+                                override fun success(result: Any?) {
+                                    Log.d(TAG, "Cold start edit nav succeeded")
+                                }
+                                override fun error(code: String, message: String?, details: Any?) {
+                                    Log.w(TAG, "Cold start edit nav error: $code $message")
+                                }
+                                override fun notImplemented() {
+                                    retryCount++
+                                    if (retryCount < maxRetries) {
+                                        mainHandler.postDelayed(self, 500)
+                                    }
+                                }
+                            })
+                        } else {
+                            retryCount++
+                            if (retryCount < maxRetries) {
+                                mainHandler.postDelayed(this, 500)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Cold start edit nav failed: ${e.message}")
+                    }
+                }
+            }
+            retryRef = retryRunnable
+            mainHandler.postDelayed(retryRunnable, 300)
+        }
+
         // Cold start: 포그라운드 서비스 상주 알림 탭 → 설정 화면 네비게이션
         if (initialNavigateTo != null) {
             Log.d(TAG, "Cold start navigate_to: $initialNavigateTo")
@@ -489,6 +542,22 @@ class MainActivity : FlutterActivity() {
         handleImportNavigationIntent(intent)
         handleSettingsNavigationIntent(intent)
         handlePushNotificationIntent(intent)
+        handleEditCardNavigationIntent(intent)
+    }
+
+    private fun handleEditCardNavigationIntent(intent: Intent) {
+        if (!intent.getBooleanExtra("navigate_to_edit_card", false)) return
+        intent.removeExtra("navigate_to_edit_card")
+        val cardId = intent.getIntExtra("card_id", -1)
+        val folderId = intent.getIntExtra("folder_id", -1)
+        intent.removeExtra("card_id")
+        intent.removeExtra("folder_id")
+        if (cardId <= 0 || folderId <= 0) return
+        Log.d(TAG, "Edit card navigation: folder=$folderId card=$cardId")
+        importExportChannel?.invokeMethod("navigateToEditCard", mapOf(
+            "folderId" to folderId,
+            "cardId" to cardId
+        ))
     }
 
     private fun handleSettingsNavigationIntent(intent: Intent) {
