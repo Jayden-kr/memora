@@ -1035,6 +1035,27 @@ class DatabaseHelper {
     );
   }
 
+  Future<int> deleteExportedFileByPath(String filePath) async {
+    final db = await database;
+    return await db.delete(
+      AppConstants.tableExportedFiles,
+      where: 'file_path = ?',
+      whereArgs: [filePath],
+    );
+  }
+
+  Future<Map<String, dynamic>?> getExportedFileByPath(String filePath) async {
+    final db = await database;
+    final maps = await db.query(
+      AppConstants.tableExportedFiles,
+      where: 'file_path = ?',
+      whereArgs: [filePath],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return maps.first;
+  }
+
   // ─── Push Alarms CRUD ───
 
   Future<int> insertPushAlarm({

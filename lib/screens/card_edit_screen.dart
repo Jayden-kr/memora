@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
@@ -124,11 +125,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
   }
 
   Future<void> _pickImage(List<String?> images, List<double?> ratios) async {
+    final t = AppLocalizations.of(context);
     final emptyIndex = images.indexWhere((img) => img == null);
     if (emptyIndex == -1) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('이미지는 최대 5장까지 추가할 수 있습니다.')),
+        SnackBar(content: Text(t.cardEditMaxImages)),
       );
       return;
     }
@@ -142,12 +144,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.camera_alt),
-              title: const Text('카메라'),
+              title: Text(t.cardEditCamera),
               onTap: () => Navigator.pop(ctx, ImageSource.camera),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library),
-              title: const Text('갤러리'),
+              title: Text(t.cardEditGallery),
               onTap: () => Navigator.pop(ctx, ImageSource.gallery),
             ),
           ],
@@ -180,8 +182,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
         try { await File(savedPath).delete(); } catch (_) {}
       }
       if (!mounted) return;
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('이미지를 불러올 수 없습니다: $e')),
+        SnackBar(content: Text(t.cardEditImageLoadFail(e.toString()))),
       );
     }
   }
@@ -250,8 +253,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
         _answerImages.any((img) => img != null);
     if (question.isEmpty && answer.isEmpty && !hasImages) {
       if (!mounted) return;
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('앞면 또는 뒷면을 입력하세요.')),
+        SnackBar(content: Text(t.cardEditEmptyError)),
       );
       return;
     }
@@ -352,8 +356,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('저장 실패: $e')),
+        SnackBar(content: Text(t.cardEditSaveFail(e.toString()))),
       );
     }
   }
@@ -400,6 +405,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
     return PopScope(
       canPop: !_hasChanges,
       onPopInvokedWithResult: (didPop, _) async {
@@ -407,16 +413,16 @@ class _CardEditScreenState extends State<CardEditScreen> {
         final discard = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('변경사항 삭제'),
-            content: const Text('저장하지 않은 변경사항이 있습니다. 나가시겠습니까?'),
+            title: Text(t.cardEditDiscardTitle),
+            content: Text(t.cardEditDiscardBody),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('취소'),
+                child: Text(t.commonCancel),
               ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('나가기'),
+                child: Text(t.cardEditDiscardLeave),
               ),
             ],
           ),
@@ -428,11 +434,11 @@ class _CardEditScreenState extends State<CardEditScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? '카드 편집' : '새 카드'),
+        title: Text(_isEditing ? t.cardEditTitleEdit : t.cardEditTitleNew),
         actions: [
           TextButton(
             onPressed: (_saving || _folders.isEmpty) ? null : _save,
-            child: const Text('저장'),
+            child: Text(t.commonSave),
           ),
         ],
       ),
@@ -447,9 +453,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
                 initialValue: _folders.any((f) => f.id == _currentFolderId)
                     ? _currentFolderId
                     : null,
-                decoration: const InputDecoration(
-                  labelText: '폴더',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: t.cardEditFolderLabel,
+                  border: const OutlineInputBorder(),
                 ),
                 items: _folders.map((f) {
                   return DropdownMenuItem(
@@ -464,16 +470,16 @@ class _CardEditScreenState extends State<CardEditScreen> {
             const SizedBox(height: 16),
 
             // 앞면
-            Text('앞면 (Question)',
+            Text(t.cardEditFront,
                 style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             TextField(
               controller: _questionController,
               minLines: 3,
               maxLines: null,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: '질문을 입력하세요',
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                hintText: t.cardEditFrontHint,
               ),
             ),
             const SizedBox(height: 8),
@@ -481,16 +487,16 @@ class _CardEditScreenState extends State<CardEditScreen> {
             const SizedBox(height: 24),
 
             // 뒷면
-            Text('뒷면 (Answer)',
+            Text(t.cardEditBack,
                 style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
             TextField(
               controller: _answerController,
               minLines: 5,
               maxLines: null,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: '정답을 입력하세요',
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(),
+                hintText: t.cardEditBackHint,
               ),
             ),
             const SizedBox(height: 8),

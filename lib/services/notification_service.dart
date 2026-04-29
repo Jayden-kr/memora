@@ -4,6 +4,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../database/database_helper.dart';
+import 'locale_service.dart';
 
 class NotificationNavEvent {
   final int folderId;
@@ -115,7 +116,9 @@ class NotificationService {
 
   /// 즉시 테스트 알림 전송
   static Future<void> showTestNotification() async {
-    String body = '카드를 복습할 시간입니다!';
+    final isEn = LocaleService.currentLanguageCode() == 'en';
+    String body = isEn ? 'Time to review your cards!' : '카드를 복습할 시간입니다!';
+    final emptyText = isEn ? '(empty)' : '(내용 없음)';
     String? payload;
 
     try {
@@ -127,18 +130,20 @@ class NotificationService {
       final card =
           await DatabaseHelper.instance.getRandomCard(folderId: folderId);
       if (card != null) {
-        body = card.question.isNotEmpty ? card.question : '(내용 없음)';
+        body = card.question.isNotEmpty ? card.question : emptyText;
         payload = '${card.folderId}:${card.id}';
       }
     } catch (e) {
-      debugPrint('[NOTIF] showTestNotification DB 오류: $e');
+      debugPrint('[NOTIF] showTestNotification DB error: $e');
     }
 
-    const notificationDetails = NotificationDetails(
+    final notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
         'review_notification_channel',
-        '복습 알림',
-        channelDescription: '설정한 시간에 랜덤 카드 알림',
+        isEn ? 'Review notification' : '복습 알림',
+        channelDescription: isEn
+            ? 'Random card notification at scheduled time'
+            : '설정한 시간에 랜덤 카드 알림',
         importance: Importance.high,
         priority: Priority.high,
         icon: '@drawable/ic_notification',

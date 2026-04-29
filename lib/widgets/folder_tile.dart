@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 
 class FolderTile extends StatelessWidget {
@@ -41,7 +42,7 @@ class FolderTile extends StatelessWidget {
               : icon,
       title: Text(folder.name),
       subtitle: folder.isBundle
-          ? Text('묶음 폴더',
+          ? Text(AppLocalizations.of(context).folderTileBundle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ))

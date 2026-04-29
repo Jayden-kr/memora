@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 
 class CardTile extends StatelessWidget {
@@ -98,7 +99,7 @@ class CardTile extends StatelessWidget {
                             context,
                             card.question.isEmpty &&
                                     card.questionImagePaths.isEmpty
-                                ? '(내용 없음)'
+                                ? AppLocalizations.of(context).commonEmpty
                                 : card.question,
                             searchQuery,
                             const TextStyle(
@@ -149,15 +150,18 @@ class CardTile extends StatelessWidget {
                     PopupMenuButton<String>(
                       icon: const Icon(Icons.more_vert, size: 20),
                       onSelected: onMenuAction,
-                      itemBuilder: (ctx) => [
-                        const PopupMenuItem(value: 'edit', child: Text('편집')),
-                        const PopupMenuItem(value: 'duplicate', child: Text('복제')),
-                        const PopupMenuItem(value: 'move', child: Text('다른 폴더로 이동')),
-                        PopupMenuItem(
-                          value: 'delete',
-                          child: Text('삭제', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
-                        ),
-                      ],
+                      itemBuilder: (ctx) {
+                        final t = AppLocalizations.of(ctx);
+                        return [
+                          PopupMenuItem(value: 'edit', child: Text(t.cardTileMenuEdit)),
+                          PopupMenuItem(value: 'duplicate', child: Text(t.cardTileMenuDuplicate)),
+                          PopupMenuItem(value: 'move', child: Text(t.cardTileMenuMove)),
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: Text(t.commonDelete, style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                          ),
+                        ];
+                      },
                     ),
                 ],
               ),
@@ -260,7 +264,7 @@ class CardTile extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text(
-                '탭하여 정답 보기',
+                AppLocalizations.of(context).cardViewTapToReveal,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,

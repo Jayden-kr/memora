@@ -1,12 +1,15 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart' show Share, XFile;
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/import_export_controller.dart';
+import '../widgets/overwrite_dialog.dart';
 
 class ExportScreen extends StatefulWidget {
   final List<int>? initialFolderIds;
@@ -77,8 +80,9 @@ class _ExportScreenState extends State<ExportScreen> {
     if (_controller.lastExportError != null) {
       final error = _controller.lastExportError;
       _controller.clearExportResult();
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('내보내기 실패: $error')),
+        SnackBar(content: Text(t.exportFailSnack(error.toString()))),
       );
       if (widget.progressOnly) Navigator.pop(context);
     } else if (_controller.lastExportFileNames != null) {
@@ -93,23 +97,24 @@ class _ExportScreenState extends State<ExportScreen> {
     final fileNames = List<String>.from(_controller.lastExportFileNames!);
     final filePaths = List<String>.from(_controller.lastExportFilePaths!);
     _controller.clearExportResult();
+    final t = AppLocalizations.of(context);
 
     final shouldShare = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('내보내기 완료'),
+        title: Text(t.exportDoneTitle),
         content: Text(
-          '${fileNames.length}개 파일이 생성되었습니다.\n\n${fileNames.join('\n')}',
+          t.exportDoneBody(fileNames.length, fileNames.join('\n')),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('확인'),
+            child: Text(t.commonOk),
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(ctx, true),
             icon: const Icon(Icons.share),
-            label: const Text('공유'),
+            label: Text(t.exportShare),
           ),
         ],
       ),
@@ -166,29 +171,83 @@ class _ExportScreenState extends State<ExportScreen> {
     final selectedFolders =
         _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
 
+    // 동일 이름 파일 충돌 감지
+    final ext = _fileType == 'memk' ? '.mra' : '.pdf';
+    final conflictNames = <String>[];
+    for (final folder in selectedFolders) {
+      final safeName = _sanitizeForExport(folder.name);
+      final candidate = p.join(exportDir.path, '$safeName$ext');
+      if (File(candidate).existsSync()) {
+        conflictNames.add('$safeName$ext');
+      }
+    }
+
+    String conflictPolicy = 'rename';
+    if (conflictNames.isNotEmpty) {
+      if (!mounted) return;
+      final t = AppLocalizations.of(context);
+      final preview = conflictNames.length <= 3
+          ? conflictNames.join(', ')
+          : '${conflictNames.take(3).join(', ')} ${t.exportConflictPreviewSuffix(conflictNames.length - 3)}';
+      final action = await showOverwriteDialog(
+        context: context,
+        title: t.exportConflictTitle,
+        message: t.exportConflictMessage(preview),
+        options: [
+          OverwriteOption(
+            icon: Icons.refresh,
+            title: t.commonOverwrite,
+            subtitle: t.exportOverwriteSubtitle,
+            value: 'overwrite',
+            accent: true,
+          ),
+          OverwriteOption(
+            icon: Icons.add_circle_outline,
+            title: t.exportRenameNew,
+            subtitle: t.exportRenameSubtitle,
+            value: 'rename',
+          ),
+        ],
+      );
+      if (action == null || action == 'cancel') return;
+      conflictPolicy = action;
+    }
+
+    if (!mounted) return;
+
     if (_fileType == 'memk') {
       _controller.startMemkPerFolderExport(
         selectedFolders: selectedFolders,
         exportDirPath: exportDir.path,
+        conflictPolicy: conflictPolicy,
       );
     } else {
       _controller.startPdfExport(
         selectedFolders: selectedFolders,
         exportDirPath: exportDir.path,
+        conflictPolicy: conflictPolicy,
       );
     }
   }
 
+  /// Controller의 _sanitizeFileName과 동일 로직 — 충돌 감지용으로 미리 적용
+  static String _sanitizeForExport(String name) {
+    final sanitized =
+        name.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    return sanitized.isEmpty ? 'export' : sanitized;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('파일 만들기'),
+        title: Text(t.exportTitle),
         actions: [
           if (!_isExporting && !widget.progressOnly)
             TextButton(
               onPressed: _selectedFolderIds.isEmpty ? null : _export,
-              child: const Text('생성'),
+              child: Text(t.exportGenerate),
             ),
         ],
       ),
@@ -227,7 +286,7 @@ class _ExportScreenState extends State<ExportScreen> {
                                 horizontal: 16, vertical: 8),
                             child: Row(
                               children: [
-                                Text('폴더 선택',
+                                Text(t.exportFolderPick,
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleMedium),
@@ -237,21 +296,21 @@ class _ExportScreenState extends State<ExportScreen> {
                                   child: Text(
                                       _selectedFolderIds.length ==
                                               _folders.length
-                                          ? '전체 해제'
-                                          : '전체 선택'),
+                                          ? t.homeDeselectAll
+                                          : t.homeSelectAll),
                                 ),
                               ],
                             ),
                           ),
                           if (_folders.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.all(16),
-                              child: Text('내보낼 수 있는 폴더가 없습니다.'),
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Text(t.exportNoExportable),
                             ),
                           ..._folders.map((folder) {
                             return CheckboxListTile(
                               title: Text(folder.name),
-                              subtitle: Text('${folder.cardCount}장'),
+                              subtitle: Text(t.cardCountSuffix(folder.cardCount)),
                               value:
                                   _selectedFolderIds.contains(folder.id),
                               onChanged: (checked) {
@@ -273,7 +332,7 @@ class _ExportScreenState extends State<ExportScreen> {
                           Padding(
                             padding:
                                 const EdgeInsets.symmetric(horizontal: 16),
-                            child: Text('파일 형식',
+                            child: Text(t.exportFileType,
                                 style: Theme.of(context)
                                     .textTheme
                                     .titleMedium),
@@ -286,13 +345,12 @@ class _ExportScreenState extends State<ExportScreen> {
                               children: [
                                 RadioListTile<String>(
                                   title: const Text('.mra'),
-                                  subtitle: const Text(
-                                      'Memora 백업 파일'),
+                                  subtitle: Text(t.exportFileTypeMra),
                                   value: 'memk',
                                 ),
                                 RadioListTile<String>(
                                   title: const Text('PDF'),
-                                  subtitle: const Text('인쇄/공유용 문서'),
+                                  subtitle: Text(t.exportFileTypePdfDesc),
                                   value: 'pdf',
                                 ),
                               ],

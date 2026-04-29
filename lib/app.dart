@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'l10n/app_localizations.dart';
 import 'screens/home_screen.dart';
+import 'services/locale_service.dart';
 
 /// 전역 테마 모드 notifier
 final ValueNotifier<ThemeMode> themeModeNotifier =
@@ -21,25 +23,33 @@ class MemoraApp extends StatelessWidget {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeModeNotifier,
       builder: (context, themeMode, _) {
-        return MaterialApp(
-          title: 'Memora',
-          navigatorKey: navigatorKey,
-          navigatorObservers: [routeObserver],
-          theme: ThemeData(
-            colorSchemeSeed: const Color(0xFFFF6B6B),
-            useMaterial3: true,
-            brightness: Brightness.light,
-            fontFamily: 'Pretendard',
-          ),
-          darkTheme: ThemeData(
-            colorSchemeSeed: const Color(0xFFFF6B6B),
-            useMaterial3: true,
-            brightness: Brightness.dark,
-            fontFamily: 'Pretendard',
-          ),
-          themeMode: themeMode,
-          home: const HomeScreen(),
-          debugShowCheckedModeBanner: false,
+        return ValueListenableBuilder<Locale?>(
+          valueListenable: LocaleService.localeNotifier,
+          builder: (context, locale, _) {
+            return MaterialApp(
+              title: 'Memora',
+              navigatorKey: navigatorKey,
+              navigatorObservers: [routeObserver],
+              theme: ThemeData(
+                colorSchemeSeed: const Color(0xFFFF6B6B),
+                useMaterial3: true,
+                brightness: Brightness.light,
+                fontFamily: 'Pretendard',
+              ),
+              darkTheme: ThemeData(
+                colorSchemeSeed: const Color(0xFFFF6B6B),
+                useMaterial3: true,
+                brightness: Brightness.dark,
+                fontFamily: 'Pretendard',
+              ),
+              themeMode: themeMode,
+              locale: locale,
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: const HomeScreen(),
+              debugShowCheckedModeBanner: false,
+            );
+          },
         );
       },
     );

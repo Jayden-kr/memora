@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
@@ -108,8 +109,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _navigateToImport(importFile.path);
     } else {
       if (mounted) {
+        final t = AppLocalizations.of(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('.mra 또는 .memk 파일만 가져올 수 있습니다.')),
+          SnackBar(content: Text(t.homeOnlyMemkSnack)),
         );
       }
     }
@@ -159,22 +161,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _showFolderPickerForNewCard() async {
+    final t = AppLocalizations.of(context);
     final nonBundleFolders = _folders.where((f) => !f.isBundle).toList();
     if (nonBundleFolders.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('폴더를 먼저 만들어주세요.')),
+        SnackBar(content: Text(t.homeNoFolderFirst)),
       );
       return;
     }
     final selected = await showDialog<Folder>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('카드를 추가할 폴더'),
+        title: Text(t.homePickerCardFolderTitle),
         children: nonBundleFolders.map((folder) {
           return SimpleDialogOption(
             onPressed: () => Navigator.pop(ctx, folder),
-            child: Text('${folder.name} (${folder.cardCount}장)'),
+            child: Text('${folder.name} (${t.cardCountSuffix(folder.cardCount)})'),
           );
         }).toList(),
       ),
@@ -190,6 +193,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _showFabBottomSheet() async {
+    final t = AppLocalizations.of(context);
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SafeArea(
@@ -198,8 +202,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           children: [
             ListTile(
               leading: const Icon(Icons.note_add),
-              title: const Text('새 카드 추가',
-                  style: TextStyle(fontSize: 14)),
+              title: Text(t.homeFabAddCard,
+                  style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _showFolderPickerForNewCard();
@@ -207,8 +211,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ),
             ListTile(
               leading: const Icon(Icons.create_new_folder),
-              title: const Text('새 폴더 만들기',
-                  style: TextStyle(fontSize: 14)),
+              title: Text(t.homeFabCreateFolder,
+                  style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _createFolder();
@@ -216,8 +220,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ),
             ListTile(
               leading: const Icon(Icons.folder_special),
-              title: const Text('묶음 폴더 만들기',
-                  style: TextStyle(fontSize: 14)),
+              title: Text(t.homeFabCreateBundle,
+                  style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _navigateToBundleFolder();
@@ -225,8 +229,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             ),
             ListTile(
               leading: const Icon(Icons.file_download),
-              title: const Text('파일 가져오기',
-                  style: TextStyle(fontSize: 14)),
+              title: Text(t.homeFabImportFile,
+                  style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickAndImport();
@@ -239,26 +243,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _createFolder() async {
+    final t = AppLocalizations.of(context);
     final controller = TextEditingController();
     try {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('새 폴더'),
+        title: Text(t.homeNewFolderTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '폴더 이름'),
+          decoration: InputDecoration(hintText: t.homeFolderNameHint),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('생성'),
+            child: Text(t.commonCreate),
           ),
         ],
       ),
@@ -269,7 +274,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (existing != null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
+        SnackBar(content: Text(t.homeFolderExists(name))),
       );
       return;
     }
@@ -279,10 +284,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final folder = Folder(name: name, sequence: maxSeq + 1);
       await DatabaseHelper.instance.insertFolder(folder);
     } catch (e) {
-      // UNIQUE 제약 위반 (빠른 연속 생성 등)
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('폴더 생성 실패: 이미 "$name" 폴더가 있습니다.')),
+        SnackBar(content: Text(t.homeFolderCreateFail(name))),
       );
       return;
     }
@@ -305,26 +309,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
   Future<void> _renameFolder(Folder folder) async {
+    final t = AppLocalizations.of(context);
     final controller = TextEditingController(text: folder.name);
     try {
     final newName = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('폴더 이름 변경'),
+        title: Text(t.homeRenameFolderTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '새 이름'),
+          decoration: InputDecoration(hintText: t.homeNewNameHint),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('변경'),
+            child: Text(t.commonChange),
           ),
         ],
       ),
@@ -335,7 +340,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (existing != null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('이미 "$newName" 폴더가 있습니다.')),
+        SnackBar(content: Text(t.homeFolderExists(newName))),
       );
       return;
     }
@@ -366,16 +371,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final filePath = result.files.single.path!;
       if (!filePath.endsWith('.memk') && !filePath.endsWith('.mra')) {
         if (!mounted) return;
+        final t = AppLocalizations.of(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('.mra 또는 .memk 파일만 선택할 수 있습니다.')),
+          SnackBar(content: Text(t.homeOnlyMemkPickSnack)),
         );
         return;
       }
       await _navigateToImport(filePath);
     } catch (e) {
       if (mounted) {
+        final t = AppLocalizations.of(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('파일 선택 실패: $e')),
+          SnackBar(content: Text(t.homeFilePickFail(e.toString()))),
         );
       }
     } finally {
@@ -462,6 +469,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _deleteSelectedFolders() async {
+    final t = AppLocalizations.of(context);
     final selected =
         _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
     if (selected.isEmpty) return;
@@ -471,27 +479,28 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         .fold<int>(0, (sum, f) => sum + f.cardCount);
     final hasBundles = selected.any((f) => f.isBundle);
 
-    String message = '선택한 ${selected.length}개 폴더를 삭제하시겠습니까?';
+    String message = t.homeDeleteFolderConfirm(selected.length);
     if (totalCards > 0) {
-      message += '\n카드 $totalCards장이 함께 삭제됩니다.';
+      message += t.homeDeleteFolderCardsNote(totalCards);
     }
     if (hasBundles) {
-      message += '\n묶음 폴더의 하위 폴더는 삭제되지 않습니다.';
+      message += t.homeDeleteFolderBundleNote;
     }
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('폴더 삭제'),
+        title: Text(t.homeDeleteFolderTitle),
         content: Text(message),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -601,8 +610,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         .map((f) => f.id!)
         .toList();
     if (nonBundleIds.isEmpty) {
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('내보낼 수 있는 폴더가 없습니다.')),
+        SnackBar(content: Text(t.homeNoExportable)),
       );
       return;
     }
@@ -650,17 +660,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                 title:
                     const Text('Memora', style: TextStyle(fontSize: 20)),
                 actions: [
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.sort),
-                    tooltip: '정렬',
-                    onSelected: _changeSortMode,
-                    itemBuilder: (_) => [
-                      _sortMenuItem('수동 (드래그)', 'sequence'),
-                      _sortMenuItem('가나다순', 'name_asc'),
-                      _sortMenuItem('오래된순', 'oldest'),
-                      _sortMenuItem('최신순', 'newest'),
-                    ],
-                  ),
+                  Builder(builder: (context) {
+                    final t = AppLocalizations.of(context);
+                    return PopupMenuButton<String>(
+                      icon: const Icon(Icons.sort),
+                      tooltip: t.homeSortTooltip,
+                      onSelected: _changeSortMode,
+                      itemBuilder: (_) => [
+                        _sortMenuItem(t.homeSortManual, 'sequence'),
+                        _sortMenuItem(t.homeSortNameAsc, 'name_asc'),
+                        _sortMenuItem(t.homeSortOldest, 'oldest'),
+                        _sortMenuItem(t.homeSortNewest, 'newest'),
+                      ],
+                    );
+                  }),
                 ],
               ),
         drawer: _isSelecting ? null : _buildDrawer(),
@@ -680,7 +693,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                     .onSurfaceVariant
                                     .withValues(alpha: 0.5)),
                             const SizedBox(height: 16),
-                            Text('폴더가 없습니다.\n+ 버튼으로 추가하세요.',
+                            Text(AppLocalizations.of(context).homeNoFolders,
                                 textAlign: TextAlign.center,
                                 style:
                                     Theme.of(context).textTheme.bodyLarge),
@@ -740,13 +753,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               ModalBarrier(
                   dismissible: false,
                   color: Theme.of(context).colorScheme.scrim.withValues(alpha: 0.32)),
-              const Center(
+              Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 16),
-                    Text('파일 준비 중...'),
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(AppLocalizations.of(context).homeFilePreparing),
                   ],
                 ),
               ),
@@ -764,6 +777,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   AppBar _buildSelectionAppBar() {
+    final t = AppLocalizations.of(context);
     final allSelected = _selectedFolderIds.length == _folders.length;
     final selectedList =
         _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
@@ -772,21 +786,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         icon: const Icon(Icons.close),
         onPressed: _clearSelection,
       ),
-      title: Text('${_selectedFolderIds.length}개 선택'),
+      title: Text(t.homeSelectedCount(_selectedFolderIds.length)),
       actions: [
         IconButton(
           icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
-          tooltip: allSelected ? '전체 해제' : '전체 선택',
+          tooltip: allSelected ? t.homeDeselectAll : t.homeSelectAll,
           onPressed: _selectAllFolders,
         ),
         IconButton(
           icon: const Icon(Icons.file_upload),
-          tooltip: '내보내기',
+          tooltip: t.commonExport,
           onPressed: _exportSelectedFolders,
         ),
         IconButton(
           icon: const Icon(Icons.delete),
-          tooltip: '삭제',
+          tooltip: t.commonDelete,
           onPressed: _deleteSelectedFolders,
         ),
         if (selectedList.length == 1)
@@ -800,14 +814,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               }
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'rename',
-                child: Text('이름 변경'),
+                child: Text(t.commonRename),
               ),
               if (selectedList.first.isBundle)
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: 'edit_bundle',
-                  child: Text('묶음 폴더 편집'),
+                  child: Text(t.homeBundleEdit),
                 ),
             ],
           ),
@@ -833,6 +847,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Widget _buildDrawer() {
+    final t = AppLocalizations.of(context);
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
@@ -853,7 +868,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     )),
                 const SizedBox(height: 4),
                 Text(
-                  '카드 $_totalCardCount장 · 폴더 ${_folders.length}개',
+                  t.homeDrawerSummary(_totalCardCount, _folders.length),
                   style: TextStyle(
                     fontSize: 13,
                     color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -864,14 +879,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           ListTile(
             leading: const Icon(Icons.style),
-            title: const Text('전체 카드 보기', style: TextStyle(fontSize: 14)),
+            title: Text(t.homeAllCards, style: const TextStyle(fontSize: 14)),
             onTap: () async {
               Navigator.pop(context);
               await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => CardListScreen(
-                    folder: Folder(name: '전체 카드'),
+                    folder: Folder(name: t.homeAllCardsTitle),
                     allCards: true,
                   ),
                 ),
@@ -881,7 +896,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           ListTile(
             leading: const Icon(Icons.notifications),
-            title: const Text('카드 푸시 알림', style: TextStyle(fontSize: 14)),
+            title: Text(t.homePushAlarm, style: const TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -894,7 +909,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           ListTile(
             leading: const Icon(Icons.lock),
-            title: const Text('잠금화면 설정', style: TextStyle(fontSize: 14)),
+            title: Text(t.homeLockScreen, style: const TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -906,7 +921,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           ListTile(
             leading: const Icon(Icons.settings),
-            title: const Text('설정', style: TextStyle(fontSize: 14)),
+            title: Text(t.homeSettings, style: const TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -921,7 +936,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           const Divider(),
           ListTile(
             leading: const Icon(Icons.file_upload),
-            title: const Text('파일 만들기', style: TextStyle(fontSize: 14)),
+            title: Text(t.homeMakeFile, style: const TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -933,7 +948,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
           ListTile(
             leading: const Icon(Icons.list_alt),
-            title: const Text('파일 목록', style: TextStyle(fontSize: 14)),
+            title: Text(t.homeFileList, style: const TextStyle(fontSize: 14)),
             onTap: () {
               Navigator.pop(context);
               Navigator.push(
@@ -988,7 +1003,7 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _children.isEmpty
-              ? const Center(child: Text('하위 폴더가 없습니다.'))
+              ? Center(child: Text(AppLocalizations.of(context).homeNoChildren))
               : ListView.builder(
                   itemCount: _children.length,
                   itemBuilder: (context, index) {

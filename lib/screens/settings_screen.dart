@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
+import '../services/locale_service.dart';
 import '../utils/constants.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -33,8 +35,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('설정을 불러올 수 없습니다: $e')),
+        SnackBar(content: Text(t.settingsLoadFailed(e.toString()))),
       );
     }
   }
@@ -42,7 +45,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _getSetting(String key, String defaultValue,
       [Set<String>? validValues]) {
     final value = _settings[key] ?? defaultValue;
-    // 유효값 목록이 있으면 검증 (SegmentedButton 크래시 방지)
     if (validValues != null && !validValues.contains(value)) {
       return defaultValue;
     }
@@ -69,17 +71,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       if (!mounted) return;
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('설정 저장 실패: $e')),
+        SnackBar(content: Text(t.settingsSaveFailed(e.toString()))),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
+
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('설정')),
+        appBar: AppBar(title: Text(t.settingsTitle)),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -96,21 +101,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
         AppConstants.settingThemeMode, 'system', {'light', 'dark', 'system'});
 
     return Scaffold(
-      appBar: AppBar(title: const Text('설정')),
+      appBar: AppBar(title: Text(t.settingsTitle)),
       body: ListView(
         children: [
           // 정답 접기 펼치기 기본값
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-            child: Text('정답 접기 펼치기 기본값',
+            child: Text(t.settingsAnswerFoldDefault,
                 style: Theme.of(context).textTheme.titleSmall),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'expanded', label: Text('펼치기')),
-                ButtonSegment(value: 'collapsed', label: Text('접기')),
+              segments: [
+                ButtonSegment(
+                    value: 'expanded',
+                    label: Text(t.settingsAnswerFoldExpanded)),
+                ButtonSegment(
+                    value: 'collapsed',
+                    label: Text(t.settingsAnswerFoldCollapsed)),
               ],
               selected: {answerFold},
               onSelectionChanged: (v) =>
@@ -122,15 +131,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // 정답 보이고 가리기 기본값
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('정답 보이고 가리기 기본값',
+            child: Text(t.settingsAnswerVisibilityDefault,
                 style: Theme.of(context).textTheme.titleSmall),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'visible', label: Text('보이기')),
-                ButtonSegment(value: 'hidden', label: Text('가리기')),
+              segments: [
+                ButtonSegment(
+                    value: 'visible', label: Text(t.settingsAnswerVisible)),
+                ButtonSegment(
+                    value: 'hidden', label: Text(t.settingsAnswerHidden)),
               ],
               selected: {answerVisibility},
               onSelectionChanged: (v) =>
@@ -141,7 +152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // 카드 번호 표시
           ListTile(
-            title: const Text('카드 번호 표시'),
+            title: Text(t.settingsCardNumber),
             trailing: Transform.scale(
               scale: 0.8,
               child: Switch(
@@ -155,7 +166,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // 카드 목록 스크롤바
           ListTile(
-            title: const Text('카드 목록 스크롤바'),
+            title: Text(t.settingsCardScroll),
             trailing: Transform.scale(
               scale: 0.8,
               child: Switch(
@@ -170,21 +181,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // 테마
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child:
-                Text('테마', style: Theme.of(context).textTheme.titleSmall),
+            child: Text(t.settingsTheme,
+                style: Theme.of(context).textTheme.titleSmall),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'system', label: Text('시스템')),
-                ButtonSegment(value: 'light', label: Text('라이트')),
-                ButtonSegment(value: 'dark', label: Text('다크')),
+              segments: [
+                ButtonSegment(
+                    value: 'system', label: Text(t.settingsThemeSystem)),
+                ButtonSegment(
+                    value: 'light', label: Text(t.settingsThemeLight)),
+                ButtonSegment(
+                    value: 'dark', label: Text(t.settingsThemeDark)),
               ],
               selected: {themeMode},
               onSelectionChanged: (v) =>
                   _setSetting(AppConstants.settingThemeMode, v.first),
             ),
+          ),
+          const Divider(),
+
+          // 언어
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text(t.settingsLanguage,
+                style: Theme.of(context).textTheme.titleSmall),
+          ),
+          ValueListenableBuilder<Locale?>(
+            valueListenable: LocaleService.localeNotifier,
+            builder: (context, locale, _) {
+              final selected = locale?.languageCode ?? 'system';
+              return Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: SegmentedButton<String>(
+                  segments: [
+                    ButtonSegment(
+                        value: 'system', label: Text(t.settingsLanguageSystem)),
+                    ButtonSegment(
+                        value: 'ko', label: Text(t.settingsLanguageKorean)),
+                    ButtonSegment(
+                        value: 'en', label: Text(t.settingsLanguageEnglish)),
+                  ],
+                  selected: {selected},
+                  onSelectionChanged: (v) {
+                    final code = v.first;
+                    LocaleService.setLocale(code == 'system' ? null : code);
+                  },
+                ),
+              );
+            },
           ),
           const SizedBox(height: 32),
         ],

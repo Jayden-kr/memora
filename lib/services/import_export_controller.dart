@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import '../database/database_helper.dart';
 import '../models/folder.dart';
+import '../services/locale_service.dart';
 import '../services/memk_import_service.dart';
 import '../services/memk_export_service.dart';
 
@@ -130,6 +131,7 @@ class ImportExportController {
     required String filePath,
     required List<String> selectedFolderNames,
     Map<int, int?>? folderMapping,
+    String conflictPolicy = 'merge',
   }) async {
     // 동시 실행 방지 (Completer 기반 락)
     if (_operationLock != null && !_operationLock!.isCompleted) return;
@@ -141,8 +143,12 @@ class ImportExportController {
     currentImportProgress = const ImportProgress();
     _notify();
 
+    final isEn = LocaleService.currentLanguageCode() == 'en';
+    final importTitle = isEn ? 'Importing' : 'Import 진행 중';
+    final processingMsg = isEn ? 'Processing...' : '처리 중...';
+
     try {
-      await _startService('Import 진행 중');
+      await _startService(importTitle);
     } catch (_) {}
 
     try {
@@ -150,6 +156,7 @@ class ImportExportController {
         filePath: filePath,
         selectedFolderNames: selectedFolderNames,
         folderMapping: folderMapping,
+        conflictPolicy: conflictPolicy,
         onProgress: (progress) {
           currentImportProgress = progress;
           _notify();
@@ -171,8 +178,8 @@ class ImportExportController {
           }
 
           _updateProgress(
-            'Import 진행 중',
-            progress.message ?? '처리 중...',
+            importTitle,
+            progress.message ?? processingMsg,
             (combined * 100).round(),
             100,
           );
@@ -185,9 +192,12 @@ class ImportExportController {
       _operationLock?.complete();
       _notify();
 
+      final body = isEn
+          ? 'Imported ${result.newCards} card(s) (${result.duration.inSeconds}s)'
+          : '${result.newCards}장 가져옴 (${result.duration.inSeconds}초)';
       await _complete(
-        'Import 완료',
-        '${result.newCards}장 가져옴 (${result.duration.inSeconds}초)',
+        isEn ? 'Import complete' : 'Import 완료',
+        body,
       );
     } catch (e) {
       isRunning = false;
@@ -210,18 +220,24 @@ class ImportExportController {
   Future<void> startMemkPerFolderExport({
     required List<Folder> selectedFolders,
     required String exportDirPath,
+    String conflictPolicy = 'rename',
   }) async {
     if (_operationLock != null && !_operationLock!.isCompleted) return;
     _operationLock = Completer<void>();
 
+    final isEn = LocaleService.currentLanguageCode() == 'en';
+    final exportTitle = isEn ? 'Exporting' : 'Export 진행 중';
+    final preparingMsg = isEn ? 'Preparing...' : '준비 중...';
+    final processingMsg = isEn ? 'Processing...' : '처리 중...';
+
     isRunning = true;
     currentOperation = 'export';
     clearExportResult();
-    exportProgressMessage = '준비 중...';
+    exportProgressMessage = preparingMsg;
     exportProgressValue = 0.0;
     _notify();
 
-    try { await _startService('Export 진행 중', type: 'export'); } catch (_) {}
+    try { await _startService(exportTitle, type: 'export'); } catch (_) {}
 
     final createdFiles = <String>[];
     final createdFileNames = <String>[];
@@ -234,14 +250,26 @@ class ImportExportController {
         final folderWeight = 1.0 / totalFolders;
 
         final safeName = _sanitizeFileName(folder.name);
-        // 파일명 충돌 방지: 동일 이름 존재 시 숫자 접미사 추가
         var fileName = '$safeName.mra';
         var outputPath = p.join(exportDirPath, fileName);
-        var counter = 1;
-        while (File(outputPath).existsSync()) {
-          fileName = '${safeName}_$counter.mra';
-          outputPath = p.join(exportDirPath, fileName);
-          counter++;
+        if (conflictPolicy == 'overwrite') {
+          // 동일 이름 파일이 있으면 삭제 후 덮어쓰기 + DB 레코드도 정리
+          final existing = File(outputPath);
+          if (existing.existsSync()) {
+            try { await existing.delete(); } catch (_) {}
+            try {
+              await DatabaseHelper.instance
+                  .deleteExportedFileByPath(outputPath);
+            } catch (_) {}
+          }
+        } else {
+          // 'rename' (기본값): 동일 이름 존재 시 숫자 접미사 추가
+          var counter = 1;
+          while (File(outputPath).existsSync()) {
+            fileName = '${safeName}_$counter.mra';
+            outputPath = p.join(exportDirPath, fileName);
+            counter++;
+          }
         }
 
         await _exportService.exportMemk(
@@ -267,14 +295,14 @@ class ImportExportController {
                 (folderProgressBase + subProgress * folderWeight)
                     .clamp(0.0, 1.0);
             final msg =
-                '${folder.name} (${i + 1}/$totalFolders) - ${progress.message ?? "처리 중..."}';
+                '${folder.name} (${i + 1}/$totalFolders) - ${progress.message ?? processingMsg}';
 
             exportProgressValue = overallProgress;
             exportProgressMessage = msg;
             _notify();
 
             _updateProgress(
-              'Export 진행 중',
+              exportTitle,
               msg,
               (overallProgress * 100).round(),
               100,
@@ -294,7 +322,7 @@ class ImportExportController {
             fileType: 'memk',
           );
         } catch (dbErr) {
-          debugPrint('[EXPORT] DB 기록 실패: $dbErr');
+          debugPrint('[EXPORT] DB record failed: $dbErr');
         }
 
         createdFiles.add(outputPath);
@@ -308,9 +336,12 @@ class ImportExportController {
       _operationLock?.complete();
       _notify();
 
+      final body = isEn
+          ? '${createdFileNames.length} file(s) created'
+          : '${createdFileNames.length}개 파일 생성';
       await _complete(
-        'Export 완료',
-        '${createdFileNames.length}개 파일 생성',
+        isEn ? 'Export complete' : 'Export 완료',
+        body,
         type: 'export',
       );
     } catch (e) {
@@ -333,7 +364,6 @@ class ImportExportController {
   /// 네이티브 PDF 진행률 수신 (main.dart에서 호출)
   void handleNativePdfProgress(int current, int total, String message) {
     final t = total > 0 ? total : 1;
-    // 현재 폴더의 진행률을 전체 진행률에 반영
     final sub = current / t;
     final overall =
         (_pdfFolderBase + sub * _pdfFolderWeight).clamp(0.0, 1.0);
@@ -343,8 +373,9 @@ class ImportExportController {
     exportProgressMessage = msg;
     _notify();
 
+    final isEn = LocaleService.currentLanguageCode() == 'en';
     _updateProgress(
-      'Export 진행 중', msg,
+      isEn ? 'Exporting' : 'Export 진행 중', msg,
       (overall * 100).round(), 100,
       type: 'export',
     );
@@ -360,18 +391,22 @@ class ImportExportController {
   Future<void> startPdfExport({
     required List<Folder> selectedFolders,
     required String exportDirPath,
+    String conflictPolicy = 'rename',
   }) async {
     if (_operationLock != null && !_operationLock!.isCompleted) return;
     _operationLock = Completer<void>();
 
+    final isEn = LocaleService.currentLanguageCode() == 'en';
+    final exportTitle = isEn ? 'Exporting' : 'Export 진행 중';
+
     isRunning = true;
     currentOperation = 'export';
     clearExportResult();
-    exportProgressMessage = '준비 중...';
+    exportProgressMessage = isEn ? 'Preparing...' : '준비 중...';
     exportProgressValue = 0.0;
     _notify();
 
-    try { await _startService('Export 진행 중', type: 'export'); } catch (_) {}
+    try { await _startService(exportTitle, type: 'export'); } catch (_) {}
 
     final createdFiles = <String>[];
     final createdFileNames = <String>[];
@@ -387,14 +422,24 @@ class ImportExportController {
         _pdfCurrentFolderName = folder.name;
 
         final safeName = _sanitizeFileName(folder.name);
-        // 파일명 충돌 방지: 동일 이름 존재 시 숫자 접미사 추가 (memk와 동일 패턴)
         var fileName = '$safeName.pdf';
         var outputPath = p.join(exportDirPath, fileName);
-        var counter = 1;
-        while (File(outputPath).existsSync()) {
-          fileName = '${safeName}_$counter.pdf';
-          outputPath = p.join(exportDirPath, fileName);
-          counter++;
+        if (conflictPolicy == 'overwrite') {
+          final existing = File(outputPath);
+          if (existing.existsSync()) {
+            try { await existing.delete(); } catch (_) {}
+            try {
+              await DatabaseHelper.instance
+                  .deleteExportedFileByPath(outputPath);
+            } catch (_) {}
+          }
+        } else {
+          var counter = 1;
+          while (File(outputPath).existsSync()) {
+            fileName = '${safeName}_$counter.pdf';
+            outputPath = p.join(exportDirPath, fileName);
+            counter++;
+          }
         }
 
         // Android 네이티브 PDF 생성 (Dart VM 힙 사용 안 함)
@@ -416,7 +461,7 @@ class ImportExportController {
             fileType: 'pdf',
           );
         } catch (dbErr) {
-          debugPrint('[EXPORT] DB 기록 실패: $dbErr');
+          debugPrint('[EXPORT] DB record failed: $dbErr');
         }
 
         createdFiles.add(outputPath);
@@ -430,9 +475,12 @@ class ImportExportController {
       _operationLock?.complete();
       _notify();
 
+      final body = isEn
+          ? '${createdFileNames.length} file(s) created'
+          : '${createdFileNames.length}개 파일 생성';
       await _complete(
-        'Export 완료',
-        '${createdFileNames.length}개 파일 생성',
+        isEn ? 'Export complete' : 'Export 완료',
+        body,
         type: 'export',
       );
     } catch (e) {

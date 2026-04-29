@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/import_export_controller.dart';
+import '../widgets/overwrite_dialog.dart';
 
 class ImportScreen extends StatefulWidget {
   final String filePath;
@@ -27,17 +29,16 @@ class _ImportScreenState extends State<ImportScreen> {
   final _controller = ImportExportController.instance;
 
   _ImportStage _stage = _ImportStage.loading;
-  String? _stableFilePath; // 안정적 접근을 위한 임시 복사본 경로
+  String? _stableFilePath;
   List<Map<String, dynamic>> _memkFolders = [];
   final Set<String> _selectedFolderNames = {};
 
-  // 가져올 위치
   bool _useExistingFolder = false;
   List<Folder> _localFolders = [];
-  final Map<int, int> _folderMapping = {}; // memk folderId → local folderId
+  final Map<int, int> _folderMapping = {};
 
-  // 에러
   String? _errorMessage;
+  String? _errorRaw; // i18n placeholder substitution용
 
   @override
   void initState() {
@@ -51,7 +52,6 @@ class _ImportScreenState extends State<ImportScreen> {
   void dispose() {
     ImportScreen.isOpen = false;
     _controller.removeListener(_onControllerUpdate);
-    // 캐시 메모리 해제 (import 중 뒤로가기 시에도 정리)
     _controller.importService.clearCache();
     super.dispose();
   }
@@ -70,24 +70,19 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Future<void> _loadData() async {
-    // 알림 탭으로 열린 경우: 파일 분석 없이 현재 컨트롤러 상태 표시
     if (widget.progressOnly) {
       if (_controller.isRunning && _controller.currentOperation == 'import') {
         setState(() => _stage = _ImportStage.importing);
       } else if (_controller.lastImportResult != null) {
         setState(() => _stage = _ImportStage.done);
       } else {
-        // Import 상태 없음 — 홈으로 돌아감
         if (mounted) Navigator.pop(context);
       }
       return;
     }
 
     try {
-      // file_picker가 이미 캐시에 복사한 파일을 직접 사용 (중복 복사 제거)
       _stableFilePath = widget.filePath;
-
-      // 컨트롤러의 importService 사용 (Archive 캐시 공유)
       final memkFolders =
           await _controller.importService.readFolderList(widget.filePath);
       final localFolders =
@@ -104,50 +99,93 @@ class _ImportScreenState extends State<ImportScreen> {
       if (!mounted) return;
       setState(() {
         _stage = _ImportStage.error;
-        _errorMessage = '파일을 읽을 수 없습니다: $e';
+        _errorRaw = 'fileRead:${e.toString()}';
       });
     }
   }
 
   Future<void> _startImport() async {
     if (_selectedFolderNames.isEmpty) return;
+    final t = AppLocalizations.of(context);
 
     if (_controller.isRunning) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('다른 작업이 진행 중입니다.')),
+          SnackBar(content: Text(t.importBusy)),
         );
       }
       return;
     }
 
-    setState(() => _stage = _ImportStage.importing);
-
-    // folderMapping 구성 (기존 폴더 선택 모드)
-    // 매핑되지 않은 폴더는 null → 서비스에서 자동 새 폴더 생성
     Map<int, int?>? mapping;
     if (_useExistingFolder) {
       mapping = {};
       for (final f in _memkFolders) {
         final memkId = (f['id'] as num?)?.toInt();
         if (memkId != null && _selectedFolderNames.contains(f['name'])) {
-          mapping[memkId] = _folderMapping[memkId]; // null이면 새 폴더 생성
+          mapping[memkId] = _folderMapping[memkId];
         }
       }
     }
+
+    final conflictNames = <String>[];
+    for (final f in _memkFolders) {
+      final name = (f['name'] as String?) ?? '';
+      if (name.isEmpty || !_selectedFolderNames.contains(name)) continue;
+      final memkId = (f['id'] as num?)?.toInt();
+      if (memkId != null && mapping != null && mapping[memkId] != null) {
+        continue;
+      }
+      final existing = await DatabaseHelper.instance.getFolderByName(name);
+      if (existing != null) conflictNames.add(name);
+    }
+
+    if (!mounted) return;
+
+    String conflictPolicy = 'merge';
+    if (conflictNames.isNotEmpty) {
+      final preview = conflictNames.length <= 3
+          ? conflictNames.join(', ')
+          : '${conflictNames.take(3).join(', ')} ${t.exportConflictPreviewSuffix(conflictNames.length - 3)}';
+      final action = await showOverwriteDialog(
+        context: context,
+        title: t.importConflictTitle,
+        message: t.exportConflictMessage(preview),
+        options: [
+          OverwriteOption(
+            icon: Icons.layers_outlined,
+            title: t.importMergeTitle,
+            subtitle: t.importMergeSubtitle,
+            value: 'merge',
+            accent: true,
+          ),
+          OverwriteOption(
+            icon: Icons.create_new_folder_outlined,
+            title: t.importRenameTitle,
+            subtitle: t.importRenameSubtitle,
+            value: 'rename',
+          ),
+        ],
+      );
+      if (action == null || action == 'cancel') return;
+      conflictPolicy = action;
+    }
+
+    if (!mounted) return;
+    setState(() => _stage = _ImportStage.importing);
 
     try {
       await _controller.startImport(
         filePath: _stableFilePath ?? widget.filePath,
         selectedFolderNames: _selectedFolderNames.toList(),
         folderMapping: mapping,
+        conflictPolicy: conflictPolicy,
       );
-      // 완료 시 controller listener가 _stage을 done으로 설정
     } catch (e) {
       if (mounted) {
         setState(() {
           _stage = _ImportStage.error;
-          _errorMessage = 'Import 실패: $e';
+          _errorRaw = 'import:${e.toString()}';
         });
       }
     }
@@ -167,26 +205,27 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Future<void> _createNewLocalFolder() async {
+    final t = AppLocalizations.of(context);
     final controller = TextEditingController();
     try {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('새 폴더'),
+        title: Text(t.homeNewFolderTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '폴더 이름'),
+          decoration: InputDecoration(hintText: t.homeFolderNameHint),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('생성'),
+            child: Text(t.commonCreate),
           ),
         ],
       ),
@@ -197,7 +236,7 @@ class _ImportScreenState extends State<ImportScreen> {
     if (existing != null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
+        SnackBar(content: Text(t.homeFolderExists(name))),
       );
       return;
     }
@@ -214,45 +253,67 @@ class _ImportScreenState extends State<ImportScreen> {
     }
   }
 
+  String _formatDuration(Duration d, AppLocalizations t) {
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return m > 0 ? t.durationMinSec(m, s) : t.durationSec(s);
+  }
+
+  String _resolveErrorMessage(AppLocalizations t) {
+    if (_errorMessage != null) return _errorMessage!;
+    if (_errorRaw == null) return t.importErrorUnknown;
+    final parts = _errorRaw!.split(':');
+    final type = parts.first;
+    final rest = parts.skip(1).join(':');
+    switch (type) {
+      case 'fileRead':
+        return t.importFileReadFail(rest);
+      case 'import':
+        return t.importGenericFail(rest);
+      default:
+        return _errorRaw!;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Import'),
+        title: Text(t.importTitle),
         leading: _stage == _ImportStage.importing
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
                 onPressed: () {
-                  // Import 중에도 나갈 수 있음 (백그라운드에서 계속 진행)
                   Navigator.pop(context);
                 },
               )
             : null,
       ),
       body: switch (_stage) {
-        _ImportStage.loading => _buildLoading(),
-        _ImportStage.folderSelect => _buildFolderSelect(),
-        _ImportStage.importing => _buildImporting(),
-        _ImportStage.done => _buildDone(),
-        _ImportStage.error => _buildError(),
+        _ImportStage.loading => _buildLoading(t),
+        _ImportStage.folderSelect => _buildFolderSelect(t),
+        _ImportStage.importing => _buildImporting(t),
+        _ImportStage.done => _buildDone(t),
+        _ImportStage.error => _buildError(t),
       },
     );
   }
 
-  Widget _buildLoading() {
-    return const Center(
+  Widget _buildLoading(AppLocalizations t) {
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 16),
-          Text('파일 분석 중...'),
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(t.importAnalyzing),
         ],
       ),
     );
   }
 
-  Widget _buildFolderSelect() {
+  Widget _buildFolderSelect(AppLocalizations t) {
     final allSelected = _selectedFolderNames.length == _memkFolders.length;
     return Column(
       children: [
@@ -261,18 +322,17 @@ class _ImportScreenState extends State<ImportScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 파일 내부 폴더 선택
                 Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Row(
                     children: [
-                      Text('폴더 ${_memkFolders.length}개',
+                      Text(t.importFolderCount(_memkFolders.length),
                           style: Theme.of(context).textTheme.titleMedium),
                       const Spacer(),
                       TextButton(
                         onPressed: _toggleSelectAll,
-                        child: Text(allSelected ? '전체 해제' : '전체 선택'),
+                        child: Text(allSelected ? t.homeDeselectAll : t.homeSelectAll),
                       ),
                     ],
                   ),
@@ -283,7 +343,7 @@ class _ImportScreenState extends State<ImportScreen> {
                   final isSelected = _selectedFolderNames.contains(name);
                   return CheckboxListTile(
                     title: Text(name),
-                    subtitle: Text('$cardCount장'),
+                    subtitle: Text(t.cardCountSuffix(cardCount)),
                     value: isSelected,
                     onChanged: (checked) {
                       setState(() {
@@ -299,10 +359,9 @@ class _ImportScreenState extends State<ImportScreen> {
 
                 const Divider(height: 32),
 
-                // 가져올 위치 선택
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Text('가져올 위치',
+                  child: Text(t.importTargetLocation,
                       style: Theme.of(context).textTheme.titleMedium),
                 ),
                 RadioGroup<bool>(
@@ -312,11 +371,11 @@ class _ImportScreenState extends State<ImportScreen> {
                   child: Column(
                     children: [
                       RadioListTile<bool>(
-                        title: const Text('새 폴더 자동 생성'),
+                        title: Text(t.importNewFolder),
                         value: false,
                       ),
                       RadioListTile<bool>(
-                        title: const Text('기존 폴더 선택'),
+                        title: Text(t.importExistingFolder),
                         value: true,
                       ),
                     ],
@@ -327,7 +386,7 @@ class _ImportScreenState extends State<ImportScreen> {
                   const Divider(),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text('대상 폴더 매핑',
+                    child: Text(t.importMappingTitle,
                         style: Theme.of(context).textTheme.titleSmall),
                   ),
                   const SizedBox(height: 8),
@@ -354,7 +413,7 @@ class _ImportScreenState extends State<ImportScreen> {
                             child: DropdownButton<int>(
                               isExpanded: true,
                               value: _folderMapping[memkId],
-                              hint: const Text('폴더 선택'),
+                              hint: Text(t.importPickFolderHint),
                               items: _localFolders.map((f) {
                                 return DropdownMenuItem(
                                   value: f.id,
@@ -379,7 +438,7 @@ class _ImportScreenState extends State<ImportScreen> {
                     child: TextButton.icon(
                       onPressed: _createNewLocalFolder,
                       icon: const Icon(Icons.add),
-                      label: const Text('새 폴더 만들기'),
+                      label: Text(t.importNewLocalFolder),
                     ),
                   ),
                 ],
@@ -387,7 +446,6 @@ class _ImportScreenState extends State<ImportScreen> {
             ),
           ),
         ),
-        // Import 버튼
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -396,9 +454,7 @@ class _ImportScreenState extends State<ImportScreen> {
               child: FilledButton(
                 onPressed:
                     _selectedFolderNames.isEmpty ? null : _startImport,
-                child: Text(
-                  'Import (${_selectedFolderNames.length}개 폴더)',
-                ),
+                child: Text(t.importButton(_selectedFolderNames.length)),
               ),
             ),
           ),
@@ -407,7 +463,7 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _buildImporting() {
+  Widget _buildImporting(AppLocalizations t) {
     final progress = _controller.currentImportProgress;
     final cardProgress = progress.totalCards > 0
         ? progress.currentCards / progress.totalCards
@@ -429,13 +485,13 @@ class _ImportScreenState extends State<ImportScreen> {
                 value: totalProgress.clamp(0.0, 1.0)),
             const SizedBox(height: 24),
             Text(
-              progress.message ?? '처리 중...',
+              progress.message ?? t.importProcessing,
               style: Theme.of(context).textTheme.bodyLarge,
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             Text(
-              '뒤로 가기를 눌러도 백그라운드에서 계속 진행됩니다.',
+              t.importBackgroundNote,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -447,14 +503,12 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _buildDone() {
+  Widget _buildDone(AppLocalizations t) {
     final r = _controller.lastImportResult;
     if (r == null) {
-      return _buildError();
+      return _buildError(t);
     }
-    final minutes = r.duration.inMinutes;
-    final seconds = r.duration.inSeconds % 60;
-    final timeStr = minutes > 0 ? '$minutes분 $seconds초' : '$seconds초';
+    final timeStr = _formatDuration(r.duration, t);
 
     return Center(
       child: Padding(
@@ -465,19 +519,19 @@ class _ImportScreenState extends State<ImportScreen> {
             Icon(Icons.check_circle,
                 size: 64, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            Text('Import 완료',
+            Text(t.importDoneTitle,
                 style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 24),
-            _resultRow('신규 카드', '${r.newCards}장'),
-            _resultRow('스킵 (중복)', '${r.skippedCards}장'),
-            _resultRow('신규 폴더', '${r.newFolders}개'),
-            _resultRow('병합 폴더', '${r.mergedFolders}개'),
-            _resultRow('이미지', '${r.images}장'),
-            _resultRow('소요 시간', timeStr),
+            _resultRow(t.importDoneNewCards, t.cardCountSuffix(r.newCards)),
+            _resultRow(t.importDoneSkipped, t.cardCountSuffix(r.skippedCards)),
+            _resultRow(t.importDoneNewFolders, t.folderCountSuffix(r.newFolders)),
+            _resultRow(t.importDoneMerged, t.folderCountSuffix(r.mergedFolders)),
+            _resultRow(t.importDoneImages, t.imageCountSuffix(r.images)),
+            _resultRow(t.importDoneTime, timeStr),
             const SizedBox(height: 32),
             FilledButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('확인'),
+              child: Text(t.commonOk),
             ),
           ],
         ),
@@ -502,7 +556,7 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
-  Widget _buildError() {
+  Widget _buildError(AppLocalizations t) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -512,13 +566,13 @@ class _ImportScreenState extends State<ImportScreen> {
             Icon(Icons.error_outline, size: 64, color: Theme.of(context).colorScheme.error),
             const SizedBox(height: 16),
             Text(
-              _errorMessage ?? '알 수 없는 에러',
+              _resolveErrorMessage(t),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
             FilledButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('돌아가기'),
+              child: Text(t.importErrorBack),
             ),
           ],
         ),

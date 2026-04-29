@@ -7,6 +7,9 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../database/database_helper.dart';
+import 'locale_service.dart';
+
+bool get _isEn => LocaleService.currentLanguageCode() == 'en';
 
 /// PDF 내보내기 진행 상태
 class PdfExportProgress {
@@ -134,7 +137,7 @@ class PdfExportService {
                           ),
                           pw.SizedBox(height: 4),
                           pw.Text(
-                            '카드 $totalCards장',
+                            _isEn ? '$totalCards cards' : '카드 $totalCards장',
                             style: pw.TextStyle(
                               font: font,
                               fontSize: 12,
@@ -173,7 +176,7 @@ class PdfExportService {
       totalCards: grandTotalCards,
       currentFolders: folderIds.length,
       totalFolders: folderIds.length,
-      message: 'PDF 파일 저장 중...',
+      message: _isEn ? 'Saving PDF file...' : 'PDF 파일 저장 중...',
     ));
 
     final bytes = await doc.save();
@@ -184,7 +187,7 @@ class PdfExportService {
       totalCards: grandTotalCards,
       currentFolders: folderIds.length,
       totalFolders: folderIds.length,
-      message: 'PDF 생성 완료',
+      message: _isEn ? 'PDF created' : 'PDF 생성 완료',
     ));
   }
 
@@ -269,7 +272,7 @@ class PdfExportService {
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Text(
-            question.isEmpty ? '(내용 없음)' : question,
+            question.isEmpty ? (_isEn ? '(empty)' : '(내용 없음)') : question,
             style: pw.TextStyle(
               font: font,
               fontSize: 12,

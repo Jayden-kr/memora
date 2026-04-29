@@ -1,0 +1,473 @@
+{
+  "@@locale": "ko",
+
+  "appTitle": "Memora",
+
+  "settingsTitle": "설정",
+  "settingsLoadFailed": "설정을 불러올 수 없습니다: {error}",
+  "@settingsLoadFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "settingsSaveFailed": "설정 저장 실패: {error}",
+  "@settingsSaveFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "settingsAnswerFoldDefault": "정답 접기 펼치기 기본값",
+  "settingsAnswerFoldExpanded": "펼치기",
+  "settingsAnswerFoldCollapsed": "접기",
+
+  "settingsAnswerVisibilityDefault": "정답 보이고 가리기 기본값",
+  "settingsAnswerVisible": "보이기",
+  "settingsAnswerHidden": "가리기",
+
+  "settingsCardNumber": "카드 번호 표시",
+  "settingsCardScroll": "카드 목록 스크롤바",
+
+  "settingsTheme": "테마",
+  "settingsThemeSystem": "시스템",
+  "settingsThemeLight": "라이트",
+  "settingsThemeDark": "다크",
+
+  "settingsLanguage": "언어",
+  "settingsLanguageSystem": "시스템 언어",
+  "settingsLanguageKorean": "한국어",
+  "settingsLanguageEnglish": "English",
+
+  "commonCancel": "취소",
+  "commonOk": "확인",
+  "commonSave": "저장",
+  "commonDelete": "삭제",
+  "commonClose": "닫기",
+  "commonOverwrite": "덮어쓰기",
+  "commonRename": "이름 변경",
+  "commonCreate": "생성",
+  "commonChange": "변경",
+  "commonExport": "내보내기",
+  "commonImport": "가져오기",
+  "cardCountSuffix": "{count}장",
+  "@cardCountSuffix": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "folderCountSuffix": "{count}개",
+  "@folderCountSuffix": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+
+  "homeOnlyMemkSnack": ".mra 또는 .memk 파일만 가져올 수 있습니다.",
+  "homeOnlyMemkPickSnack": ".mra 또는 .memk 파일만 선택할 수 있습니다.",
+  "homeNoFolderFirst": "폴더를 먼저 만들어주세요.",
+  "homePickerCardFolderTitle": "카드를 추가할 폴더",
+  "homeFabAddCard": "새 카드 추가",
+  "homeFabCreateFolder": "새 폴더 만들기",
+  "homeFabCreateBundle": "묶음 폴더 만들기",
+  "homeFabImportFile": "파일 가져오기",
+  "homeNewFolderTitle": "새 폴더",
+  "homeFolderNameHint": "폴더 이름",
+  "homeNewNameHint": "새 이름",
+  "homeFolderExists": "이미 \"{name}\" 폴더가 있습니다.",
+  "@homeFolderExists": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "homeFolderCreateFail": "폴더 생성 실패: 이미 \"{name}\" 폴더가 있습니다.",
+  "@homeFolderCreateFail": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "homeRenameFolderTitle": "폴더 이름 변경",
+  "homeFilePickFail": "파일 선택 실패: {error}",
+  "@homeFilePickFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "homeDeleteFolderTitle": "폴더 삭제",
+  "homeDeleteFolderConfirm": "선택한 {count}개 폴더를 삭제하시겠습니까?",
+  "@homeDeleteFolderConfirm": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "homeDeleteFolderCardsNote": "\n카드 {count}장이 함께 삭제됩니다.",
+  "@homeDeleteFolderCardsNote": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "homeDeleteFolderBundleNote": "\n묶음 폴더의 하위 폴더는 삭제되지 않습니다.",
+  "homeNoExportable": "내보낼 수 있는 폴더가 없습니다.",
+  "homeSortTooltip": "정렬",
+  "homeSortManual": "수동 (드래그)",
+  "homeSortNameAsc": "가나다순",
+  "homeSortOldest": "오래된순",
+  "homeSortNewest": "최신순",
+  "homeSelectedCount": "{count}개 선택",
+  "@homeSelectedCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "homeDeselectAll": "전체 해제",
+  "homeSelectAll": "전체 선택",
+  "homeBundleEdit": "묶음 폴더 편집",
+  "homeDrawerSummary": "카드 {cards}장 · 폴더 {folders}개",
+  "@homeDrawerSummary": {
+    "placeholders": {
+      "cards": { "type": "int" },
+      "folders": { "type": "int" }
+    }
+  },
+  "homeAllCards": "전체 카드 보기",
+  "homePushAlarm": "카드 푸시 알림",
+  "homeLockScreen": "잠금화면 설정",
+  "homeSettings": "설정",
+  "homeMakeFile": "파일 만들기",
+  "homeFileList": "파일 목록",
+  "homeNoFolders": "폴더가 없습니다.\n+ 버튼으로 추가하세요.",
+  "homeNoChildren": "하위 폴더가 없습니다.",
+  "homeFilePreparing": "파일 준비 중...",
+  "homeAllCardsTitle": "전체 카드",
+
+  "commonEdit": "편집",
+  "commonEmpty": "(내용 없음)",
+
+  "cardViewFallbackTitle": "카드",
+  "cardViewTapToReveal": "탭하여 정답 보기",
+
+  "bundleEditTitle": "묶음 폴더 편집",
+  "bundleNewTitle": "묶음 폴더 만들기",
+  "bundleNameHint": "묶음 이름",
+  "bundleNameEmptyError": "묶음 이름을 입력하세요.",
+  "bundlePickFoldersTitle": "포함할 폴더 선택",
+  "bundleNoAvailable": "선택할 수 있는 폴더가 없습니다.",
+  "bundleAlreadyIn": "다른 묶음에 포함됨",
+  "errorPrefix": "에러: {error}",
+  "@errorPrefix": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+
+  "cardEditMaxImages": "이미지는 최대 5장까지 추가할 수 있습니다.",
+  "cardEditCamera": "카메라",
+  "cardEditGallery": "갤러리",
+  "cardEditImageLoadFail": "이미지를 불러올 수 없습니다: {error}",
+  "@cardEditImageLoadFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "cardEditEmptyError": "앞면 또는 뒷면을 입력하세요.",
+  "cardEditSaveFail": "저장 실패: {error}",
+  "@cardEditSaveFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "cardEditDiscardTitle": "변경사항 삭제",
+  "cardEditDiscardBody": "저장하지 않은 변경사항이 있습니다. 나가시겠습니까?",
+  "cardEditDiscardLeave": "나가기",
+  "cardEditTitleEdit": "카드 편집",
+  "cardEditTitleNew": "새 카드",
+  "cardEditFolderLabel": "폴더",
+  "cardEditFront": "앞면 (Question)",
+  "cardEditBack": "뒷면 (Answer)",
+  "cardEditFrontHint": "질문을 입력하세요",
+  "cardEditBackHint": "정답을 입력하세요",
+
+  "exportTitle": "파일 만들기",
+  "exportGenerate": "생성",
+  "exportFolderPick": "폴더 선택",
+  "exportNoExportable": "내보낼 수 있는 폴더가 없습니다.",
+  "exportFileType": "파일 형식",
+  "exportFileTypeMra": "Memora 백업 파일",
+  "exportFileTypePdfDesc": "인쇄/공유용 문서",
+  "exportFailSnack": "내보내기 실패: {error}",
+  "@exportFailSnack": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "exportDoneTitle": "내보내기 완료",
+  "exportDoneBody": "{count}개 파일이 생성되었습니다.\n\n{names}",
+  "@exportDoneBody": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "names": { "type": "String" }
+    }
+  },
+  "exportShare": "공유",
+  "exportConflictTitle": "같은 이름 파일이 있어요",
+  "exportConflictMessage": "{preview}\n어떻게 할까요?",
+  "@exportConflictMessage": {
+    "placeholders": {
+      "preview": { "type": "String" }
+    }
+  },
+  "exportConflictPreviewSuffix": "외 {count}개",
+  "@exportConflictPreviewSuffix": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "exportOverwriteSubtitle": "기존 파일을 새 파일로 교체",
+  "exportRenameNew": "새 이름으로 저장",
+  "exportRenameSubtitle": "이름 끝에 _1 등을 붙여 새 파일 생성",
+
+  "importTitle": "Import",
+  "importFileReadFail": "파일을 읽을 수 없습니다: {error}",
+  "@importFileReadFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "importBusy": "다른 작업이 진행 중입니다.",
+  "importConflictTitle": "같은 이름 폴더가 있어요",
+  "importMergeTitle": "기존 폴더에 합치기",
+  "importMergeSubtitle": "같은 이름 폴더에 카드 추가",
+  "importRenameTitle": "새 이름으로 가져오기",
+  "importRenameSubtitle": "이름 끝에 _1 등을 붙여 새 폴더 생성",
+  "importGenericFail": "Import 실패: {error}",
+  "@importGenericFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "importAnalyzing": "파일 분석 중...",
+  "importFolderCount": "폴더 {count}개",
+  "@importFolderCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "importTargetLocation": "가져올 위치",
+  "importNewFolder": "새 폴더 자동 생성",
+  "importExistingFolder": "기존 폴더 선택",
+  "importMappingTitle": "대상 폴더 매핑",
+  "importPickFolderHint": "폴더 선택",
+  "importNewLocalFolder": "새 폴더 만들기",
+  "importButton": "Import ({count}개 폴더)",
+  "@importButton": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "importProcessing": "처리 중...",
+  "importBackgroundNote": "뒤로 가기를 눌러도 백그라운드에서 계속 진행됩니다.",
+  "importDoneTitle": "Import 완료",
+  "importDoneNewCards": "신규 카드",
+  "importDoneSkipped": "스킵 (중복)",
+  "importDoneNewFolders": "신규 폴더",
+  "importDoneMerged": "병합 폴더",
+  "importDoneImages": "이미지",
+  "importDoneTime": "소요 시간",
+  "importErrorUnknown": "알 수 없는 에러",
+  "importErrorBack": "돌아가기",
+  "imageCountSuffix": "{count}장",
+  "@imageCountSuffix": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "durationMinSec": "{m}분 {s}초",
+  "@durationMinSec": {
+    "placeholders": {
+      "m": { "type": "int" },
+      "s": { "type": "int" }
+    }
+  },
+  "durationSec": "{s}초",
+  "@durationSec": {
+    "placeholders": {
+      "s": { "type": "int" }
+    }
+  },
+
+  "fileListTitle": "파일 목록",
+  "fileListEmpty": "내보낸 파일이 없습니다.",
+  "fileListMissing": "(파일 없음)",
+  "fileDeleteTitle": "파일 삭제",
+  "fileDeleteSingle": "\"{name}\" 파일을 삭제하시겠습니까?",
+  "@fileDeleteSingle": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "fileDeleteMulti": "선택한 {count}개 파일을 삭제하시겠습니까?",
+  "@fileDeleteMulti": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "fileDeleteFail": "파일 삭제 실패: {error}",
+  "@fileDeleteFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "fileOnlyMemkRestore": ".mra 또는 .memk 파일만 복원할 수 있습니다.",
+  "fileNotFound": "파일을 찾을 수 없습니다.",
+  "fileRenameTitle": "파일 이름 변경",
+  "fileRenameOverwriteTitle": "같은 이름 파일이 있어요",
+  "fileRenameOverwriteBody": "\"{name}\"이(가) 이미 있어요. 덮어쓸까요?",
+  "@fileRenameOverwriteBody": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "fileRenameOverwriteSubtitle": "기존 파일을 교체",
+  "fileRenameFail": "파일 이름 변경에 실패했습니다.",
+  "fileSavedToDownloads": "다운로드 폴더에 저장됨: {name}",
+  "@fileSavedToDownloads": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "fileSaveFail": "저장 실패: {error}",
+  "@fileSaveFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "fileBatchSaved": "{count}개 파일을 다운로드 폴더에 저장했습니다.",
+  "@fileBatchSaved": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "fileNoShareable": "공유할 파일이 없습니다.",
+  "fileNoRestorable": "복원 가능한 파일이 없습니다.",
+  "fileOptionsRename": "이름 변경",
+  "fileOptionsSaveDevice": "기기에 저장",
+  "fileOptionsShare": "공유",
+  "fileOptionsRestore": "복원 (Import)",
+  "fileToolbarRestore": "복원",
+  "fileToolbarSaveDevice": "기기에 저장",
+
+  "lockTitle": "잠금화면 설정",
+  "lockOverlayPermissionTitle": "오버레이 권한 필요",
+  "lockOverlayPermissionBody": "잠금화면에 카드를 표시하려면\n다른 앱 위에 표시 권한이 필요합니다.",
+  "lockOpenSystemSettings": "설정으로 이동",
+  "lockEnable": "잠금화면 사용",
+  "lockEnableSubtitle": "화면이 꺼질 때마다 카드 표시",
+  "lockSelectFolder": "폴더 선택",
+  "lockOrder": "카드 순서",
+  "lockOrderSequential": "순차",
+  "lockOrderRandom": "랜덤",
+  "lockBgColor": "배경색",
+
+  "pushTitle": "카드 푸시 알림",
+  "pushAlarm": "알림",
+  "pushNeedPermission": "알림 권한이 필요합니다.",
+  "pushOpenSettings": "설정 열기",
+  "pushToggleFail": "알림 설정 변경에 실패했습니다.",
+  "pushFolder": "폴더",
+  "pushAllFolders": "전체 폴더",
+  "pushSendTest": "테스트 알림 보내기",
+  "pushTestSent": "테스트 알림을 보냈습니다.",
+  "pushSound": "알림음",
+  "pushIntervalSetting": "간격 반복 설정",
+  "pushIntervalStart": "시작 시간",
+  "pushIntervalEnd": "종료 시간",
+  "pushIntervalLabel": "간격",
+  "pushIntervalMinutes": "분",
+  "pushIntervalDailyCount": "(하루 {count}회)",
+  "@pushIntervalDailyCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "pushIntervalPreview": "{start} ~ {end}, {min}분마다",
+  "@pushIntervalPreview": {
+    "placeholders": {
+      "start": { "type": "String" },
+      "end": { "type": "String" },
+      "min": { "type": "String" }
+    }
+  },
+  "pushSaving": "저장 중...",
+  "pushSaveSuccess": "간격 반복 알림이 저장되었습니다.",
+  "pushSaveFail": "저장에 실패했습니다. 다시 시도해 주세요.",
+  "pushIntervalMinError": "간격은 최소 5분이어야 합니다.",
+  "pushTimeSameError": "시작 시간과 종료 시간이 같습니다.",
+
+  "cardListSearchHint": "검색...",
+  "cardListSearchEmpty": "검색 결과가 없습니다.",
+  "cardListEmpty": "카드가 없습니다.",
+  "cardListAllCardsTitle": "전체 카드 ({count})",
+  "@cardListAllCardsTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "cardListSortDefault": "기본순",
+  "cardListSortNewest": "최신순",
+  "cardListSortOldest": "오래된순",
+  "cardListSortName": "가나다순",
+  "cardListSortRandom": "랜덤",
+  "cardListAnswerExpand": "정답 펼치기",
+  "cardListAnswerCollapse": "정답 접기",
+  "cardListAnswerShow": "정답 보이기",
+  "cardListAnswerHide": "정답 가리기",
+  "cardListSelectedCount": "{count}개 선택됨",
+  "@cardListSelectedCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "cardListSelectAll": "전체선택",
+  "cardListMove": "이동",
+  "cardDeleteTitle": "카드 삭제",
+  "cardDeleteSingleConfirm": "이 카드를 삭제하시겠습니까?",
+  "cardDeleteMultiConfirm": "{count}개 카드를 삭제하시겠습니까?",
+  "@cardDeleteMultiConfirm": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "cardDeleteFail": "카드 삭제에 실패했습니다.",
+  "cardDuplicateFail": "카드 복제에 실패했습니다.",
+  "cardPickFolderTitle": "폴더 선택",
+  "cardMoveTargetTitle": "이동할 폴더 선택",
+  "cardSkippedDuplicate": "중복된 카드라 이동하지 않았습니다.",
+  "cardDupSingleMessage": "대상 폴더에 같은 질문의 카드가 이미 있어요",
+  "cardDupMultiMessage": "{total}개 중 {dup}개가 대상 폴더에\n같은 질문으로 이미 있어요",
+  "@cardDupMultiMessage": {
+    "placeholders": {
+      "total": { "type": "int" },
+      "dup": { "type": "int" }
+    }
+  },
+  "cardDupTitle": "중복 카드 발견",
+  "cardDupSkip": "중복은 건너뛰기",
+  "cardDupSkipSubSingle": "이동하지 않음",
+  "cardDupSkipSubMulti": "중복 제외하고 나머지만 이동",
+  "cardDupMove": "중복도 이동",
+  "cardDupMoveSubSingle": "같은 질문이어도 이동",
+  "cardDupMoveSubMulti": "같은 질문이어도 전부 이동",
+  "cardMoveNoneToMove": "이동할 카드가 없습니다 (전부 중복).",
+  "cardMoveResult": "{moved}개 이동, {skipped}개 중복 건너뜀.",
+  "@cardMoveResult": {
+    "placeholders": {
+      "moved": { "type": "int" },
+      "skipped": { "type": "int" }
+    }
+  },
+
+  "folderTileBundle": "묶음 폴더",
+  "cardTileMenuEdit": "편집",
+  "cardTileMenuDuplicate": "복제",
+  "cardTileMenuMove": "다른 폴더로 이동",
+  "imageNotFound": "이미지를 찾을 수 없습니다"
+}

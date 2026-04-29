@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
@@ -411,19 +412,21 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _deleteCard(CardModel card) async {
+    final t = AppLocalizations.of(context);
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('카드 삭제'),
-        content: const Text('이 카드를 삭제하시겠습니까?'),
+        title: Text(t.cardDeleteTitle),
+        content: Text(t.cardDeleteSingleConfirm),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -435,10 +438,10 @@ class _CardListScreenState extends State<CardListScreen> {
       await DatabaseHelper.instance.deleteCard(card.id!);
       await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
     } catch (e) {
-      debugPrint('[CARD_LIST] 카드 삭제 실패: $e');
+      debugPrint('[CARD_LIST] card delete failed: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('카드 삭제에 실패했습니다.')),
+        SnackBar(content: Text(t.cardDeleteFail)),
       );
       return;
     }
@@ -451,10 +454,11 @@ class _CardListScreenState extends State<CardListScreen> {
     try {
       await DatabaseHelper.instance.duplicateCard(card.id!);
     } catch (e) {
-      debugPrint('[CARD_LIST] 카드 복제 실패: $e');
+      debugPrint('[CARD_LIST] card duplicate failed: $e');
       if (!mounted) return;
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('카드 복제에 실패했습니다.')),
+        SnackBar(content: Text(t.cardDuplicateFail)),
       );
       return;
     }
@@ -463,13 +467,14 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _moveCard(CardModel card) async {
+    final t = AppLocalizations.of(context);
     final folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     final sourceFolderId = card.folderId;
     final target = await showDialog<Folder>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('폴더 선택'),
+        title: Text(t.cardPickFolderTitle),
         children: folders
             .where((f) => f.id != sourceFolderId)
             .map((f) => SimpleDialogOption(
@@ -490,7 +495,7 @@ class _CardListScreenState extends State<CardListScreen> {
       if (action == null || action == 'cancel' || !mounted) return;
       if (action == 'skip') {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('중복된 카드라 이동하지 않았습니다.')),
+          SnackBar(content: Text(t.cardSkippedDuplicate)),
         );
         return;
       }
@@ -506,9 +511,10 @@ class _CardListScreenState extends State<CardListScreen> {
     required int duplicateCount,
     required int totalCount,
   }) {
+    final t = AppLocalizations.of(context);
     final msg = totalCount == 1
-        ? '대상 폴더에 같은 질문의 카드가 이미 있어요'
-        : '$totalCount개 중 $duplicateCount개가 대상 폴더에\n같은 질문으로 이미 있어요';
+        ? t.cardDupSingleMessage
+        : t.cardDupMultiMessage(totalCount, duplicateCount);
     return showDialog<String>(
       context: context,
       builder: (ctx) {
@@ -523,7 +529,7 @@ class _CardListScreenState extends State<CardListScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '중복 카드 발견',
+                  t.cardDupTitle,
                   style: theme.textTheme.titleLarge
                       ?.copyWith(fontWeight: FontWeight.w600),
                 ),
@@ -532,19 +538,19 @@ class _CardListScreenState extends State<CardListScreen> {
                 const SizedBox(height: 20),
                 _DuplicateOption(
                   icon: Icons.filter_alt_outlined,
-                  title: '중복은 건너뛰기',
+                  title: t.cardDupSkip,
                   subtitle: totalCount == 1
-                      ? '이동하지 않음'
-                      : '중복 제외하고 나머지만 이동',
+                      ? t.cardDupSkipSubSingle
+                      : t.cardDupSkipSubMulti,
                   onTap: () => Navigator.pop(ctx, 'skip'),
                 ),
                 const SizedBox(height: 8),
                 _DuplicateOption(
                   icon: Icons.layers_outlined,
-                  title: '중복도 이동',
+                  title: t.cardDupMove,
                   subtitle: totalCount == 1
-                      ? '같은 질문이어도 이동'
-                      : '같은 질문이어도 전부 이동',
+                      ? t.cardDupMoveSubSingle
+                      : t.cardDupMoveSubMulti,
                   onTap: () => Navigator.pop(ctx, 'all'),
                   accent: true,
                 ),
@@ -552,7 +558,7 @@ class _CardListScreenState extends State<CardListScreen> {
                   alignment: Alignment.centerRight,
                   child: TextButton(
                     onPressed: () => Navigator.pop(ctx, 'cancel'),
-                    child: const Text('취소'),
+                    child: Text(t.commonCancel),
                   ),
                 ),
               ],
@@ -630,19 +636,21 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _deleteSelected() async {
+    final t = AppLocalizations.of(context);
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('카드 삭제'),
-        content: Text('${_selectedCardIds.length}개 카드를 삭제하시겠습니까?'),
+        title: Text(t.cardDeleteTitle),
+        content: Text(t.cardDeleteMultiConfirm(_selectedCardIds.length)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -668,6 +676,7 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _moveSelected() async {
+    final t = AppLocalizations.of(context);
     var folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     if (!widget.allCards) {
@@ -676,7 +685,7 @@ class _CardListScreenState extends State<CardListScreen> {
     final target = await showDialog<Folder>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: const Text('이동할 폴더 선택'),
+        title: Text(t.cardMoveTargetTitle),
         children: folders.map((f) => SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, f),
               child: Text('${f.name} (${f.cardCount})'),
@@ -701,7 +710,7 @@ class _CardListScreenState extends State<CardListScreen> {
         skipped = allIds.length - idsToMove.length;
         if (idsToMove.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('이동할 카드가 없습니다 (전부 중복).')),
+            SnackBar(content: Text(t.cardMoveNoneToMove)),
           );
           _exitSelectionMode();
           return;
@@ -709,7 +718,6 @@ class _CardListScreenState extends State<CardListScreen> {
       }
     }
 
-    // moveCardsBatch 내부에서 트랜잭션으로 원본/대상 folder card_count 자동 갱신
     await DatabaseHelper.instance.moveCardsBatch(idsToMove, target.id!);
     if (!mounted) return;
     _exitSelectionMode();
@@ -717,7 +725,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
     if (skipped > 0 && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${idsToMove.length}개 이동, $skipped개 중복 건너뜀.')),
+        SnackBar(content: Text(t.cardMoveResult(idsToMove.length, skipped))),
       );
     }
   }
@@ -841,7 +849,7 @@ class _CardListScreenState extends State<CardListScreen> {
                   controller: _searchController,
                   focusNode: _searchFocusNode,
                   decoration: InputDecoration(
-                    hintText: '검색...',
+                    hintText: AppLocalizations.of(context).cardListSearchHint,
                     prefixIcon: const Icon(Icons.search, size: 20),
                     suffixIcon: _searchController.text.isNotEmpty
                         ? IconButton(
@@ -869,8 +877,8 @@ class _CardListScreenState extends State<CardListScreen> {
                   : _cards.isEmpty
                       ? Center(
                           child: Text(_searchQuery.isNotEmpty
-                              ? '검색 결과가 없습니다.'
-                              : '카드가 없습니다.'),
+                              ? AppLocalizations.of(context).cardListSearchEmpty
+                              : AppLocalizations.of(context).cardListEmpty),
                         )
                       : Stack(
                           children: [
@@ -1040,10 +1048,11 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   PreferredSizeWidget _buildNormalAppBar() {
+    final t = AppLocalizations.of(context);
     return AppBar(
       title: Text(
         widget.allCards
-            ? '전체 카드 ($_totalCount)'
+            ? t.cardListAllCardsTitle(_totalCount)
             : '${widget.folder.name} ($_totalCount)',
         style: const TextStyle(
           fontFamily: 'Pretendard',
@@ -1113,32 +1122,36 @@ class _CardListScreenState extends State<CardListScreen> {
           itemBuilder: (_) => [
             PopupMenuItem(
               value: 'sort_sequence',
-              child: _menuItem('기본순', _sortOrder == 'sequence'),
+              child: _menuItem(t.cardListSortDefault, _sortOrder == 'sequence'),
             ),
             PopupMenuItem(
               value: 'sort_newest',
-              child: _menuItem('최신순', _sortOrder == 'newest'),
+              child: _menuItem(t.cardListSortNewest, _sortOrder == 'newest'),
             ),
             PopupMenuItem(
               value: 'sort_oldest',
-              child: _menuItem('오래된순', _sortOrder == 'oldest'),
+              child: _menuItem(t.cardListSortOldest, _sortOrder == 'oldest'),
             ),
             PopupMenuItem(
               value: 'sort_name_asc',
-              child: _menuItem('가나다순', _sortOrder == 'name_asc'),
+              child: _menuItem(t.cardListSortName, _sortOrder == 'name_asc'),
             ),
             PopupMenuItem(
               value: 'sort_random',
-              child: _menuItem('랜덤', _sortOrder == 'random'),
+              child: _menuItem(t.cardListSortRandom, _sortOrder == 'random'),
             ),
             const PopupMenuDivider(),
             PopupMenuItem(
               value: 'fold_toggle',
-              child: Text(_allAnswersFolded ? '정답 펼치기' : '정답 접기'),
+              child: Text(_allAnswersFolded
+                  ? t.cardListAnswerExpand
+                  : t.cardListAnswerCollapse),
             ),
             PopupMenuItem(
               value: 'hide_toggle',
-              child: Text(_allAnswersHidden ? '정답 보이기' : '정답 가리기'),
+              child: Text(_allAnswersHidden
+                  ? t.cardListAnswerShow
+                  : t.cardListAnswerHide),
             ),
           ],
         ),
@@ -1161,16 +1174,17 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   PreferredSizeWidget _buildSelectionAppBar() {
+    final t = AppLocalizations.of(context);
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.close),
         onPressed: _exitSelectionMode,
       ),
-      title: Text('${_selectedCardIds.length}개 선택됨'),
+      title: Text(t.cardListSelectedCount(_selectedCardIds.length)),
       actions: [
         Row(
           children: [
-            const Text('전체선택'),
+            Text(t.cardListSelectAll),
             Checkbox(
               value: _selectedCardIds.length == _cards.length &&
                   _cards.isNotEmpty,
@@ -1183,6 +1197,7 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Widget _buildSelectionBar() {
+    final t = AppLocalizations.of(context);
     return BottomAppBar(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1191,13 +1206,13 @@ class _CardListScreenState extends State<CardListScreen> {
             onPressed:
                 _selectedCardIds.isEmpty ? null : _deleteSelected,
             icon: const Icon(Icons.delete),
-            label: const Text('삭제'),
+            label: Text(t.commonDelete),
           ),
           TextButton.icon(
             onPressed:
                 _selectedCardIds.isEmpty ? null : _moveSelected,
             icon: const Icon(Icons.drive_file_move),
-            label: const Text('이동'),
+            label: Text(t.cardListMove),
           ),
         ],
       ),

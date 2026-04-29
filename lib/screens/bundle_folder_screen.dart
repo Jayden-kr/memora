@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 
 class BundleFolderScreen extends StatefulWidget {
@@ -69,11 +70,12 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
 
   Future<void> _save() async {
     if (_saving) return;
+    final t = AppLocalizations.of(context);
     final name = _nameController.text.trim();
     if (name.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('묶음 이름을 입력하세요.')),
+        SnackBar(content: Text(t.bundleNameEmptyError)),
       );
       return;
     }
@@ -89,7 +91,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
             if (!mounted) return;
             setState(() => _saving = false);
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
+              SnackBar(content: Text(t.homeFolderExists(name))),
             );
             return;
           }
@@ -138,7 +140,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
           if (!mounted) return;
           setState(() => _saving = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('이미 "$name" 폴더가 있습니다.')),
+            SnackBar(content: Text(t.homeFolderExists(name))),
           );
           return;
         }
@@ -170,20 +172,21 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('에러: $e')),
+        SnackBar(content: Text(t.errorPrefix(e.toString()))),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? '묶음 폴더 편집' : '묶음 폴더 만들기'),
+        title: Text(_isEditing ? t.bundleEditTitle : t.bundleNewTitle),
         actions: [
           TextButton(
             onPressed: _saving ? null : _save,
-            child: const Text('저장'),
+            child: Text(t.commonSave),
           ),
         ],
       ),
@@ -197,19 +200,19 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                   TextField(
                     controller: _nameController,
                     autofocus: !_isEditing,
-                    decoration: const InputDecoration(
-                      labelText: '묶음 이름',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: t.bundleNameHint,
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 24),
-                  Text('포함할 폴더 선택',
+                  Text(t.bundlePickFoldersTitle,
                       style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   if (_availableFolders.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text('선택할 수 있는 폴더가 없습니다.'),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(t.bundleNoAvailable),
                     )
                   else
                     ..._availableFolders.map((folder) {
@@ -218,8 +221,8 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                       return CheckboxListTile(
                         title: Text(folder.name),
                         subtitle: Text(available
-                            ? '${folder.cardCount}장'
-                            : '${folder.cardCount}장 · 다른 묶음에 포함됨'),
+                            ? t.cardCountSuffix(folder.cardCount)
+                            : '${t.cardCountSuffix(folder.cardCount)} · ${t.bundleAlreadyIn}'),
                         value: selected,
                         enabled: available,
                         onChanged: available

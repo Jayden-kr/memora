@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/lock_screen_service.dart';
 
@@ -97,19 +98,20 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     final canDraw = await LockScreenService.canDrawOverlays();
     if (!canDraw) {
       if (!mounted) return;
+      final t = AppLocalizations.of(context);
       final goSettings = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('오버레이 권한 필요'),
-          content: const Text('잠금화면에 카드를 표시하려면\n다른 앱 위에 표시 권한이 필요합니다.'),
+          title: Text(t.lockOverlayPermissionTitle),
+          content: Text(t.lockOverlayPermissionBody),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('취소'),
+              child: Text(t.commonCancel),
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('설정으로 이동'),
+              child: Text(t.lockOpenSystemSettings),
             ),
           ],
         ),
@@ -159,8 +161,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     if (value && _selectedFolderIds.isEmpty) {
       // 폴더가 아예 없으면 활성화 불가
       if (!mounted) return;
+      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('폴더를 먼저 만들어주세요.')),
+        SnackBar(content: Text(t.homeNoFolderFirst)),
       );
       return;
     }
@@ -184,21 +187,22 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('잠금화면 설정')),
+        appBar: AppBar(title: Text(t.lockTitle)),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('잠금화면 설정')),
+      appBar: AppBar(title: Text(t.lockTitle)),
       body: ListView(
         children: [
           // 잠금화면 ON/OFF
           ListTile(
-            title: const Text('잠금화면 사용'),
-            subtitle: const Text('화면이 꺼질 때마다 카드 표시'),
+            title: Text(t.lockEnable),
+            subtitle: Text(t.lockEnableSubtitle),
             trailing: Transform.scale(
               scale: 0.8,
               child: Switch(
@@ -209,11 +213,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           ),
           const Divider(),
 
-          // 아래 설정은 항상 표시 (OFF 상태에서도 설정 가능)
           // 폴더 선택 (단일 선택)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('폴더 선택',
+            child: Text(t.lockSelectFolder,
                 style: Theme.of(context).textTheme.titleSmall),
           ),
           RadioGroup<int>(
@@ -232,7 +235,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             child: Column(
               children: _folders.where((f) => f.id != null).map((folder) => RadioListTile<int>(
                     title: Text(folder.name),
-                    subtitle: Text('${folder.cardCount}장'),
+                    subtitle: Text(t.cardCountSuffix(folder.cardCount)),
                     value: folder.id!,
                   )).toList(),
             ),
@@ -242,7 +245,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           // 카드 순서
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('카드 순서',
+            child: Text(t.lockOrder,
                 style: Theme.of(context).textTheme.titleSmall),
           ),
           Padding(
@@ -251,7 +254,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               spacing: 8,
               children: [
                 ChoiceChip(
-                  label: const Text('순차'),
+                  label: Text(t.lockOrderSequential),
                   selected: !_randomOrder,
                   onSelected: (s) {
                     if (!s) return;
@@ -260,7 +263,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                   },
                 ),
                 ChoiceChip(
-                  label: const Text('랜덤'),
+                  label: Text(t.lockOrderRandom),
                   selected: _randomOrder,
                   onSelected: (s) {
                     if (!s) return;
@@ -276,7 +279,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           // 배경색
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text('배경색',
+            child: Text(t.lockBgColor,
                 style: Theme.of(context).textTheme.titleSmall),
           ),
           Padding(

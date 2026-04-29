@@ -10,6 +10,9 @@ import '../database/database_helper.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import 'locale_service.dart';
+
+bool get _isEn => LocaleService.currentLanguageCode() == 'en';
 
 /// Import 진행 상태
 class ImportProgress {
@@ -98,11 +101,15 @@ class MemkImportService {
 
   /// 선택된 폴더의 카드+이미지를 import
   /// [folderMapping]: memk 폴더 ID → 로컬 폴더 ID (null이면 자동 생성)
+  /// [conflictPolicy]: 동일 이름 폴더 처리 방식 — 'merge' (기존 폴더에 병합),
+  /// 'rename' (새 이름으로 새 폴더 생성). 기본값은 'merge'.
+  /// folderMapping에 명시된 폴더는 conflictPolicy의 영향을 받지 않는다.
   Future<ImportResult> importSelectedFolders({
     required String filePath,
     required List<String> selectedFolderNames,
     required void Function(ImportProgress) onProgress,
     Map<int, int?>? folderMapping,
+    String conflictPolicy = 'merge',
   }) async {
     final stopwatch = Stopwatch()..start();
     final db = DatabaseHelper.instance;
@@ -116,7 +123,9 @@ class MemkImportService {
       if (!imageDir.existsSync()) rethrow;
     }
 
-    onProgress(const ImportProgress(phase: 'parsing', message: '파일 분석 중...'));
+    onProgress(ImportProgress(
+        phase: 'parsing',
+        message: _isEn ? 'Analyzing file...' : '파일 분석 중...'));
 
     // 캐시된 Archive 재사용 (readFolderList에서 이미 디코딩됨)
     // 메모리 절약: zipBytes는 나중에 raw 추출이 필요할 때만 읽음
@@ -192,17 +201,26 @@ class MemkImportService {
 
       final existingFolder = await db.getFolderByName(name);
 
-      if (existingFolder != null) {
+      if (existingFolder != null && conflictPolicy != 'rename') {
         // 기존 폴더에 병합
         folderIdMap[memkFolderId] = existingFolder.id!;
         mergedFolders++;
       } else {
         // 새 폴더 생성 (id를 제거하여 autoincrement 사용)
+        // conflictPolicy == 'rename'이면 이름 충돌 시 _1, _2 등 unique suffix 부여
         final folder = Folder.fromJson(folderData);
+        String targetName = folder.name;
+        if (existingFolder != null && conflictPolicy == 'rename') {
+          int suffix = 1;
+          while (await db.getFolderByName('${folder.name}_$suffix') != null) {
+            suffix++;
+          }
+          targetName = '${folder.name}_$suffix';
+        }
         try {
           final newId = await db.insertFolder(
             Folder(
-              name: folder.name,
+              name: targetName,
               cardCount: 0, // 나중에 updateFolderCardCount로 갱신
               folderCount: 0, // 번들 관계는 import에서 미지원
               sequence: folder.sequence,
@@ -217,7 +235,7 @@ class MemkImportService {
           newFolders++;
         } catch (_) {
           // UNIQUE 제약 충돌 (동시 import 등) — 이미 존재하는 폴더 사용
-          final retryFolder = await db.getFolderByName(name);
+          final retryFolder = await db.getFolderByName(targetName);
           if (retryFolder != null) {
             folderIdMap[memkFolderId] = retryFolder.id!;
             mergedFolders++;
@@ -317,7 +335,9 @@ class MemkImportService {
             phase: 'cards',
             currentCards: newCards,
             totalCards: totalCards,
-            message: '카드 처리 중... $newCards / $totalCards',
+            message: _isEn
+                ? 'Processing cards... $newCards / $totalCards'
+                : '카드 처리 중... $newCards / $totalCards',
           ));
 
           // UI 갱신 기회
@@ -341,7 +361,7 @@ class MemkImportService {
       phase: 'images',
       currentCards: totalCards,
       totalCards: totalCards,
-      message: '이미지 추출 중...',
+      message: _isEn ? 'Extracting images...' : '이미지 추출 중...',
     ));
 
     // 이미지 추출 — archive 인덱스에 있는 파일만 (누락분은 뒤에서 raw 추출)
@@ -371,7 +391,9 @@ class MemkImportService {
             totalCards: totalCards,
             currentImages: imageCount,
             totalImages: totalImages,
-            message: '이미지 추출 중... $imageCount / $totalImages',
+            message: _isEn
+                ? 'Extracting images... $imageCount / $totalImages'
+                : '이미지 추출 중... $imageCount / $totalImages',
           ));
           await Future.delayed(Duration.zero);
         }
@@ -471,7 +493,7 @@ class MemkImportService {
       totalCards: totalCards,
       currentImages: imageCount,
       totalImages: totalImages,
-      message: 'Import 완료',
+      message: _isEn ? 'Import complete' : 'Import 완료',
     ));
 
     return result;

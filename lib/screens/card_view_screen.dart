@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../widgets/image_viewer.dart';
 import 'card_edit_screen.dart';
@@ -67,14 +68,15 @@ class _CardViewScreenState extends State<CardViewScreen> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final t = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_folderName ?? '카드'),
+        title: Text(_folderName ?? t.cardViewFallbackTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.edit),
-            tooltip: '편집',
+            tooltip: t.commonEdit,
             onPressed: _editCard,
           ),
         ],
@@ -100,7 +102,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
                     ),
                     const SizedBox(height: 12),
                     SelectableText(
-                      _card.question.isEmpty ? '(내용 없음)' : _card.question,
+                      _card.question.isEmpty ? t.commonEmpty : _card.question,
                       style: textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -140,7 +142,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
                           const Spacer(),
                           if (!_answerRevealed)
                             Text(
-                              '탭하여 정답 보기',
+                              t.cardViewTapToReveal,
                               style: textTheme.bodySmall?.copyWith(
                                 color: colorScheme.onSurfaceVariant,
                                 fontStyle: FontStyle.italic,
@@ -151,7 +153,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
                       if (_answerRevealed) ...[
                         const SizedBox(height: 12),
                         SelectableText(
-                          _card.answer.isEmpty ? '(내용 없음)' : _card.answer,
+                          _card.answer.isEmpty ? t.commonEmpty : _card.answer,
                           style: textTheme.bodyLarge,
                         ),
                         // Answer images

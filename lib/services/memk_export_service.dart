@@ -7,6 +7,9 @@ import 'package:path_provider/path_provider.dart';
 import '../database/database_helper.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import 'locale_service.dart';
+
+bool get _isEn => LocaleService.currentLanguageCode() == 'en';
 
 /// Export 진행 상태
 class ExportProgress {
@@ -41,7 +44,9 @@ class MemkExportService {
     final db = DatabaseHelper.instance;
     final appDocDir = (await getApplicationDocumentsDirectory()).path;
 
-    onProgress(const ExportProgress(phase: 'folders', message: '폴더 정보 준비 중...'));
+    onProgress(ExportProgress(
+        phase: 'folders',
+        message: _isEn ? 'Preparing folder info...' : '폴더 정보 준비 중...'));
 
     // 폴더 조회 + JSON
     List<Folder> folders;
@@ -61,7 +66,9 @@ class MemkExportService {
     }
     final foldersJsonStr = jsonEncode(foldersJsonList);
 
-    onProgress(const ExportProgress(phase: 'cards', message: '카드 정보 준비 중...'));
+    onProgress(ExportProgress(
+        phase: 'cards',
+        message: _isEn ? 'Preparing card info...' : '카드 정보 준비 중...'));
 
     // 카드 조회 + JSON + 이미지 파일명 수집
     final cardsJsonList = <Map<String, dynamic>>[];
@@ -90,7 +97,9 @@ class MemkExportService {
             phase: 'cards',
             current: processed,
             total: totalCards,
-            message: '카드 정보 준비 중... $processed / $totalCards',
+            message: _isEn
+                ? 'Preparing card info... $processed / $totalCards'
+                : '카드 정보 준비 중... $processed / $totalCards',
           ));
           offset += batchSize;
           await Future.delayed(Duration.zero);
@@ -101,7 +110,9 @@ class MemkExportService {
             phase: 'cards',
             current: processed,
             total: totalCards,
-            message: '"$folderName" 완료 ($processed / $totalCards)',
+            message: _isEn
+                ? '"$folderName" done ($processed / $totalCards)'
+                : '"$folderName" 완료 ($processed / $totalCards)',
           ));
         }
       }
@@ -142,7 +153,9 @@ class MemkExportService {
 
     onProgress(ExportProgress(
       phase: 'zipping',
-      message: 'ZIP 파일 생성 중... (이미지 ${imageFileNames.length}개)',
+      message: _isEn
+          ? 'Creating ZIP... (${imageFileNames.length} images)'
+          : 'ZIP 파일 생성 중... (이미지 ${imageFileNames.length}개)',
     ));
 
     // 스트리밍 ZIP 생성 — ZipFileEncoder는 파일을 디스크에서 직접 스트리밍하므로
@@ -182,7 +195,9 @@ class MemkExportService {
             phase: 'images',
             current: imageCount,
             total: imageFileNames.length,
-            message: '이미지 추가 중... $imageCount / ${imageFileNames.length}',
+            message: _isEn
+                ? 'Adding images... $imageCount / ${imageFileNames.length}'
+                : '이미지 추가 중... $imageCount / ${imageFileNames.length}',
           ));
           await Future.delayed(Duration.zero);
         }
@@ -193,12 +208,14 @@ class MemkExportService {
       phase: 'zipping',
       current: 1,
       total: 1,
-      message: 'ZIP 마무리 중...',
+      message: _isEn ? 'Finalizing ZIP...' : 'ZIP 마무리 중...',
     ));
     await Future.delayed(Duration.zero);
     await zipEncoder.close();
 
-    onProgress(const ExportProgress(phase: 'done', message: 'Export 완료'));
+    onProgress(ExportProgress(
+        phase: 'done',
+        message: _isEn ? 'Export complete' : 'Export 완료'));
   }
 
   /// JSON 맵의 로컬 이미지 경로를 .memk 호환 경로로 변환

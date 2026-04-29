@@ -12,6 +12,7 @@ import 'screens/import_screen.dart';
 import 'screens/lock_screen_settings.dart' show LockScreenSettingsScreen;
 import 'screens/push_notification_settings.dart' show PushNotificationSettingsScreen;
 import 'services/import_export_controller.dart';
+import 'services/locale_service.dart';
 import 'services/lock_screen_service.dart';
 import 'services/notification_service.dart';
 import 'utils/constants.dart';
@@ -19,6 +20,7 @@ import 'utils/constants.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.initialize();
+  await LocaleService.load();
 
   // 이전 실행에서 남은 stale 상태 정리 (앱 강제 종료 시 foreground 알림 잔류 방지)
   ImportExportController.instance.cleanupStaleState();

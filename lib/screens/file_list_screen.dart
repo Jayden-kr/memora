@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart' show Share, XFile;
 
 import '../database/database_helper.dart';
+import '../l10n/app_localizations.dart';
+import '../widgets/overwrite_dialog.dart';
 import 'import_screen.dart';
 
 class FileListScreen extends StatefulWidget {
@@ -21,7 +23,6 @@ class _FileListScreenState extends State<FileListScreen> {
   List<Map<String, dynamic>> _files = [];
   bool _loading = true;
 
-  // 다중 선택
   final Set<int> _selectedIds = {};
   bool get _isSelecting => _selectedIds.isNotEmpty;
 
@@ -36,7 +37,7 @@ class _FileListScreenState extends State<FileListScreen> {
     try {
       rawFiles = await DatabaseHelper.instance.getAllExportedFiles();
     } catch (e) {
-      debugPrint('[FILE_LIST] _loadFiles 오류: $e');
+      debugPrint('[FILE_LIST] _loadFiles error: $e');
       if (!mounted) return;
       setState(() {
         _files = [];
@@ -44,9 +45,7 @@ class _FileListScreenState extends State<FileListScreen> {
       });
       return;
     }
-    // sqflite query()는 읽기 전용 Map 반환 → mutable 복사 후 수정
     final files = rawFiles.map((f) => Map<String, dynamic>.from(f)).toList();
-    // 실제 파일 존재 여부 체크 (비동기)
     for (final file in files) {
       final filePath = file['file_path'] as String?;
       if (filePath != null) {
@@ -59,7 +58,6 @@ class _FileListScreenState extends State<FileListScreen> {
     setState(() {
       _files = files;
       _loading = false;
-      // 삭제된 항목 선택 해제
       _selectedIds.retainWhere(
           (id) => files.any((f) => f['id'] == id));
     });
@@ -83,29 +81,30 @@ class _FileListScreenState extends State<FileListScreen> {
     }
   }
 
-  // ─── 단일 파일 조작 ───
+  // ─── Single-file actions ───
 
   Future<void> _deleteFile(Map<String, dynamic> file) async {
+    final t = AppLocalizations.of(context);
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('파일 삭제'),
-        content: Text('"${file['file_name']}" 파일을 삭제하시겠습니까?'),
+        title: Text(t.fileDeleteTitle),
+        content: Text(t.fileDeleteSingle(file['file_name'] as String)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
     );
     if (confirm != true || !mounted) return;
 
-    // 실제 파일 먼저 삭제 (실패 시 DB 레코드 유지)
     try {
       final filePath = file['file_path'] as String?;
       if (filePath != null) {
@@ -115,15 +114,14 @@ class _FileListScreenState extends State<FileListScreen> {
         }
       }
     } catch (e) {
-      debugPrint('[FILE_LIST] 파일 삭제 실패: $e');
+      debugPrint('[FILE_LIST] file delete failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('파일 삭제 실패: $e')),
+          SnackBar(content: Text(t.fileDeleteFail(e.toString()))),
         );
       }
     }
 
-    // 파일 삭제 후 DB 레코드 삭제
     await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
 
     if (!mounted) return;
@@ -131,12 +129,13 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _restoreFile(Map<String, dynamic> file) async {
+    final t = AppLocalizations.of(context);
     final filePath = file['file_path'] as String?;
     if (filePath == null) return;
     if (!filePath.endsWith('.memk') && !filePath.endsWith('.mra')) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('.mra 또는 .memk 파일만 복원할 수 있습니다.')),
+        SnackBar(content: Text(t.fileOnlyMemkRestore)),
       );
       return;
     }
@@ -145,7 +144,7 @@ class _FileListScreenState extends State<FileListScreen> {
     if (!await f.exists()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('파일을 찾을 수 없습니다.')),
+        SnackBar(content: Text(t.fileNotFound)),
       );
       return;
     }
@@ -159,6 +158,7 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _renameFile(Map<String, dynamic> file) async {
+    final t = AppLocalizations.of(context);
     final oldName = file['file_name'] as String;
     final filePath = file['file_path'] as String;
     final ext = oldName.contains('.') ? '.${oldName.split('.').last}' : '';
@@ -176,7 +176,7 @@ class _FileListScreenState extends State<FileListScreen> {
     final newName = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('파일 이름 변경'),
+        title: Text(t.fileRenameTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -186,11 +186,11 @@ class _FileListScreenState extends State<FileListScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('변경'),
+            child: Text(t.commonChange),
           ),
         ],
       ),
@@ -201,28 +201,50 @@ class _FileListScreenState extends State<FileListScreen> {
     final dir = File(filePath).parent.path;
     final newFilePath = '$dir/$newFileName';
 
-    // 디스크에서 실제 파일 이름 변경
+    if (newFilePath != filePath && await File(newFilePath).exists()) {
+      if (!mounted) return;
+      final action = await showOverwriteDialog(
+        context: context,
+        title: t.fileRenameOverwriteTitle,
+        message: t.fileRenameOverwriteBody(newFileName),
+        options: [
+          OverwriteOption(
+            icon: Icons.refresh,
+            title: t.commonOverwrite,
+            subtitle: t.fileRenameOverwriteSubtitle,
+            value: 'overwrite',
+            accent: true,
+          ),
+        ],
+      );
+      if (action != 'overwrite') return;
+      try { await File(newFilePath).delete(); } catch (_) {}
+      try {
+        await DatabaseHelper.instance.deleteExportedFileByPath(newFilePath);
+      } catch (_) {}
+    }
+
     final f = File(filePath);
     try {
       if (await f.exists()) {
         await f.rename(newFilePath);
       }
     } catch (e) {
-      debugPrint('[FILE_LIST] 파일 이름 변경 실패: $e');
+      debugPrint('[FILE_LIST] rename failed: $e');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('파일 이름 변경에 실패했습니다.')),
+        SnackBar(content: Text(t.fileRenameFail)),
       );
-      return; // 파일 변경 실패 시 DB 업데이트 건너뜀
+      return;
     }
 
-    // DB 레코드 업데이트 (파일 변경 성공 시에만)
     await DatabaseHelper.instance.renameExportedFile(
       file['id'] as int,
       newFileName,
       newFilePath,
     );
 
+    if (!mounted) return;
     await _loadFiles();
     } finally {
       controller.dispose();
@@ -230,13 +252,14 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _saveToDevice(Map<String, dynamic> file) async {
+    final t = AppLocalizations.of(context);
     final filePath = file['file_path'] as String;
     final fileName = file['file_name'] as String;
     final f = File(filePath);
     if (!await f.exists()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('파일을 찾을 수 없습니다.')),
+        SnackBar(content: Text(t.fileNotFound)),
       );
       return;
     }
@@ -248,24 +271,25 @@ class _FileListScreenState extends State<FileListScreen> {
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('다운로드 폴더에 저장됨: $fileName')),
+        SnackBar(content: Text(t.fileSavedToDownloads(fileName))),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('저장 실패: $e')),
+        SnackBar(content: Text(t.fileSaveFail(e.toString()))),
       );
     }
   }
 
   Future<void> _shareFile(Map<String, dynamic> file) async {
+    final t = AppLocalizations.of(context);
     final filePath = file['file_path'] as String;
     final fileName = file['file_name'] as String;
     final f = File(filePath);
     if (!await f.exists()) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('파일을 찾을 수 없습니다.')),
+        SnackBar(content: Text(t.fileNotFound)),
       );
       return;
     }
@@ -274,6 +298,7 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   void _showFileOptions(Map<String, dynamic> file) {
+    final t = AppLocalizations.of(context);
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SafeArea(
@@ -282,7 +307,7 @@ class _FileListScreenState extends State<FileListScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.edit),
-              title: const Text('이름 변경', style: TextStyle(fontSize: 14)),
+              title: Text(t.fileOptionsRename, style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _renameFile(file);
@@ -290,7 +315,7 @@ class _FileListScreenState extends State<FileListScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.download),
-              title: const Text('기기에 저장', style: TextStyle(fontSize: 14)),
+              title: Text(t.fileOptionsSaveDevice, style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _saveToDevice(file);
@@ -298,7 +323,7 @@ class _FileListScreenState extends State<FileListScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.share),
-              title: const Text('공유', style: TextStyle(fontSize: 14)),
+              title: Text(t.fileOptionsShare, style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
                 _shareFile(file);
@@ -308,7 +333,7 @@ class _FileListScreenState extends State<FileListScreen> {
               ListTile(
                 leading: const Icon(Icons.restore),
                 title:
-                    const Text('복원 (Import)', style: TextStyle(fontSize: 14)),
+                    Text(t.fileOptionsRestore, style: const TextStyle(fontSize: 14)),
                 onTap: () {
                   Navigator.pop(ctx);
                   _restoreFile(file);
@@ -316,7 +341,7 @@ class _FileListScreenState extends State<FileListScreen> {
               ),
             ListTile(
               leading: Icon(Icons.delete, color: Theme.of(context).colorScheme.error),
-              title: Text('삭제',
+              title: Text(t.commonDelete,
                   style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.error)),
               onTap: () {
                 Navigator.pop(ctx);
@@ -329,7 +354,7 @@ class _FileListScreenState extends State<FileListScreen> {
     );
   }
 
-  // ─── 다중 선택 ───
+  // ─── Multi-select ───
 
   void _toggleSelection(int id) {
     setState(() {
@@ -359,20 +384,22 @@ class _FileListScreenState extends State<FileListScreen> {
       _files.where((f) => _selectedIds.contains(f['id'] as int)).toList();
 
   Future<void> _deleteSelected() async {
+    final t = AppLocalizations.of(context);
     final selected = _selectedFiles;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('파일 삭제'),
-        content: Text('선택한 ${selected.length}개 파일을 삭제하시겠습니까?'),
+        title: Text(t.fileDeleteTitle),
+        content: Text(t.fileDeleteMulti(selected.length)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('취소'),
+            child: Text(t.commonCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('삭제', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
           ),
         ],
       ),
@@ -381,7 +408,6 @@ class _FileListScreenState extends State<FileListScreen> {
 
     for (final file in selected) {
       if (!mounted) return;
-      // 파일 먼저 삭제 (실패해도 DB 레코드는 유지 — 데이터 추적 보존)
       try {
         final filePath = file['file_path'] as String?;
         if (filePath != null) {
@@ -389,7 +415,6 @@ class _FileListScreenState extends State<FileListScreen> {
           if (await f.exists()) await f.delete();
         }
       } catch (_) {}
-      // 파일 삭제 후 DB 레코드 삭제
       await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
     }
 
@@ -399,6 +424,7 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _shareSelected() async {
+    final t = AppLocalizations.of(context);
     final selected = _selectedFiles;
     final xFiles = <XFile>[];
     for (final file in selected) {
@@ -412,7 +438,7 @@ class _FileListScreenState extends State<FileListScreen> {
     if (xFiles.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('공유할 파일이 없습니다.')),
+        SnackBar(content: Text(t.fileNoShareable)),
       );
       return;
     }
@@ -420,6 +446,7 @@ class _FileListScreenState extends State<FileListScreen> {
   }
 
   Future<void> _saveSelectedToDevice() async {
+    final t = AppLocalizations.of(context);
     final selected = _selectedFiles;
     int saved = 0;
     for (final file in selected) {
@@ -437,11 +464,12 @@ class _FileListScreenState extends State<FileListScreen> {
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$saved개 파일을 다운로드 폴더에 저장했습니다.')),
+      SnackBar(content: Text(t.fileBatchSaved(saved))),
     );
   }
 
   Future<void> _restoreSelected() async {
+    final t = AppLocalizations.of(context);
     final selected = _selectedFiles;
     final memkFiles = selected
         .where((f) =>
@@ -451,12 +479,11 @@ class _FileListScreenState extends State<FileListScreen> {
     if (memkFiles.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('복원 가능한 파일이 없습니다.')),
+        SnackBar(content: Text(t.fileNoRestorable)),
       );
       return;
     }
 
-    // 순차적으로 복원
     for (final file in memkFiles) {
       final filePath = file['file_path'] as String;
       if (!mounted) return;
@@ -475,17 +502,18 @@ class _FileListScreenState extends State<FileListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
     return PopScope(
       canPop: !_isSelecting,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _clearSelection();
       },
       child: Scaffold(
-        appBar: _isSelecting ? _buildSelectionAppBar() : _buildNormalAppBar(),
+        appBar: _isSelecting ? _buildSelectionAppBar(t) : _buildNormalAppBar(t),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : _files.isEmpty
-                ? const Center(child: Text('내보낸 파일이 없습니다.'))
+                ? Center(child: Text(t.fileListEmpty))
                 : ListView.builder(
                     itemCount: _files.length,
                     itemBuilder: (context, index) {
@@ -521,7 +549,7 @@ class _FileListScreenState extends State<FileListScreen> {
                         ),
                         subtitle: Text(
                           [
-                            if (!exists) '(파일 없음)',
+                            if (!exists) t.fileListMissing,
                             _formatFileSize(fileSize),
                             if (createdAt != null)
                               createdAt.length >= 10
@@ -545,46 +573,46 @@ class _FileListScreenState extends State<FileListScreen> {
     );
   }
 
-  AppBar _buildNormalAppBar() {
+  AppBar _buildNormalAppBar(AppLocalizations t) {
     return AppBar(
-      title: const Text('파일 목록'),
+      title: Text(t.fileListTitle),
     );
   }
 
-  AppBar _buildSelectionAppBar() {
+  AppBar _buildSelectionAppBar(AppLocalizations t) {
     final allSelected = _selectedIds.length == _files.length;
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.close),
         onPressed: _clearSelection,
       ),
-      title: Text('${_selectedIds.length}개 선택'),
+      title: Text(t.homeSelectedCount(_selectedIds.length)),
       actions: [
         IconButton(
           icon: Icon(allSelected
               ? Icons.deselect
               : Icons.select_all),
-          tooltip: allSelected ? '전체 해제' : '전체 선택',
+          tooltip: allSelected ? t.homeDeselectAll : t.homeSelectAll,
           onPressed: _selectAll,
         ),
         IconButton(
           icon: const Icon(Icons.download),
-          tooltip: '기기에 저장',
+          tooltip: t.fileToolbarSaveDevice,
           onPressed: _saveSelectedToDevice,
         ),
         IconButton(
           icon: const Icon(Icons.share),
-          tooltip: '공유',
+          tooltip: t.fileOptionsShare,
           onPressed: _shareSelected,
         ),
         IconButton(
           icon: const Icon(Icons.restore),
-          tooltip: '복원',
+          tooltip: t.fileToolbarRestore,
           onPressed: _restoreSelected,
         ),
         IconButton(
           icon: const Icon(Icons.delete),
-          tooltip: '삭제',
+          tooltip: t.commonDelete,
           onPressed: _deleteSelected,
         ),
       ],

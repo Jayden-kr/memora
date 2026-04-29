@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
 
+import '../l10n/app_localizations.dart';
+
 class ImageViewerScreen extends StatelessWidget {
   final String imagePath;
 
@@ -35,7 +37,8 @@ class ImageViewerScreen extends StatelessWidget {
                 children: [
                   Icon(Icons.image_not_supported, color: fgColor, size: 64),
                   const SizedBox(height: 16),
-                  Text('이미지를 찾을 수 없습니다', style: TextStyle(color: fgColor)),
+                  Text(AppLocalizations.of(context).imageNotFound,
+                      style: TextStyle(color: fgColor)),
                 ],
               ),
             ),
