@@ -662,6 +662,30 @@ class DatabaseHelper {
     return maps.map((m) => CardModel.fromDb(m)).toList();
   }
 
+  /// 모든 카드의 id만 정렬 옵션으로 조회. allCards 모드 알림용 indexOf 계산.
+  Future<List<int>> getAllCardIds({String? sortBy}) async {
+    final db = await database;
+    String orderBy;
+    switch (sortBy) {
+      case 'newest':
+        orderBy = 'id DESC';
+      case 'oldest':
+        orderBy = 'id ASC';
+      case 'name_asc':
+        orderBy = 'question ASC';
+      case 'random':
+        orderBy = 'RANDOM()';
+      default:
+        orderBy = 'folder_id, sequence';
+    }
+    final maps = await db.query(
+      AppConstants.tableCards,
+      columns: ['id'],
+      orderBy: orderBy,
+    );
+    return maps.map((m) => m['id'] as int).toList();
+  }
+
   /// 랜덤 카드 1개 조회 (알림용, 미완료 카드 우선)
   Future<CardModel?> getRandomCard({int? folderId}) async {
     final db = await database;
@@ -958,6 +982,67 @@ class DatabaseHelper {
       offset: offset,
     );
     return maps.map((m) => CardModel.fromDb(m)).toList();
+  }
+
+  /// id만 정렬 옵션으로 조회. 알림 진입 시 정확한 indexOf 계산용.
+  /// (large query에서 row corruption이 발생해도 id 컬럼만이라면 transaction
+  /// 한계를 충분히 회피한다)
+  Future<List<int>> getCardIdsByFolderIdSorted(
+    int folderId,
+    String sortBy,
+  ) async {
+    final db = await database;
+    String orderBy;
+    switch (sortBy) {
+      case 'newest':
+        orderBy = 'id DESC';
+      case 'oldest':
+        orderBy = 'id ASC';
+      case 'name_asc':
+        orderBy = 'question ASC';
+      case 'random':
+        orderBy = 'RANDOM()';
+      default:
+        orderBy = 'sequence ASC';
+    }
+    final maps = await db.query(
+      AppConstants.tableCards,
+      columns: ['id'],
+      where: 'folder_id = ?',
+      whereArgs: [folderId],
+      orderBy: orderBy,
+    );
+    return maps.map((m) => m['id'] as int).toList();
+  }
+
+  /// id 리스트로 카드를 chunk 단위로 조회.
+  /// CardModel은 100+ 컬럼이라 13988장을 한 번에 SELECT * 하면
+  /// Android Binder transaction(1MB) 한계로 일부 row의 컬럼 데이터가
+  /// silently corrupt된다. chunk 단위(500개)로 나누면 회피된다.
+  Future<Map<int, CardModel>> getCardsByIdsBatch(List<int> ids) async {
+    if (ids.isEmpty) return <int, CardModel>{};
+    final db = await database;
+    final result = <int, CardModel>{};
+    const chunkSize = 500; // SQLite SQLITE_MAX_VARIABLE_NUMBER 기본 999 안전
+    for (int i = 0; i < ids.length; i += chunkSize) {
+      final end =
+          (i + chunkSize < ids.length) ? i + chunkSize : ids.length;
+      final chunk = ids.sublist(i, end);
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final maps = await db.rawQuery(
+        'SELECT * FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+        chunk,
+      );
+      for (final m in maps) {
+        try {
+          final card = CardModel.fromDb(m);
+          if (card.id != null) result[card.id!] = card;
+        } catch (e) {
+          debugPrint('[DB] getCardsByIdsBatch fromDb fail: $e');
+        }
+      }
+    }
+    return result;
   }
 
   // ─── Counter CRUD ───

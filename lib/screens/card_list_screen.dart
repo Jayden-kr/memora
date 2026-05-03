@@ -106,22 +106,38 @@ class _CardListScreenState extends State<CardListScreen> {
 
   Future<void> _initLoad() async {
     if (_isNotificationMode) {
-      // 알림 모드: 설정 먼저 로드하여 정렬 순서 반영 후 카드 로드
+      // 알림 모드: 정확한 indexOf 보장을 위해 id-only 쿼리로 ordering을 먼저
+      // 결정한 뒤, 같은 id 리스트를 chunk 단위로 풀(*) 로드한다.
+      // 단일 SELECT *로 13988장을 가져오면 Android Binder transaction 한계로
+      // 일부 row가 corrupt되어 indexWhere가 -1을 반환하는 문제가 있다.
       final settings = await DatabaseHelper.instance.getAllSettings();
       if (!mounted) return;
       _applySettings(settings);
 
-      final List<CardModel> cards;
+      // 1. id만 가져와 ordering + targetIndex 계산 (light query, 정확)
+      final List<int> orderedIds;
       if (widget.allCards) {
-        cards = await DatabaseHelper.instance.getAllCards(sortBy: _sortOrder);
+        orderedIds = await DatabaseHelper.instance
+            .getAllCardIds(sortBy: _sortOrder);
       } else {
-        cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
-            widget.folder.id!, _sortOrder);
+        orderedIds = await DatabaseHelper.instance
+            .getCardIdsByFolderIdSorted(widget.folder.id!, _sortOrder);
       }
       if (!mounted) return;
 
       final targetId = widget.scrollToCardId!;
-      final targetIndex = cards.indexWhere((c) => c.id == targetId);
+      final targetIndex = orderedIds.indexOf(targetId);
+
+      // 2. cards를 chunk 단위로 로드 (transaction 한계 회피)
+      final cardsById =
+          await DatabaseHelper.instance.getCardsByIdsBatch(orderedIds);
+      if (!mounted) return;
+
+      // 3. id ordering 보존하며 정렬
+      final cards = orderedIds
+          .map((id) => cardsById[id])
+          .whereType<CardModel>()
+          .toList();
 
       setState(() {
         _cards
@@ -131,7 +147,7 @@ class _CardListScreenState extends State<CardListScreen> {
         _loading = false;
       });
 
-      if (targetIndex >= 0) {
+      if (targetIndex >= 0 && targetIndex < cards.length) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || !_itemScrollController.isAttached) return;
           _itemScrollController.jumpTo(index: targetIndex);
