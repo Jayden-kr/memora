@@ -247,6 +247,11 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
   Future<void> _save() async {
     if (_saving) return;
+    // 한글 IME 조합 중인 글자를 controller에 commit (focus 해제로 트리거).
+    // 이 단계 없이 바로 controller.text를 읽으면 마지막 받침/조합 글자가 누락됨.
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
     final question = _questionController.text.trim();
     final answer = _answerController.text.trim();
     final hasImages = _questionImages.any((img) => img != null) ||
