@@ -22,7 +22,9 @@ class PushNotificationService : Service() {
         const val TAG = "PushNotifService"
         const val CHANNEL_ID = "push_notif_service_channel"
         const val SERVICE_NOTIF_ID = 3
-        const val CARD_NOTIF_BASE = 50000
+        // 카드 알림 ID/requestCode 베이스. cardId를 더해 카드별로 stable한 PendingIntent를 만든다.
+        // 100000 베이스로 다른 알림 ID(0,1,3,2001,2002,9001,99999)와 충돌 방지.
+        const val CARD_NOTIF_BASE = 100000
         const val ACTION_STOP = "STOP"
         const val ACTION_TICK = "TICK"
         const val REQUEST_CODE_TICK = 10000
@@ -34,7 +36,6 @@ class PushNotificationService : Service() {
     private var endTotal = 1320    // 22:00
     private var folderId: Int? = null
     private var soundEnabled = true
-    private val tickCount = java.util.concurrent.atomic.AtomicInteger(0)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -350,27 +351,65 @@ class PushNotificationService : Service() {
             val cursor = db.query("cards", arrayOf("id", "folder_id", "question"),
                 where, args, null, null, "RANDOM()", "1")
 
-            var question = "카드를 복습할 시간입니다!"
-            var payload: String? = null
+            var question = ""
+            var cardId = -1
+            var cardFolderId = -1
             cursor.use {
                 if (it.moveToFirst()) {
                     val q = it.getString(it.getColumnIndexOrThrow("question"))
-                    val cardId = it.getInt(it.getColumnIndexOrThrow("id"))
-                    val cardFolderId = it.getInt(it.getColumnIndexOrThrow("folder_id"))
+                    cardId = it.getInt(it.getColumnIndexOrThrow("id"))
+                    cardFolderId = it.getInt(it.getColumnIndexOrThrow("folder_id"))
                     if (!q.isNullOrEmpty()) question = q
-                    payload = "$cardFolderId:$cardId"
                 }
             }
 
-            // 알림 탭 → 해당 카드로 이동하는 Intent
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                if (payload != null) {
-                    putExtra("notification_payload", payload)
+            // 카드 조회 실패 시 알림 자체를 건너뜀.
+            // payload 없이 알림을 띄우면 탭해도 네비게이션이 안 되므로 무의미.
+            if (cardId <= 0) {
+                Log.w(TAG, "랜덤 카드 조회 실패, 알림 스킵")
+                return
+            }
+            if (question.isEmpty()) {
+                question = "카드를 복습할 시간입니다!"
+            }
+
+            // notifId = requestCode = CARD_NOTIF_BASE + cardId
+            // 카드별로 stable한 PendingIntent — 같은 카드가 또 뽑혀도 자기자신만 교체하므로
+            // 본문/payload가 항상 일치한다. 다른 카드끼리는 ID가 달라 PI extras 누수 불가능.
+            val notifId = CARD_NOTIF_BASE + cardId
+            val payload = "$cardFolderId:$cardId"
+
+            val nm = getSystemService(NotificationManager::class.java)
+            // review_notification_channel은 Flutter 플러그인이 생성/관리.
+            // 채널이 없으면 알림이 안 뜨므로 fallback 생성.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (nm?.getNotificationChannel("review_notification_channel") == null) {
+                    val channel = NotificationChannel(
+                        "review_notification_channel", "복습 알림",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "설정한 시간에 랜덤 카드 알림"
+                        enableVibration(true)
+                    }
+                    nm?.createNotificationChannel(channel)
                 }
             }
-            val currentTick = tickCount.getAndIncrement()
-            val notifId = CARD_NOTIF_BASE + (currentTick % 500)
+
+            // Android 13+: POST_NOTIFICATIONS 권한 확인.
+            // PendingIntent 생성을 이 체크 이후로 미뤄야 권한 거부 시 기존 PI extras 누수 방지.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                    Log.w(TAG, "POST_NOTIFICATIONS 권한 없음, 알림 스킵")
+                    return
+                }
+            }
+
+            // 알림 탭 → 해당 카드로 이동하는 Intent (권한 통과 후 PI 생성)
+            val launchIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("notification_payload", payload)
+            }
             val pi = PendingIntent.getActivity(this, notifId, launchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
@@ -387,32 +426,8 @@ class PushNotificationService : Service() {
                 builder.setSilent(true)
             }
 
-            val nm = getSystemService(NotificationManager::class.java)
-            // review_notification_channel은 Flutter 플러그인이 생성/관리
-            // 채널이 없으면 알림이 안 뜨므로 fallback 생성
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (nm?.getNotificationChannel("review_notification_channel") == null) {
-                    val channel = NotificationChannel(
-                        "review_notification_channel", "복습 알림",
-                        NotificationManager.IMPORTANCE_HIGH
-                    ).apply {
-                        description = "설정한 시간에 랜덤 카드 알림"
-                        enableVibration(true)
-                    }
-                    nm?.createNotificationChannel(channel)
-                }
-            }
-
-            // Android 13+: POST_NOTIFICATIONS 권한 확인
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                    Log.w(TAG, "POST_NOTIFICATIONS 권한 없음, 알림 스킵")
-                    return
-                }
-            }
-            nm?.notify(CARD_NOTIF_BASE + (currentTick % 500), builder.build())
-            Log.d(TAG, "알림 표시 완료: $question")
+            nm?.notify(notifId, builder.build())
+            Log.d(TAG, "알림 표시 완료: cardId=$cardId, payload=$payload, body=$question")
         } catch (e: Exception) {
             Log.e(TAG, "알림 표시 실패", e)
         } finally {
