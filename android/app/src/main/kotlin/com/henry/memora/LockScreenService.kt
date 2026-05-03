@@ -1,5 +1,6 @@
 package com.henry.memora
 
+import android.animation.ValueAnimator
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
@@ -9,10 +10,13 @@ import android.os.*
 import android.provider.Settings
 import android.util.Log
 import android.view.*
+import android.view.animation.LinearInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
+import kotlin.math.sin
 
 class LockScreenService : Service() {
     companion object {
@@ -67,6 +71,15 @@ class LockScreenService : Service() {
     private val textWhite = Color.parseColor("#F5F5F5")
     private val textGray = Color.parseColor("#AAAAAA")
     private val textDimGray = Color.parseColor("#666666")
+
+    // 하단 막대: 지렁이 울렁임 + 슬라이드 압축 모션
+    @Volatile
+    private var bottomBarIdleAnimator: ValueAnimator? = null
+    @Volatile
+    private var bottomBarSlideAnimator: ValueAnimator? = null
+    private var bottomBarDragStartX = 0f
+    private var bottomBarIsDragging = false
+    private var lastFrameTimeMs = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -565,47 +578,23 @@ class LockScreenService : Service() {
         cardContent.addView(answerContainer)
         scrollView.addView(cardContent)
 
-        // ─── 하단: 미니멀 — Coral 막대만 (라벨 없음) ───
-        val bottomContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(54))
+        // ─── 하단: 지렁이 울렁임 막대 + 슬라이드 압축 + 페인트 방울 ───
+        val bottomContainer = FrameLayout(this).apply {
+            tag = "bottomContainer"
         }
 
-        // Coral pill 막대 (앱 메인 컬러, fully rounded)
-        val bottomDivider = View(this).apply {
-            background = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                cornerRadius = dp(3).toFloat()
-                setColor(coralPrimary)
-            }
+        val wormBar = WormBarView(this).apply {
+            tag = "wormBarView"
         }
-        bottomContainer.addView(bottomDivider, LinearLayout.LayoutParams(dp(64), dp(5)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        })
+        bottomContainer.addView(wormBar, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM
+        ))
 
-        // 좌/우 슬라이드 분리 제스처
-        val bottomGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                if (e1 == null) return false
-                val diffX = e2.x - e1.x
-                if (abs(diffX) > 80 && abs(velocityX) > 80) {
-                    if (diffX > 0) {
-                        // → 우측 슬라이드: 잠금 해제
-                        dismissOverlay()
-                    } else {
-                        // ← 좌측 슬라이드: 현재 카드 편집 화면
-                        openCurrentCardForEditing()
-                    }
-                    return true
-                }
-                return false
-            }
-        })
-        bottomContainer.setOnTouchListener { _, event ->
-            bottomGesture.onTouchEvent(event)
-            true
-        }
+        // idle 울렁임 애니메이션 + 드래그 인터랙션
+        startBottomBarIdleAnimation(wormBar)
+        setupBottomBarDrag(bottomContainer, wormBar)
 
         // ─── 조합 ───
         root.addView(progressBarBg, FrameLayout.LayoutParams(
@@ -862,7 +851,264 @@ class LockScreenService : Service() {
         }
     }
 
+    // ───────────────────────────────────────────────────────
+    // 하단 막대: 지렁이 울렁임 + 슬라이드 압축 + 페인트 방울
+    // ───────────────────────────────────────────────────────
+
+    /** dp(Int): 픽셀 정수 / dp(Float): 픽셀 Float (Custom View 내부에서 사용) */
+    private fun dp(value: Float): Float {
+        return value * resources.displayMetrics.density
+    }
+
+    private fun startBottomBarIdleAnimation(view: WormBarView) {
+        if (!isServiceActive) return
+        bottomBarIdleAnimator?.cancel()
+        lastFrameTimeMs = SystemClock.uptimeMillis()
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 1000L
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener {
+                if (!isServiceActive) {
+                    cancel()
+                    return@addUpdateListener
+                }
+                val now = SystemClock.uptimeMillis()
+                var dt = (now - lastFrameTimeMs).toFloat()
+                lastFrameTimeMs = now
+                if (dt > 100f) dt = 16f // 큰 갭 클램프 (백그라운드 후 복귀 등)
+                view.update(dt)
+            }
+        }
+        bottomBarIdleAnimator = animator
+        animator.start()
+    }
+
+    private fun stopBottomBarIdleAnimation() {
+        bottomBarIdleAnimator?.cancel()
+        bottomBarIdleAnimator = null
+        bottomBarSlideAnimator?.cancel()
+        bottomBarSlideAnimator = null
+    }
+
+    private fun setupBottomBarDrag(container: FrameLayout, view: WormBarView) {
+        val touchSlop = dp(4).toFloat()
+        val maxDragDistance = dp(60).toFloat()    // 이만큼 가면 progress = ±1
+        val swipeThreshold = dp(50).toFloat()     // 이상이면 액션 발동
+
+        container.setOnTouchListener { _, event ->
+            when (event.action and MotionEvent.ACTION_MASK) {
+                MotionEvent.ACTION_DOWN -> {
+                    bottomBarSlideAnimator?.cancel()
+                    bottomBarDragStartX = event.rawX
+                    bottomBarIsDragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - bottomBarDragStartX
+                    if (!bottomBarIsDragging && abs(dx) > touchSlop) {
+                        bottomBarIsDragging = true
+                    }
+                    if (bottomBarIsDragging) {
+                        view.slideProgress = (dx / maxDragDistance).coerceIn(-1f, 1f)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val dx = event.rawX - bottomBarDragStartX
+                    val wasDragging = bottomBarIsDragging
+                    bottomBarIsDragging = false
+                    if (wasDragging && abs(dx) > swipeThreshold) {
+                        completeBottomBarAction(view, dx)
+                    } else {
+                        snapBackBottomBar(view)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun snapBackBottomBar(view: WormBarView) {
+        bottomBarSlideAnimator?.cancel()
+        val animator = ValueAnimator.ofFloat(view.slideProgress, 0f).apply {
+            duration = 320L
+            interpolator = OvershootInterpolator(1.6f)
+            addUpdateListener {
+                view.slideProgress = it.animatedValue as Float
+            }
+        }
+        bottomBarSlideAnimator = animator
+        animator.start()
+    }
+
+    private fun completeBottomBarAction(view: WormBarView, dx: Float) {
+        val direction = if (dx > 0) 1f else -1f
+        bottomBarSlideAnimator?.cancel()
+        val animator = ValueAnimator.ofFloat(view.slideProgress, direction).apply {
+            duration = 200L
+            addUpdateListener {
+                view.slideProgress = it.animatedValue as Float
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (direction > 0) {
+                        dismissOverlay()
+                    } else {
+                        openCurrentCardForEditing()
+                    }
+                }
+            })
+        }
+        bottomBarSlideAnimator = animator
+        animator.start()
+    }
+
+    /**
+     * 지렁이처럼 울렁이는 막대 + 슬라이드 압축 + 페인트 방울 잔상.
+     * 모든 그리기는 Canvas로 처리 (Path + Circle).
+     * - slideProgress: -1f (좌측 압축) ~ 0f (idle) ~ +1f (우측 압축)
+     * - 막대는 원래 막대기 영역(dp64) 안에서만 압축. 한쪽 끝 고정 + 반대편이 줄어듦.
+     * - 잔 방울도 막대 영역 X 범위 안에서만 형성 → 짧게 떨어지며 사라짐.
+     */
+    private inner class WormBarView(context: Context) : View(context) {
+        init {
+            // BlurMaskFilter는 hardware acceleration에서 작동 안 함 → SW layer 필요
+            setLayerType(LAYER_TYPE_SOFTWARE, null)
+        }
+
+        private val barPaint = Paint().apply {
+            color = coralPrimary
+            isAntiAlias = true
+            style = Paint.Style.FILL
+        }
+        // 막대 주변 부드러운 광채 (Coral glow) — 어두운 배경에서 모던한 느낌
+        private val glowPaint = Paint().apply {
+            color = coralPrimary
+            isAntiAlias = true
+            style = Paint.Style.FILL
+            alpha = 110
+            maskFilter = BlurMaskFilter(dp(7f), BlurMaskFilter.Blur.NORMAL)
+        }
+
+        private val barWidthPx: Float = dp(64f)
+        private val barThicknessPx: Float = dp(8f)
+        private val waveAmpPx: Float = dp(2.31f)           // 울렁임 진폭
+        private val bottomMarginPx: Float = dp(54f)        // 화면 하단 ~ 막대 중심 거리
+        private val topPadPx: Float = dp(28f)              // wave 위쪽 여유
+
+        var wormPhase: Float = 0f
+        var slideProgress: Float = 0f
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val w = MeasureSpec.getSize(widthMeasureSpec)
+            // glow blur(dp7)가 위로 퍼지는 공간 + 막대 + 하단 margin
+            val h = (topPadPx + barThicknessPx + bottomMarginPx + dp(12f)).toInt()
+            setMeasuredDimension(w, h)
+        }
+
+        fun update(dtMs: Float) {
+            // wormPhase 진행 (다중 sin 합성에 곱해질 시간 인자라 큰 주기로 reset)
+            val absP = abs(slideProgress)
+            val baseSpeed = 0.0028f // rad/ms
+            wormPhase += baseSpeed * (1f - absP * 0.5f) * dtMs
+            val largePeriod = (Math.PI * 1000).toFloat()
+            if (wormPhase > largePeriod) wormPhase -= largePeriod
+
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val centerX = width / 2f
+            val centerY = height - bottomMarginPx
+
+            val absP = abs(slideProgress)
+            val originalLeft = centerX - barWidthPx / 2f
+            val originalRight = centerX + barWidthPx / 2f
+
+            // ─── 막대 retreat: slideProgress 반대 방향 끝이 손가락 쪽으로 끌려옴(거의 끝까지 압축). 두께는 유지 ───
+            val maxRetreatPx = dp(58f)   // barWidthPx(dp64) 대비 거의 끝까지
+            val retreatAmount = absP * maxRetreatPx
+            val barLeft: Float
+            val barRight: Float
+            if (slideProgress > 0f) {
+                barLeft = originalLeft + retreatAmount
+                barRight = originalRight
+            } else {
+                barLeft = originalLeft
+                barRight = originalRight - retreatAmount
+            }
+            val barLength = barRight - barLeft
+
+            // ─── 막대 본체: closed path (위/아래 곡선 + 양 끝 cap) — fill paint ───
+            val effectiveAmp = waveAmpPx * (1f - absP * 0.30f)
+            val baseHalfT = barThicknessPx / 2f
+            val segments = 36
+            val timeA = 1.00f; val cyclesA = 1.5f; val phaseA = 0.0f; val wA = 0.40f
+            val timeB = 0.65f; val cyclesB = 0.9f; val phaseB = 1.3f; val wB = 0.25f
+            val timeC = 1.45f; val cyclesC = 2.7f; val phaseC = 2.7f; val wC = 0.15f
+            val timeD = 0.42f; val cyclesD = 0.5f; val phaseD = 4.1f; val wD = 0.12f
+            val timeE = 1.85f; val cyclesE = 3.6f; val phaseE = 5.3f; val wE = 0.08f
+
+            fun waveAt(frac: Float): Float {
+                val thetaA = (wormPhase * timeA + frac * (Math.PI * 2 * cyclesA).toFloat() + phaseA).toDouble()
+                val thetaB = (wormPhase * timeB + frac * (Math.PI * 2 * cyclesB).toFloat() + phaseB).toDouble()
+                val thetaC = (wormPhase * timeC + frac * (Math.PI * 2 * cyclesC).toFloat() + phaseC).toDouble()
+                val thetaD = (wormPhase * timeD + frac * (Math.PI * 2 * cyclesD).toFloat() + phaseD).toDouble()
+                val thetaE = (wormPhase * timeE + frac * (Math.PI * 2 * cyclesE).toFloat() + phaseE).toDouble()
+                val raw = (sin(thetaA) * wA + sin(thetaB) * wB + sin(thetaC) * wC +
+                           sin(thetaD) * wD + sin(thetaE) * wE).toFloat()
+                val edgeFalloff = sin(frac.toDouble() * Math.PI).toFloat()
+                return raw * effectiveAmp * edgeFalloff
+            }
+
+            val barPath = Path()
+
+            // 위쪽 곡선 (좌→우) — 두께 일정
+            for (i in 0..segments) {
+                val frac = i / segments.toFloat()
+                val x = barLeft + barLength * frac
+                val cY = centerY + waveAt(frac)
+                val topY = cY - baseHalfT
+                if (i == 0) barPath.moveTo(x, topY) else barPath.lineTo(x, topY)
+            }
+
+            // 우측 끝 cap (반원)
+            val rightCY = centerY + waveAt(1f)
+            barPath.arcTo(
+                barRight - baseHalfT, rightCY - baseHalfT,
+                barRight + baseHalfT, rightCY + baseHalfT,
+                -90f, 180f, false
+            )
+
+            // 아래쪽 곡선 (우→좌)
+            for (i in segments downTo 0) {
+                val frac = i / segments.toFloat()
+                val x = barLeft + barLength * frac
+                val cY = centerY + waveAt(frac)
+                val botY = cY + baseHalfT
+                barPath.lineTo(x, botY)
+            }
+
+            // 좌측 끝 cap
+            val leftCY = centerY + waveAt(0f)
+            barPath.arcTo(
+                barLeft - baseHalfT, leftCY - baseHalfT,
+                barLeft + baseHalfT, leftCY + baseHalfT,
+                90f, 180f, false
+            )
+
+            barPath.close()
+            // 1. glow 먼저 (blur)
+            canvas.drawPath(barPath, glowPaint)
+            // 2. 본체 위에
+            canvas.drawPath(barPath, barPaint)
+        }
+    }
+
     private fun dismissOverlay() {
+        stopBottomBarIdleAnimation()
         overlayView?.let { view ->
             // 먼저 drawable 참조 해제 (setImageDrawable(null))
             val bitmapsToRecycle = collectBitmaps(view)
