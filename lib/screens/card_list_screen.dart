@@ -355,6 +355,58 @@ class _CardListScreenState extends State<CardListScreen> {
     }
   }
 
+  /// 카드 1장만 DB에서 다시 가져와 _cards 같은 인덱스에 in-place 교체.
+  /// random 정렬에서 _loadCards() 호출 시 ORDER BY RANDOM()이 재셔플되어
+  /// 편집한 카드가 다른 위치로 사라지는 버그 방지.
+  Future<void> _refreshCardInList(int cardId) async {
+    final updated = await DatabaseHelper.instance.getCardById(cardId);
+    if (!mounted) return;
+    final index = _cards.indexWhere((c) => c.id == cardId);
+    if (index == -1) return;
+    setState(() {
+      if (updated == null) {
+        _cards.removeAt(index);
+        if (_totalCount > 0) _totalCount -= 1;
+      } else if (!widget.allCards && updated.folderId != widget.folder.id) {
+        _cards.removeAt(index);
+        if (_totalCount > 0) _totalCount -= 1;
+      } else {
+        _cards[index] = updated;
+      }
+    });
+    _precacheCardImages();
+  }
+
+  /// 주어진 id 카드들을 _cards 리스트에서 제거 (DB 작업은 호출자가 이미 수행).
+  /// random 정렬 보존을 위해 _loadCards() 대신 사용.
+  void _removeCardsLocally(Iterable<int> ids) {
+    final idSet = ids.toSet();
+    final removed = _cards.where((c) => idSet.contains(c.id)).length;
+    if (removed == 0) return;
+    setState(() {
+      _cards.removeWhere((c) => idSet.contains(c.id));
+      _totalCount = (_totalCount - removed).clamp(0, _totalCount);
+    });
+  }
+
+  /// 새로 만든 카드 1장을 _cards 특정 위치에 삽입.
+  /// afterCardId가 주어지면 그 카드 다음에, 없으면 맨 앞에 삽입.
+  Future<void> _insertCardLocally(int newCardId, {int? afterCardId}) async {
+    final card = await DatabaseHelper.instance.getCardById(newCardId);
+    if (!mounted || card == null) return;
+    if (!widget.allCards && card.folderId != widget.folder.id) return;
+    setState(() {
+      var insertAt = 0;
+      if (afterCardId != null) {
+        final idx = _cards.indexWhere((c) => c.id == afterCardId);
+        if (idx >= 0) insertAt = idx + 1;
+      }
+      _cards.insert(insertAt, card);
+      _totalCount += 1;
+    });
+    _precacheCardImages();
+  }
+
   Future<void> _performSearch() async {
     final generation = ++_searchGeneration;
     List<CardModel> results;
@@ -463,12 +515,18 @@ class _CardListScreenState extends State<CardListScreen> {
     }
     await _deleteFiles(filePaths);
     if (!mounted) return;
-    await _loadCards();
+    if (_searchQuery.isNotEmpty) {
+      await _loadCards();
+    } else {
+      _removeCardsLocally([card.id!]);
+    }
   }
 
   Future<void> _duplicateCard(CardModel card) async {
+    int newCardId;
     try {
-      await DatabaseHelper.instance.duplicateCard(card.id!);
+      newCardId = await DatabaseHelper.instance.duplicateCard(card.id!);
+      if (newCardId < 0) throw Exception('duplicate returned -1');
     } catch (e) {
       debugPrint('[CARD_LIST] card duplicate failed: $e');
       if (!mounted) return;
@@ -479,7 +537,12 @@ class _CardListScreenState extends State<CardListScreen> {
       return;
     }
     if (!mounted) return;
-    await _loadCards();
+    if (_searchQuery.isNotEmpty) {
+      await _loadCards();
+    } else {
+      // random 정렬 보존: 원본 카드 바로 뒤에 새 카드 삽입
+      await _insertCardLocally(newCardId, afterCardId: card.id);
+    }
   }
 
   Future<void> _moveCard(CardModel card) async {
@@ -519,7 +582,15 @@ class _CardListScreenState extends State<CardListScreen> {
 
     await DatabaseHelper.instance.moveCard(card.id!, target.id!);
     if (!mounted) return;
-    await _loadCards();
+    if (_searchQuery.isNotEmpty) {
+      await _loadCards();
+    } else if (widget.allCards) {
+      // 모든 카드 모드에서는 카드가 그대로 표시 — 폴더 필드만 갱신
+      await _refreshCardInList(card.id!);
+    } else {
+      // 일반 폴더 모드: 다른 폴더로 이동했으므로 현재 리스트에서 제거
+      _removeCardsLocally([card.id!]);
+    }
   }
 
   /// 이동 시 중복 발견 → 사용자 선택. 'skip' / 'all' / 'cancel' / null 반환
@@ -599,7 +670,8 @@ class _CardListScreenState extends State<CardListScreen> {
   }
 
   Future<void> _editCard(CardModel card) async {
-    await Navigator.push(
+    final cardId = card.id;
+    await Navigator.push<int?>(
       context,
       MaterialPageRoute(
         builder: (_) => CardEditScreen(
@@ -609,7 +681,15 @@ class _CardListScreenState extends State<CardListScreen> {
       ),
     );
     if (!mounted) return;
-    _loadCards();
+    // 검색 모드에서는 검색 결과 일관성을 위해 풀 리로드
+    if (_searchQuery.isNotEmpty) {
+      _loadCards();
+      return;
+    }
+    // random 정렬 보존: 편집한 카드 1장만 in-place 갱신
+    if (cardId != null) {
+      await _refreshCardInList(cardId);
+    }
   }
 
   // ─── Selection mode ───
@@ -683,12 +763,16 @@ class _CardListScreenState extends State<CardListScreen> {
     }
 
     // deleteCardsBatch 내부에서 트랜잭션으로 folder card_count 자동 갱신
-    await DatabaseHelper.instance
-        .deleteCardsBatch(_selectedCardIds.toList());
+    final deletedIds = _selectedCardIds.toList();
+    await DatabaseHelper.instance.deleteCardsBatch(deletedIds);
     await _deleteFiles(allFilePaths);
     if (!mounted) return;
     _exitSelectionMode();
-    await _loadCards();
+    if (_searchQuery.isNotEmpty) {
+      await _loadCards();
+    } else {
+      _removeCardsLocally(deletedIds);
+    }
   }
 
   Future<void> _moveSelected() async {
@@ -737,7 +821,14 @@ class _CardListScreenState extends State<CardListScreen> {
     await DatabaseHelper.instance.moveCardsBatch(idsToMove, target.id!);
     if (!mounted) return;
     _exitSelectionMode();
-    await _loadCards();
+    if (_searchQuery.isNotEmpty) {
+      await _loadCards();
+    } else if (widget.allCards) {
+      // allCards 모드: 카드는 그대로 표시 — folder 변경은 화면 표시에 영향 없음
+    } else {
+      // 일반 폴더 모드: 다른 폴더로 이동된 카드들을 현재 리스트에서 제거
+      _removeCardsLocally(idsToMove);
+    }
 
     if (skipped > 0 && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -918,7 +1009,7 @@ class _CardListScreenState extends State<CardListScreen> {
             ? null
             : FloatingActionButton(
                 onPressed: () async {
-                  await Navigator.push(
+                  final newId = await Navigator.push<int?>(
                     context,
                     MaterialPageRoute(
                       builder: (_) =>
@@ -930,8 +1021,13 @@ class _CardListScreenState extends State<CardListScreen> {
                   if (_searchQuery.isNotEmpty) {
                     _searchController.clear();
                     _searchQuery = '';
+                    _loadCards();
+                    return;
                   }
-                  _loadCards();
+                  if (newId != null) {
+                    // random 정렬 보존: 새 카드를 맨 앞에 삽입 (즉시 확인 가능)
+                    await _insertCardLocally(newId);
+                  }
                 },
                 child: const Icon(Icons.add),
               ),

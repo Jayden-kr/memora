@@ -1,38 +1,16 @@
 ============================================================
 Play Console — v1.1.1+4 Release Notes
-============================================================
 Production track > Create new release > What's new in this release
-
-
-[Korean — ko-KR]
+아래 블록 전체를 복사해서 그대로 붙여넣기
 ============================================================
+
 <ko-KR>
 - 한글로 카드를 편집할 때 마지막 글자(받침)가 저장되지 않던 문제를 수정했습니다.
 - 대용량 폴더에서 푸시 알림을 누르면 다른 카드 위치로 이동하던 문제를 수정했습니다.
-</ko-KR>
-
-
-[English — en-US]
-============================================================
-<en-US>
-- Fixed an issue where the last character of Korean text was missing when saving card edits.
-- Fixed an issue where tapping a push notification in a large folder would scroll to the wrong card.
-</en-US>
-
-
-============================================================
-Combined block (Play Console에 한 번에 붙여넣기)
-============================================================
-<ko-KR>
-- 한글로 카드를 편집할 때 마지막 글자(받침)가 저장되지 않던 문제를 수정했습니다.
-- 대용량 폴더에서 푸시 알림을 누르면 다른 카드 위치로 이동하던 문제를 수정했습니다.
+- 랜덤 정렬에서 카드를 편집하고 돌아오면 다른 카드가 그 자리에 보이던 문제를 수정했습니다.
 </ko-KR>
 <en-US>
 - Fixed an issue where the last character of Korean text was missing when saving card edits.
 - Fixed an issue where tapping a push notification in a large folder would scroll to the wrong card.
+- Fixed an issue where editing a card in random sort order would shuffle the list and lose the card's position.
 </en-US>
-
-
-============================================================
-끝
-============================================================

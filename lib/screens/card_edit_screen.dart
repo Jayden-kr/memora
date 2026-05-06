@@ -267,6 +267,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
     setState(() => _saving = true);
 
+    int? resultCardId;
     try {
       final now = DateTime.now();
       final offset = now.timeZoneOffset;
@@ -317,6 +318,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
           await DatabaseHelper.instance.updateCard(updated);
         }
         await _cleanupRemovedImages();
+        resultCardId = widget.existingCard!.id;
       } else {
         final uuid =
             '${const Uuid().v4()}-app-${DateTime.now().millisecondsSinceEpoch}';
@@ -351,13 +353,13 @@ class _CardEditScreenState extends State<CardEditScreen> {
           sequence: maxSeq + 1,
           modified: modifiedStr,
         );
-        await DatabaseHelper.instance.insertCard(card);
+        resultCardId = await DatabaseHelper.instance.insertCard(card);
         await DatabaseHelper.instance
             .updateFolderCardCount(_currentFolderId);
       }
 
       if (!mounted) return;
-      Navigator.pop(context);
+      Navigator.pop(context, resultCardId);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
