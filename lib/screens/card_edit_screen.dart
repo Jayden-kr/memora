@@ -246,29 +246,45 @@ class _CardEditScreenState extends State<CardEditScreen> {
   }
 
   Future<void> _save() async {
-    if (_saving) return;
-    // 한글 IME 조합 중인 글자를 controller에 commit (focus 해제로 트리거).
-    // 이 단계 없이 바로 controller.text를 읽으면 마지막 받침/조합 글자가 누락됨.
-    FocusManager.instance.primaryFocus?.unfocus();
-    await Future.delayed(const Duration(milliseconds: 50));
-    if (!mounted) return;
-    final question = _questionController.text.trim();
-    final answer = _answerController.text.trim();
-    final hasImages = _questionImages.any((img) => img != null) ||
-        _answerImages.any((img) => img != null);
-    if (question.isEmpty && answer.isEmpty && !hasImages) {
-      if (!mounted) return;
-      final t = AppLocalizations.of(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t.cardEditEmptyError)),
-      );
+    // 즉시 가드: setState 전 await가 있어 두 번째 _save가 들어올 수 있음.
+    // 인스턴스 필드 직접 set으로 race 방지.
+    if (_saving) {
+      debugPrint('[CARD_SAVE] re-entry blocked (already saving)');
       return;
     }
+    _saving = true;
 
-    setState(() => _saving = true);
-
-    int? resultCardId;
     try {
+      // 한글 IME 조합 중인 글자를 controller에 commit (focus 해제로 트리거).
+      // 이 단계 없이 바로 controller.text를 읽으면 마지막 받침/조합 글자가 누락됨.
+      // 50ms는 일부 IME (특히 Samsung Keyboard)에서 부족 → 200ms로 상향.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      final question = _questionController.text.trim();
+      final answer = _answerController.text.trim();
+      final hasImages = _questionImages.any((img) => img != null) ||
+          _answerImages.any((img) => img != null);
+
+      final cardIdLog = widget.existingCard?.id;
+      debugPrint('[CARD_SAVE] start: editing=$_isEditing cardId=$cardIdLog '
+          'q.len=${question.length} a.len=${answer.length} '
+          'hasImages=$hasImages mounted=$mounted');
+
+      if (question.isEmpty && answer.isEmpty && !hasImages) {
+        if (mounted) {
+          final t = AppLocalizations.of(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(t.cardEditEmptyError)),
+          );
+        }
+        return;
+      }
+
+      // _saving=true UI 반영 (mounted일 때만)
+      if (mounted) setState(() {});
+
+      int? resultCardId;
       final now = DateTime.now();
       final offset = now.timeZoneOffset;
       final tzSign = offset.isNegative ? '-' : '+';
@@ -281,7 +297,13 @@ class _CardEditScreenState extends State<CardEditScreen> {
           'GMT$tzSign$tzHours:$tzMins';
 
       if (_isEditing) {
-        final updated = widget.existingCard!.copyWith(
+        final existing = widget.existingCard!;
+        final qChanged = existing.question != question;
+        final aChanged = existing.answer != answer;
+        debugPrint('[CARD_SAVE] copyWith: qChanged=$qChanged aChanged=$aChanged '
+            'orig.q.len=${existing.question.length} orig.a.len=${existing.answer.length}');
+
+        final updated = existing.copyWith(
           folderId: _currentFolderId,
           question: question,
           answer: answer,
@@ -309,16 +331,31 @@ class _CardEditScreenState extends State<CardEditScreen> {
           modified: modifiedStr,
         );
         final originalFolderId = widget.existingCard!.folderId;
+        final int updateRows;
         if (_currentFolderId != originalFolderId) {
           // 폴더 변경은 moveCard로 원자적 처리 (트랜잭션 내 card_count 갱신 포함)
           await DatabaseHelper.instance.moveCard(widget.existingCard!.id!, _currentFolderId);
           // 이동 후 나머지 필드 업데이트 (folderId는 이미 moveCard에서 변경됨)
-          await DatabaseHelper.instance.updateCard(updated);
+          updateRows = await DatabaseHelper.instance.updateCard(updated);
         } else {
-          await DatabaseHelper.instance.updateCard(updated);
+          updateRows = await DatabaseHelper.instance.updateCard(updated);
         }
         await _cleanupRemovedImages();
         resultCardId = widget.existingCard!.id;
+
+        // 저장 검증 — DB가 실제로 새 값을 반영했는지 read-back으로 확인.
+        // mismatch 시 logcat에 경고 출력 (사용자 보고 시 진단용).
+        final reread = await DatabaseHelper.instance.getCardById(existing.id!);
+        final dbQ = reread?.question ?? '';
+        final dbA = reread?.answer ?? '';
+        final ok = dbQ == question && dbA == answer;
+        debugPrint('[CARD_SAVE] update done: rows=$updateRows verified=$ok '
+            'db.q.len=${dbQ.length} db.a.len=${dbA.length}');
+        if (!ok) {
+          debugPrint('[CARD_SAVE] !!! WRITE MISMATCH !!! '
+              'expected.q="$question" db.q="$dbQ" '
+              'expected.a="$answer" db.a="$dbA"');
+        }
       } else {
         final uuid =
             '${const Uuid().v4()}-app-${DateTime.now().millisecondsSinceEpoch}';
@@ -356,17 +393,27 @@ class _CardEditScreenState extends State<CardEditScreen> {
         resultCardId = await DatabaseHelper.instance.insertCard(card);
         await DatabaseHelper.instance
             .updateFolderCardCount(_currentFolderId);
+        debugPrint('[CARD_SAVE] insert done: newId=$resultCardId');
       }
 
-      if (!mounted) return;
+      if (!mounted) {
+        // 화면 dispose됐어도 DB 작업은 위에서 이미 완료됨.
+        // 호출자(card_list_screen._editCard)가 push 후 _refreshCardInList()로
+        // DB에서 다시 읽으니 UI 갱신은 안전함.
+        debugPrint('[CARD_SAVE] dispose during save (DB committed); skip pop');
+        return;
+      }
       Navigator.pop(context, resultCardId);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('[CARD_SAVE] FAILED: $e\n$st');
       if (!mounted) return;
-      setState(() => _saving = false);
       final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.cardEditSaveFail(e.toString()))),
       );
+    } finally {
+      _saving = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -597,3 +644,4 @@ class _CardEditScreenState extends State<CardEditScreen> {
     );
   }
 }
+
