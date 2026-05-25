@@ -180,7 +180,7 @@ Future<void> _doNavigate(
 }
 
 /// 잠금화면 좌측 슬라이드 → 해당 카드 편집 화면 이동.
-/// CardListScreen 위에 CardEditScreen을 push해서 편집 종료 시 자연스럽게 카드 리스트로 복귀.
+/// CardListScreen에 autoEditCardId를 전달해 _editCard() 경로로 편집 → pop 시 refresh 보장.
 Future<void> _handleEditCardNav(int folderId, int cardId) async {
   debugPrint('[MAIN] _handleEditCardNav: folder=$folderId card=$cardId');
   final nav = navigatorKey.currentState;
@@ -222,6 +222,7 @@ Future<void> _doEditNavigate(
       builder: (_) => CardListScreen(
         folder: resolvedFolder,
         scrollToCardId: card.id,
+        autoEditCardId: card.id,
       ),
     ));
     nav.push(MaterialPageRoute(

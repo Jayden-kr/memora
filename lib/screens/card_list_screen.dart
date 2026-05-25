@@ -9,6 +9,7 @@ import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import '../app.dart' show routeObserver;
 import '../widgets/card_tile.dart';
 import 'card_edit_screen.dart';
 
@@ -16,19 +17,21 @@ class CardListScreen extends StatefulWidget {
   final Folder folder;
   final bool allCards;
   final int? scrollToCardId;
+  final int? autoEditCardId;
 
   const CardListScreen({
     super.key,
     required this.folder,
     this.allCards = false,
     this.scrollToCardId,
+    this.autoEditCardId,
   });
 
   @override
   State<CardListScreen> createState() => _CardListScreenState();
 }
 
-class _CardListScreenState extends State<CardListScreen> {
+class _CardListScreenState extends State<CardListScreen> with RouteAware {
   final List<CardModel> _cards = [];
   bool _loading = true;
   bool _disposed = false; // precacheImage 등 비동기 작업 중단용
@@ -54,6 +57,9 @@ class _CardListScreenState extends State<CardListScreen> {
   Timer? _debounceTimer;
   String _searchQuery = '';
   int _searchGeneration = 0;
+
+  // 잠금화면 편집 후 pop 감지용 (one-shot)
+  bool _autoEditRefreshPending = false;
 
   // 설정값
   bool _showCardNumber = false;
@@ -90,15 +96,34 @@ class _CardListScreenState extends State<CardListScreen> {
   bool get _useSimpleList =>
       _cards.length <= _smallListThreshold && !_isNotificationMode;
 
-  // 알림에서 진입한 모드인지
-  bool get _isNotificationMode => widget.scrollToCardId != null;
+  // 알림/잠금화면 편집에서 진입한 모드인지
+  bool get _isNotificationMode =>
+      widget.scrollToCardId != null || widget.autoEditCardId != null;
 
   @override
   void initState() {
     super.initState();
     _itemPositionsListener.itemPositions.addListener(_onItemPositionsChanged);
     _highlightCardId = widget.scrollToCardId;
+    _autoEditRefreshPending = widget.autoEditCardId != null;
     _initLoad();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
+  void didPopNext() {
+    if (_autoEditRefreshPending) {
+      _autoEditRefreshPending = false;
+      final autoId = widget.autoEditCardId;
+      if (autoId != null) {
+        _refreshCardInList(autoId);
+      }
+    }
   }
 
   String get _sortSettingKey =>
@@ -158,6 +183,7 @@ class _CardListScreenState extends State<CardListScreen> {
       _highlightTimer = Timer(const Duration(seconds: 5), () {
         if (mounted) setState(() => _highlightCardId = null);
       });
+
     } else {
       // 일반 모드: 설정 먼저, 카드 로드
       final settings = await DatabaseHelper.instance.getAllSettings();
@@ -182,6 +208,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _itemPositionsListener.itemPositions.removeListener(_onItemPositionsChanged);
     _searchController.dispose();
     _searchFocusNode.dispose();
@@ -671,7 +698,7 @@ class _CardListScreenState extends State<CardListScreen> {
 
   Future<void> _editCard(CardModel card) async {
     final cardId = card.id;
-    await Navigator.push<int?>(
+    final result = await Navigator.push<int?>(
       context,
       MaterialPageRoute(
         builder: (_) => CardEditScreen(
@@ -681,6 +708,11 @@ class _CardListScreenState extends State<CardListScreen> {
       ),
     );
     if (!mounted) return;
+    // 편집 화면에서 삭제된 경우
+    if (result == -1 && cardId != null) {
+      _removeCardsLocally([cardId]);
+      return;
+    }
     // 검색 모드에서는 검색 결과 일관성을 위해 풀 리로드
     if (_searchQuery.isNotEmpty) {
       _loadCards();

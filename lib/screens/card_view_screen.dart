@@ -36,7 +36,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
   }
 
   Future<void> _editCard() async {
-    await Navigator.push(
+    final result = await Navigator.push<int?>(
       context,
       MaterialPageRoute(
         builder: (_) => CardEditScreen(
@@ -45,6 +45,12 @@ class _CardViewScreenState extends State<CardViewScreen> {
         ),
       ),
     );
+    if (!mounted) return;
+    // 편집 화면에서 삭제된 경우 이 화면도 닫기
+    if (result == -1) {
+      Navigator.pop(context);
+      return;
+    }
     // 편집 후 카드 데이터 갱신
     final updated = await DatabaseHelper.instance.getCardById(_card.id!);
     if (!mounted || updated == null) return;

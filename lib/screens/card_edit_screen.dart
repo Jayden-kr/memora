@@ -245,6 +245,47 @@ class _CardEditScreenState extends State<CardEditScreen> {
     }
   }
 
+  Future<void> _deleteCard() async {
+    final card = widget.existingCard;
+    if (card == null || card.id == null) return;
+    final t = AppLocalizations.of(context);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t.cardDeleteTitle),
+        content: Text(t.cardDeleteSingleConfirm),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t.commonCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      await DatabaseHelper.instance.deleteCard(card.id!);
+      await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
+      for (final path in [...card.questionImagePaths, ...card.answerImagePaths]) {
+        try { await File(path).delete(); } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('[CARD_EDIT] delete failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.cardDeleteFail)),
+      );
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pop(context, -1);
+  }
+
   Future<void> _save() async {
     // 즉시 가드: setState 전 await가 있어 두 번째 _save가 들어올 수 있음.
     // 인스턴스 필드 직접 set으로 race 방지.
@@ -490,6 +531,13 @@ class _CardEditScreenState extends State<CardEditScreen> {
       appBar: AppBar(
         title: Text(_isEditing ? t.cardEditTitleEdit : t.cardEditTitleNew),
         actions: [
+          if (_isEditing)
+            IconButton(
+              icon: Icon(Icons.delete_outline,
+                  color: Theme.of(context).colorScheme.error),
+              tooltip: t.commonDelete,
+              onPressed: _saving ? null : _deleteCard,
+            ),
           TextButton(
             onPressed: (_saving || _folders.isEmpty) ? null : _save,
             child: Text(t.commonSave),
