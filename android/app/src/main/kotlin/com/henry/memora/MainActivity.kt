@@ -24,6 +24,12 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        flutterEngine.platformViewsController.registry
+            .registerViewFactory(
+                "native-edit-text",
+                NativeEditTextFactory(flutterEngine.dartExecutor.binaryMessenger)
+            )
+
         // Cold start: 알림 탭으로 앱이 시작된 경우 payload를 Flutter에 전달하기 위해 저장
         val initialPayload = intent?.getStringExtra("notification_payload")
         intent?.removeExtra("notification_payload")

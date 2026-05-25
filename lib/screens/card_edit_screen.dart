@@ -12,6 +12,7 @@ import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
 import '../widgets/image_viewer.dart';
+import '../widgets/native_text_field.dart';
 
 class CardEditScreen extends StatefulWidget {
   final int folderId;
@@ -30,6 +31,8 @@ class CardEditScreen extends StatefulWidget {
 class _CardEditScreenState extends State<CardEditScreen> {
   final _questionController = TextEditingController();
   final _answerController = TextEditingController();
+  final _nativeQuestionKey = GlobalKey<NativeTextFieldState>();
+  final _nativeAnswerKey = GlobalKey<NativeTextFieldState>();
   final _picker = ImagePicker();
 
   bool _finished = false;
@@ -300,10 +303,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
       // 이 단계 없이 바로 controller.text를 읽으면 마지막 받침/조합 글자가 누락됨.
       // 50ms는 일부 IME (특히 Samsung Keyboard)에서 부족 → 200ms로 상향.
       FocusManager.instance.primaryFocus?.unfocus();
+      await _nativeQuestionKey.currentState?.clearFocus();
+      await _nativeAnswerKey.currentState?.clearFocus();
       await Future.delayed(const Duration(milliseconds: 200));
 
-      final question = _questionController.text.trim();
-      final answer = _answerController.text.trim();
+      final question = (_nativeQuestionKey.currentState?.text ?? _questionController.text).trim();
+      final answer = (_nativeAnswerKey.currentState?.text ?? _answerController.text).trim();
       final hasImages = _questionImages.any((img) => img != null) ||
           _answerImages.any((img) => img != null);
 
@@ -475,8 +480,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
   }
 
   bool get _hasChanges {
-    final q = _questionController.text.trim();
-    final a = _answerController.text.trim();
+    final q = (_nativeQuestionKey.currentState?.text ?? _questionController.text).trim();
+    final a = (_nativeAnswerKey.currentState?.text ?? _answerController.text).trim();
     if (_isEditing) {
       final c = widget.existingCard!;
       return q != c.question || a != c.answer ||
@@ -552,7 +557,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
             // 폴더 선택 드롭다운
             if (_folders.isNotEmpty)
               DropdownButtonFormField<int>(
-                initialValue: _folders.any((f) => f.id == _currentFolderId)
+                value: _folders.any((f) => f.id == _currentFolderId)
                     ? _currentFolderId
                     : null,
                 decoration: InputDecoration(
@@ -575,14 +580,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
             Text(t.cardEditFront,
                 style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
-            TextField(
-              controller: _questionController,
+            NativeTextField(
+              key: _nativeQuestionKey,
+              initialText: _questionController.text,
+              hint: t.cardEditFrontHint,
               minLines: 3,
-              maxLines: null,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                hintText: t.cardEditFrontHint,
-              ),
+              onChanged: (v) => _questionController.text = v,
             ),
             const SizedBox(height: 8),
             _imageRow(_questionImages, _questionImageRatios),
@@ -592,14 +595,12 @@ class _CardEditScreenState extends State<CardEditScreen> {
             Text(t.cardEditBack,
                 style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
-            TextField(
-              controller: _answerController,
+            NativeTextField(
+              key: _nativeAnswerKey,
+              initialText: _answerController.text,
+              hint: t.cardEditBackHint,
               minLines: 5,
-              maxLines: null,
-              decoration: InputDecoration(
-                border: const OutlineInputBorder(),
-                hintText: t.cardEditBackHint,
-              ),
+              onChanged: (v) => _answerController.text = v,
             ),
             const SizedBox(height: 8),
             _imageRow(_answerImages, _answerImageRatios),

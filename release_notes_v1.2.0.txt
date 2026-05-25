@@ -1,0 +1,16 @@
+============================================================
+Play Console — v1.2.0+7 Release Notes
+Production track > Create new release > What's new in this release
+아래 블록 전체를 복사해서 그대로 붙여넣기
+============================================================
+
+<ko-KR>
+- 카드 편집 시 텍스트 입력을 네이티브 Android 컴포넌트로 교체하여 블록 선택, 커서 이동이 더 부드러워졌습니다.
+- 잠금화면에서 카드를 편집한 후 변경사항이 바로 반영되지 않던 문제를 수정했습니다.
+- 카드 편집 화면에서 바로 카드를 삭제할 수 있는 버튼을 추가했습니다.
+</ko-KR>
+<en-US>
+- Replaced text input with native Android components for smoother text selection and cursor handling.
+- Fixed an issue where card edits made from the lock screen were not reflected until a second edit.
+- Added a delete button to the card edit screen for quick card removal.
+</en-US>
