@@ -491,19 +491,27 @@ class MainActivity : FlutterActivity() {
 
         editor.putInt("finished_filter",
             (settings["finishedFilter"] as? Number)?.toInt() ?: -1)
-        editor.putBoolean("random_order",
-            settings["randomOrder"] as? Boolean ?: true)
+        editor.putString("sort_order",
+            (settings["sortOrder"] as? String) ?: "sequence")
         editor.putBoolean("reversed",
             settings["reversed"] as? Boolean ?: false)
         editor.putInt("bg_color",
             (settings["bgColor"] as? Number)?.toInt() ?: 0xFF1A1A2E.toInt())
         editor.apply()
 
-        Log.d(TAG, "Settings saved: enabled=${settings["enabled"]}, folders=$folderIdsStr")
+        Log.d(TAG, "Settings saved: enabled=${settings["enabled"]}, folders=$folderIdsStr, sort=${settings["sortOrder"]}")
     }
 
     private fun loadSettings(): Map<String, Any?> {
         val prefs = getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
+        // 구버전(random_order bool)에서 업그레이드: sort_order가 없으면 derive
+        val sortOrder = prefs.getString("sort_order", null) ?: run {
+            if (prefs.contains("random_order")) {
+                if (prefs.getBoolean("random_order", false)) "random" else "sequence"
+            } else {
+                "sequence"
+            }
+        }
         return mapOf(
             "enabled" to prefs.getBoolean("enabled", false),
             "folderIds" to (prefs.getString("folder_ids", "")
@@ -511,7 +519,7 @@ class MainActivity : FlutterActivity() {
                 ?.filter { it.isNotEmpty() }
                 ?.mapNotNull { it.toIntOrNull() } ?: emptyList<Int>()),
             "finishedFilter" to prefs.getInt("finished_filter", -1),
-            "randomOrder" to prefs.getBoolean("random_order", true),
+            "sortOrder" to sortOrder,
             "reversed" to prefs.getBoolean("reversed", false),
             "bgColor" to prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
         )

@@ -226,8 +226,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
     }
   }
 
-  /// 저장 시 원본 카드에 있었지만 현재 제거된 이미지 파일을 디스크에서 삭제
-  Future<void> _cleanupRemovedImages() async {
+  /// 저장 시 원본 카드에 있었지만 현재 제거된 이미지 파일을 디스크에서 삭제.
+  /// fire-and-forget — DB는 이미 commit됐고 file delete는 orphan 정리용이라 동작과 무관.
+  void _cleanupRemovedImages() {
     if (!_isEditing) return;
     final original = widget.existingCard!;
     final originalPaths = <String?>[
@@ -243,7 +244,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
     ];
     for (final path in originalPaths) {
       if (path != null && path.isNotEmpty && !currentPaths.contains(path)) {
-        try { await File(path).delete(); } catch (_) {}
+        File(path).delete().ignore();
       }
     }
   }
@@ -274,8 +275,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
     try {
       await DatabaseHelper.instance.deleteCard(card.id!);
       await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
+      // 🔄 image delete fire-and-forget — DB는 이미 commit됨, 사용자 시점에선 끝.
       for (final path in [...card.questionImagePaths, ...card.answerImagePaths]) {
-        try { await File(path).delete(); } catch (_) {}
+        File(path).delete().ignore();
       }
     } catch (e) {
       debugPrint('[CARD_EDIT] delete failed: $e');
@@ -386,7 +388,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
         } else {
           updateRows = await DatabaseHelper.instance.updateCard(updated);
         }
-        await _cleanupRemovedImages();
+        _cleanupRemovedImages(); // fire-and-forget, await 안 함
         resultCardId = widget.existingCard!.id;
 
         // 저장 검증 — DB가 실제로 새 값을 반영했는지 read-back으로 확인.

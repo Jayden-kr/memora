@@ -66,6 +66,21 @@ class ImportExportController {
   void cleanupStaleState() {
     if (isRunning) forceCancel();
     _cancel(); // 잔여 foreground service 알림 제거
+    // OOM-recovery: 이전 import가 중간에 죽었으면 stale marker 살아있음.
+    // 현재는 marker만 clear (실제 부분 폴더 cleanup은 추후 라운드).
+    _clearStaleImportMarker();
+  }
+
+  Future<void> _clearStaleImportMarker() async {
+    try {
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      final stale = settings['import_in_progress'];
+      if (stale != null && stale.isNotEmpty) {
+        debugPrint(
+            '[ImportExportController] stale import marker detected: $stale (likely OOM kill, marker cleared)');
+        await DatabaseHelper.instance.deleteSetting('import_in_progress');
+      }
+    } catch (_) {}
   }
 
   // 리스너 (UI 갱신용)
@@ -143,6 +158,12 @@ class ImportExportController {
     currentImportProgress = const ImportProgress();
     _notify();
 
+    // OOM-recovery marker: 이 import가 진행 중임을 disk에 기록.
+    // 다음 앱 시작 시 cleanupStaleState가 marker 보고 stale 인지.
+    try {
+      await DatabaseHelper.instance.upsertSetting('import_in_progress', filePath);
+    } catch (_) {}
+
     final isEn = LocaleService.currentLanguageCode() == 'en';
     final importTitle = isEn ? 'Importing' : 'Import 진행 중';
     final processingMsg = isEn ? 'Processing...' : '처리 중...';
@@ -192,6 +213,11 @@ class ImportExportController {
       _operationLock?.complete();
       _notify();
 
+      // import 정상 완료 → marker clear
+      try {
+        await DatabaseHelper.instance.deleteSetting('import_in_progress');
+      } catch (_) {}
+
       final body = isEn
           ? 'Imported ${result.newCards} card(s) (${result.duration.inSeconds}s)'
           : '${result.newCards}장 가져옴 (${result.duration.inSeconds}초)';
@@ -204,6 +230,10 @@ class ImportExportController {
       currentOperation = null;
       _operationLock?.complete();
       _notify();
+      // 실패도 마커 clear (실패는 사용자가 인지하고 재시도 가능, OOM kill 아니라)
+      try {
+        await DatabaseHelper.instance.deleteSetting('import_in_progress');
+      } catch (_) {}
       await _cancel();
       rethrow;
     }

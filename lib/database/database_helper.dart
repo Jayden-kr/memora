@@ -391,6 +391,131 @@ class DatabaseHelper {
     });
   }
 
+  /// 여러 폴더를 한 트랜잭션으로 원자적 삭제. IN 절 기반 단일 statement로 최소화.
+  /// 5 폴더 + 수만 카드라도 보통 수백 ms 안에 commit 완료 → 사용자가 swipe할 틈 없음.
+  /// 이미지/음성 파일 정리와 잠금화면 prefs 정리는 호출자가 transaction 밖에서 처리.
+  /// 리턴값은 push_alarms.folder_id를 NULL로 바꾼 행이 있는지(=재스케줄 필요 여부).
+  Future<bool> deleteFoldersBatch({
+    required List<int> regularFolderIds,
+    required List<int> bundleFolderIds,
+  }) async {
+    if (regularFolderIds.isEmpty && bundleFolderIds.isEmpty) return false;
+    final db = await database;
+    bool pushReschedNeeded = false;
+    await db.transaction((txn) async {
+      // Bundle 폴더: 자식 unset + bundle 삭제 (IN 한 번에)
+      if (bundleFolderIds.isNotEmpty) {
+        final ph = List.filled(bundleFolderIds.length, '?').join(',');
+        await txn.rawUpdate(
+          'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = NULL WHERE parent_folder_id IN ($ph)',
+          bundleFolderIds,
+        );
+        await txn.rawDelete(
+          'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
+          bundleFolderIds,
+        );
+      }
+      // 일반 폴더: cards / folders / push_alarms 단일 statement씩 (IN 한 번에)
+      if (regularFolderIds.isNotEmpty) {
+        final ph = List.filled(regularFolderIds.length, '?').join(',');
+        await txn.rawDelete(
+          'DELETE FROM ${AppConstants.tableCards} WHERE folder_id IN ($ph)',
+          regularFolderIds,
+        );
+        await txn.rawDelete(
+          'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
+          regularFolderIds,
+        );
+        final cleared = await txn.rawUpdate(
+          'UPDATE ${AppConstants.tablePushAlarms} SET folder_id = NULL WHERE folder_id IN ($ph)',
+          regularFolderIds,
+        );
+        if (cleared > 0) pushReschedNeeded = true;
+      }
+    });
+    return pushReschedNeeded;
+  }
+
+  /// 묶음 폴더 생성/편집을 단일 transaction으로 처리. swipe 도중에도 atomic.
+  /// - [bundleId]: null이면 생성 모드, non-null이면 편집 모드
+  /// - [selectedChildIds]: 묶음에 속하게 할 child folder id 집합
+  /// - [oldChildIds]: 편집 모드일 때 이전 child id 집합 (deselected → parent unset)
+  /// 리턴: bundle folder id
+  Future<int> saveBundleFolder({
+    required int? bundleId,
+    required String bundleName,
+    required Set<int> selectedChildIds,
+    Set<int>? oldChildIds,
+  }) async {
+    final db = await database;
+    late int resultId;
+    await db.transaction((txn) async {
+      // 1. bundle row 생성 또는 name update
+      if (bundleId == null) {
+        final maxSeqRow = await txn.rawQuery(
+          'SELECT MAX(sequence) FROM ${AppConstants.tableFolders}');
+        final maxSeq = Sqflite.firstIntValue(maxSeqRow) ?? 0;
+        resultId = await txn.insert(
+          AppConstants.tableFolders,
+          Folder(
+            name: bundleName,
+            isBundle: true,
+            folderCount: 0, // 아래에서 actualLinked로 보정
+            sequence: maxSeq + 1,
+          ).toDb(),
+        );
+      } else {
+        resultId = bundleId;
+        await txn.update(
+          AppConstants.tableFolders,
+          {'name': bundleName},
+          where: 'id = ?',
+          whereArgs: [bundleId],
+        );
+        // 편집 모드: 이전 child 중 deselected 된 것들 parent unset
+        if (oldChildIds != null) {
+          final toUnset = oldChildIds.difference(selectedChildIds).toList();
+          if (toUnset.isNotEmpty) {
+            final ph = List.filled(toUnset.length, '?').join(',');
+            await txn.rawUpdate(
+              'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = NULL WHERE id IN ($ph)',
+              toUnset,
+            );
+          }
+        }
+      }
+
+      // 2. selectedChildIds 중 실제 존재하는 non-bundle 폴더만 parent set
+      int actualLinked = 0;
+      if (selectedChildIds.isNotEmpty) {
+        final ids = selectedChildIds.toList();
+        final ph = List.filled(ids.length, '?').join(',');
+        final existing = await txn.rawQuery(
+          'SELECT id FROM ${AppConstants.tableFolders} WHERE id IN ($ph) AND is_bundle = 0',
+          ids,
+        );
+        actualLinked = existing.length;
+        if (existing.isNotEmpty) {
+          final existingIds = existing.map((r) => r['id'] as int).toList();
+          final eph = List.filled(existingIds.length, '?').join(',');
+          await txn.rawUpdate(
+            'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = ? WHERE id IN ($eph)',
+            [resultId, ...existingIds],
+          );
+        }
+      }
+
+      // 3. bundle의 folder_count 최종 보정
+      await txn.update(
+        AppConstants.tableFolders,
+        {'folder_count': actualLinked},
+        where: 'id = ?',
+        whereArgs: [resultId],
+      );
+    });
+    return resultId;
+  }
+
   Future<void> updateFolderCardCount(int folderId) async {
     final db = await database;
     final count = Sqflite.firstIntValue(await db.rawQuery(
@@ -744,6 +869,16 @@ class DatabaseHelper {
       AppConstants.tableSettings,
       {'key': key, 'value': value},
       conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Settings 테이블: 단일 key 삭제
+  Future<void> deleteSetting(String key) async {
+    final db = await database;
+    await db.delete(
+      AppConstants.tableSettings,
+      where: 'key = ?',
+      whereArgs: [key],
     );
   }
 
@@ -1117,6 +1252,17 @@ class DatabaseHelper {
       AppConstants.tableExportedFiles,
       where: 'id = ?',
       whereArgs: [id],
+    );
+  }
+
+  /// .mra 파일 row 여러개를 단일 transaction으로 삭제 (IN 절).
+  Future<int> deleteExportedFilesBatch(List<int> ids) async {
+    if (ids.isEmpty) return 0;
+    final db = await database;
+    final ph = List.filled(ids.length, '?').join(',');
+    return await db.rawDelete(
+      'DELETE FROM ${AppConstants.tableExportedFiles} WHERE id IN ($ph)',
+      ids,
     );
   }
 

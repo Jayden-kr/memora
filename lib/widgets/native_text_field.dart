@@ -26,7 +26,9 @@ class NativeTextField extends StatefulWidget {
 class NativeTextFieldState extends State<NativeTextField> {
   MethodChannel? _channel;
   String _currentText = '';
-  double _height = 120;
+  /// Native EditText가 측정한 dp 높이로 교체됨.
+  /// 초기값은 native가 응답하기 전 첫 frame 동안만 사용되는 추정치.
+  double _height = 80;
 
   String get text => _currentText;
 
@@ -34,26 +36,27 @@ class NativeTextFieldState extends State<NativeTextField> {
   void initState() {
     super.initState();
     _currentText = widget.initialText;
-    _recalcHeight(_currentText);
+    // 초기 텍스트의 줄 수로 height 추정 — native 응답 전 깜빡임 최소화.
+    // 빈 카드: 1줄(=gulf 같은 짧은 카드도 fit), 긴 답안 카드: N줄.
+    int estimatedLines = 1;
+    if (widget.initialText.isNotEmpty) {
+      final newlineCount = '\n'.allMatches(widget.initialText).length;
+      int wrappedLines = 0;
+      for (final segment in widget.initialText.split('\n')) {
+        // charsPerLine=30 휴리스틱 (한/영 mix 기준 평균)
+        wrappedLines +=
+            segment.isEmpty ? 1 : (segment.length / 30).ceil();
+      }
+      estimatedLines = wrappedLines > 0 ? wrappedLines : (newlineCount + 1);
+    }
+    _height =
+        (widget.fontSize * 1.26 * estimatedLines + 16).clamp(40, 800);
   }
 
   @override
   void dispose() {
     _channel?.setMethodCallHandler(null);
     super.dispose();
-  }
-
-  void _recalcHeight(String text) {
-    final charsPerLine = 30;
-    final newlineCount = '\n'.allMatches(text).length;
-    int wrappedLines = 0;
-    for (final segment in text.split('\n')) {
-      wrappedLines += segment.isEmpty ? 1 : (segment.length / charsPerLine).ceil();
-    }
-    final totalLines = wrappedLines > 0 ? wrappedLines : newlineCount + 1;
-    final contentLines = totalLines < widget.minLines ? widget.minLines : totalLines;
-    final lineHeight = widget.fontSize * 1.4 + 4;
-    _height = (contentLines * lineHeight + 32).clamp(80, 800);
   }
 
   Future<void> clearFocus() async {
@@ -89,15 +92,16 @@ class NativeTextFieldState extends State<NativeTextField> {
         onPlatformViewCreated: (int id) {
           _channel = MethodChannel('com.henry.memora/native_edit_$id');
           _channel!.setMethodCallHandler((call) async {
-            if (call.method == 'onTextChanged') {
-              _currentText = call.arguments as String? ?? '';
-              if (!mounted) return;
-              final oldHeight = _height;
-              _recalcHeight(_currentText);
-              if ((_height - oldHeight).abs() > 1) {
-                setState(() {});
-              }
-              widget.onChanged?.call(_currentText);
+            switch (call.method) {
+              case 'onTextChanged':
+                _currentText = call.arguments as String? ?? '';
+                widget.onChanged?.call(_currentText);
+              case 'onHeightChanged':
+                final dp = (call.arguments as num?)?.toDouble();
+                if (dp == null || !mounted) return;
+                if ((dp - _height).abs() > 0.5) {
+                  setState(() => _height = dp);
+                }
             }
           });
         },

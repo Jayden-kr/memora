@@ -295,11 +295,15 @@ Future<void> _restoreLockScreenService() async {
             ?.map((e) => e as int)
             .toList() ??
         [];
+    final rawSort = settings['sortOrder'];
+    final sortOrder = rawSort is String && rawSort.isNotEmpty
+        ? rawSort
+        : ((settings['randomOrder'] as bool? ?? false) ? 'random' : 'sequence');
     await LockScreenService.startService(
       enabled: true,
       folderIds: folderIds,
       finishedFilter: settings['finishedFilter'] as int? ?? -1,
-      randomOrder: settings['randomOrder'] as bool? ?? true,
+      sortOrder: sortOrder,
       reversed: settings['reversed'] as bool? ?? false,
       bgColor: settings['bgColor'] as int? ?? 0xFF1A1A2E,
     );

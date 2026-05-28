@@ -33,20 +33,25 @@ class NativeEditTextView(
     params: Map<*, *>
 ) : PlatformView {
 
+    private val density: Float = context.resources.displayMetrics.density
+    private var lastReportedHeightDp: Double = -1.0
+    private var heightPostScheduled: Boolean = false
+
     private val editText: EditText = EditText(context).apply {
         val initialText = params["text"] as? String ?: ""
         val hint = params["hint"] as? String ?: ""
-        val minLinesParam = (params["minLines"] as? Number)?.toInt() ?: 3
         val isDark = params["isDark"] as? Boolean ?: false
         val fontSize = (params["fontSize"] as? Number)?.toFloat() ?: 16f
         val accentArgb = (params["accentColor"] as? Number)?.toLong() ?: 0xFFFF6B6B
 
         setText(initialText)
         setHint(hint)
-        setMinLines(minLinesParam)
+        // 카드 내용에 정확히 fit: minLines=1로 두고 lineCount에 따라 자동 wrap
+        setMinLines(1)
         setMaxLines(Integer.MAX_VALUE)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
-        setLineSpacing(0f, 1.4f)
+        // 기존 1.4f에서 10% 축소
+        setLineSpacing(0f, 1.26f)
         setBackgroundColor(Color.TRANSPARENT)
         val pad = (8 * context.resources.displayMetrics.density).toInt()
         setPadding(pad, pad, pad, pad)
@@ -82,14 +87,24 @@ class NativeEditTextView(
 
     private val channel = MethodChannel(messenger, "com.henry.memora/native_edit_$viewId")
 
+    // dispose 시 cleanup하기 위해 reference 보관
+    private val heightReportRunnable = Runnable {
+        heightPostScheduled = false
+        reportHeight()
+    }
+    private val textWatcher = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        override fun afterTextChanged(s: Editable?) {
+            channel.invokeMethod("onTextChanged", s?.toString() ?: "")
+            scheduleHeightReport()
+        }
+    }
+
     init {
-        editText.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                channel.invokeMethod("onTextChanged", s?.toString() ?: "")
-            }
-        })
+        editText.addTextChangedListener(textWatcher)
+        // 첫 layout 직후 초기 height 보고
+        editText.post(heightReportRunnable)
 
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
@@ -111,9 +126,37 @@ class NativeEditTextView(
         }
     }
 
+    /**
+     * 텍스트 변경마다 다음 frame에 한 번만 measure → Dart에 dp 전달.
+     * 중복 schedule 방지를 위해 flag로 coalesce.
+     */
+    private fun scheduleHeightReport() {
+        if (heightPostScheduled) return
+        heightPostScheduled = true
+        editText.post(heightReportRunnable)
+    }
+
+    private fun reportHeight() {
+        val lineHeight = editText.lineHeight
+        if (lineHeight <= 0) return
+        val actualLines = editText.lineCount.coerceAtLeast(1)
+        val px = actualLines * lineHeight + editText.paddingTop + editText.paddingBottom
+        val dp = px.toDouble() / density
+        // 동일 값 재전송 억제 (Dart side filter도 있지만 여기서도 짧게 컷)
+        if (kotlin.math.abs(dp - lastReportedHeightDp) < 0.5) return
+        lastReportedHeightDp = dp
+        try {
+            channel.invokeMethod("onHeightChanged", dp)
+        } catch (_: Throwable) {
+            // dispose 직후 등 — 무시
+        }
+    }
+
     override fun getView(): View = editText
 
     override fun dispose() {
         channel.setMethodCallHandler(null)
+        editText.removeCallbacks(heightReportRunnable)
+        editText.removeTextChangedListener(textWatcher)
     }
 }

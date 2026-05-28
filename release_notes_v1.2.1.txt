@@ -1,0 +1,18 @@
+============================================================
+Play Console — v1.2.1+8 Release Notes
+Production track > Create new release > What's new in this release
+아래 블록 전체를 복사해서 그대로 붙여넣기
+============================================================
+
+<ko-KR>
+- 여러 .memk/.mra 파일을 한 번에 가져올 수 있는 일괄 가져오기 화면을 추가했습니다.
+- 폴더와 카드 일괄 삭제 안정성을 개선했습니다. 삭제 직후 앱을 백그라운드로 전환해도 깔끔하게 정리됩니다.
+- 잠금화면 정렬을 개선했습니다. 이름순은 한글 가나다 순서로 정확하게 정렬되고, 랜덤 정렬은 카드가 같은 위치에 유지됩니다.
+- 카드 편집 시 텍스트 입력칸이 내용 길이에 맞춰 자동으로 조정됩니다.
+</ko-KR>
+<en-US>
+- Added a bulk import screen for selecting multiple .memk/.mra files at once.
+- Improved batch delete reliability so folders and cards are consistently removed even if the app is sent to the background mid-action.
+- Improved lock screen sorting: name-based sort respects device locale (Korean/Japanese collation), and random order keeps each card in the same position across sessions.
+- Card edit text fields now resize to fit content length automatically.
+</en-US>

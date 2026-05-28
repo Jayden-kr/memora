@@ -49,6 +49,8 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   // 다중 선택
   bool _isSelectionMode = false;
   final Set<int> _selectedCardIds = {};
+  // batch action 재진입 차단 (delete/move 중에는 다른 batch action 못 시작하게)
+  bool _isBatchActioning = false;
 
   // 검색
   bool _isSearching = false;
@@ -764,6 +766,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   }
 
   Future<void> _deleteSelected() async {
+    if (_isBatchActioning) return; // 재진입 차단 (delete/move 동시 시작 방지)
     final t = AppLocalizations.of(context);
     final confirm = await showDialog<bool>(
       context: context,
@@ -785,29 +788,40 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     );
     if (confirm != true || !mounted) return;
 
-    // 삭제 전 파일 경로 수집
-    final selectedCards = _cards
-        .where((c) => _selectedCardIds.contains(c.id))
-        .toList();
-    final allFilePaths = <String>[];
-    for (final card in selectedCards) {
-      allFilePaths.addAll(_collectCardFilePaths(card));
-    }
+    _isBatchActioning = true;
+    try {
+      // 삭제 전 파일 경로 수집 (메모리 상의 _cards에서만, 빠름)
+      final selectedCards = _cards
+          .where((c) => _selectedCardIds.contains(c.id))
+          .toList();
+      final allFilePaths = <String>[];
+      for (final card in selectedCards) {
+        allFilePaths.addAll(_collectCardFilePaths(card));
+      }
 
-    // deleteCardsBatch 내부에서 트랜잭션으로 folder card_count 자동 갱신
-    final deletedIds = _selectedCardIds.toList();
-    await DatabaseHelper.instance.deleteCardsBatch(deletedIds);
-    await _deleteFiles(allFilePaths);
-    if (!mounted) return;
-    _exitSelectionMode();
-    if (_searchQuery.isNotEmpty) {
-      await _loadCards();
-    } else {
-      _removeCardsLocally(deletedIds);
+      // ⚡ atomic transaction (folder card_count 자동 갱신 포함). 수백 ms 안에 commit.
+      final deletedIds = _selectedCardIds.toList();
+      await DatabaseHelper.instance.deleteCardsBatch(deletedIds);
+      if (!mounted) return;
+
+      // commit 직후 즉시 UI 정리 — 사용자 시점에선 여기서 끝.
+      _exitSelectionMode();
+      if (_searchQuery.isNotEmpty) {
+        unawaited(_loadCards());
+      } else {
+        _removeCardsLocally(deletedIds);
+      }
+
+      // 🔄 파일 정리는 fire-and-forget. DB는 이미 commit됨 → swipe해도 카드는 영구 사라짐.
+      //    일부 image/voice 파일이 orphan으로 남아도 동작엔 무관.
+      unawaited(_deleteFiles(allFilePaths));
+    } finally {
+      _isBatchActioning = false;
     }
   }
 
   Future<void> _moveSelected() async {
+    if (_isBatchActioning) return; // 재진입 차단
     final t = AppLocalizations.of(context);
     var folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
@@ -850,22 +864,28 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       }
     }
 
-    await DatabaseHelper.instance.moveCardsBatch(idsToMove, target.id!);
-    if (!mounted) return;
-    _exitSelectionMode();
-    if (_searchQuery.isNotEmpty) {
-      await _loadCards();
-    } else if (widget.allCards) {
-      // allCards 모드: 카드는 그대로 표시 — folder 변경은 화면 표시에 영향 없음
-    } else {
-      // 일반 폴더 모드: 다른 폴더로 이동된 카드들을 현재 리스트에서 제거
-      _removeCardsLocally(idsToMove);
-    }
+    _isBatchActioning = true;
+    try {
+      // ⚡ atomic transaction — 800 chunk × 3 stmt, 수백 ms 안에 commit
+      await DatabaseHelper.instance.moveCardsBatch(idsToMove, target.id!);
+      if (!mounted) return;
+      _exitSelectionMode();
+      if (_searchQuery.isNotEmpty) {
+        unawaited(_loadCards());
+      } else if (widget.allCards) {
+        // allCards 모드: 카드는 그대로 표시 — folder 변경은 화면 표시에 영향 없음
+      } else {
+        // 일반 폴더 모드: 다른 폴더로 이동된 카드들을 현재 리스트에서 제거
+        _removeCardsLocally(idsToMove);
+      }
 
-    if (skipped > 0 && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t.cardMoveResult(idsToMove.length, skipped))),
-      );
+      if (skipped > 0 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.cardMoveResult(idsToMove.length, skipped))),
+        );
+      }
+    } finally {
+      _isBatchActioning = false;
     }
   }
 

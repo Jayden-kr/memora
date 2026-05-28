@@ -17,6 +17,7 @@ import 'card_list_screen.dart';
 import 'export_screen.dart';
 import 'file_list_screen.dart';
 import 'import_screen.dart';
+import 'multi_import_screen.dart';
 import 'lock_screen_settings.dart';
 import 'push_notification_settings.dart';
 import 'settings_screen.dart';
@@ -76,6 +77,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   void _onImportExportUpdate() {
     if (!mounted) return;
+    if (_isDeleting) return; // 삭제 중 옵티미스틱 UI 덮어쓰기 방지
     if (!ImportExportController.instance.isRunning &&
         ImportExportController.instance.lastImportResult != null) {
       _loadFolders();
@@ -366,10 +368,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
+        allowMultiple: true,
       );
-      if (result == null || result.files.single.path == null) return;
-      final filePath = result.files.single.path!;
-      if (!filePath.endsWith('.memk') && !filePath.endsWith('.mra')) {
+      if (result == null || result.files.isEmpty) return;
+
+      final validPaths = <String>[];
+      for (final file in result.files) {
+        final p = file.path;
+        if (p == null) continue;
+        if (p.endsWith('.memk') || p.endsWith('.mra')) {
+          validPaths.add(p);
+        }
+      }
+
+      if (validPaths.isEmpty) {
         if (!mounted) return;
         final t = AppLocalizations.of(context);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -377,7 +389,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         );
         return;
       }
-      await _navigateToImport(filePath);
+
+      if (validPaths.length == 1) {
+        await _navigateToImport(validPaths.first);
+      } else {
+        if (!mounted) return;
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MultiImportScreen(filePaths: validPaths),
+          ),
+        );
+        if (mounted) _loadFolders();
+      }
     } catch (e) {
       if (mounted) {
         final t = AppLocalizations.of(context);
@@ -469,6 +493,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _deleteSelectedFolders() async {
+    if (_isDeleting) return; // 재진입 가드 (삭제 아이콘 연타 방지)
     final t = AppLocalizations.of(context);
     final selected =
         _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
@@ -486,6 +511,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (hasBundles) {
       message += t.homeDeleteFolderBundleNote;
     }
+
+    // 다이얼로그 pop 시 didPopNext의 _loadFolders가 옵티미스틱 삭제를
+    // 덮어쓰지 않도록 가드를 showDialog 전에 켠다.
+    _isDeleting = true;
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -505,9 +534,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         ],
       ),
     );
-    if (confirm != true) return;
-
-    _isDeleting = true;
+    if (confirm != true) {
+      _isDeleting = false;
+      return;
+    }
 
     // Optimistic UI update
     setState(() {
@@ -516,78 +546,27 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
 
     try {
-      bool needsPushReschedule = false;
-      for (final folder in selected) {
-        if (folder.isBundle) {
-          await DatabaseHelper.instance.deleteBundleFolder(folder.id!);
-        } else {
-          // 이미지 파일 수집 후 삭제
-          final imagePaths = <String>[];
-          const batchSize = 500;
-          int offset = 0;
-          while (true) {
-            final cards = await DatabaseHelper.instance
-                .getCardsByFolderId(folder.id!,
-                    limit: batchSize, offset: offset);
-            if (cards.isEmpty) break;
-            for (final card in cards) {
-              imagePaths.addAll(card.questionImagePaths);
-              imagePaths.addAll(card.answerImagePaths);
-              for (final p in [
-                card.questionHandImagePath,
-                card.questionHandImagePath2,
-                card.questionHandImagePath3,
-                card.questionHandImagePath4,
-                card.questionHandImagePath5,
-                card.answerHandImagePath,
-                card.answerHandImagePath2,
-                card.answerHandImagePath3,
-                card.answerHandImagePath4,
-                card.answerHandImagePath5,
-                card.questionVoiceRecordPath,
-                card.questionVoiceRecordPath2,
-                card.questionVoiceRecordPath3,
-                card.questionVoiceRecordPath4,
-                card.questionVoiceRecordPath5,
-                card.questionVoiceRecordPath6,
-                card.questionVoiceRecordPath7,
-                card.questionVoiceRecordPath8,
-                card.questionVoiceRecordPath9,
-                card.questionVoiceRecordPath10,
-                card.answerVoiceRecordPath,
-                card.answerVoiceRecordPath2,
-                card.answerVoiceRecordPath3,
-                card.answerVoiceRecordPath4,
-                card.answerVoiceRecordPath5,
-                card.answerVoiceRecordPath6,
-                card.answerVoiceRecordPath7,
-                card.answerVoiceRecordPath8,
-                card.answerVoiceRecordPath9,
-                card.answerVoiceRecordPath10,
-              ]) {
-                if (p != null && p.isNotEmpty) imagePaths.add(p);
-              }
-            }
-            offset += batchSize;
-          }
-          await DatabaseHelper.instance.deleteFolder(folder.id!);
-          // 푸시/잠금화면 dangling 참조 정리
-          final cleared = await DatabaseHelper.instance
-              .clearFolderRefInPushAlarms(folder.id!);
-          if (cleared > 0) needsPushReschedule = true;
-          await LockScreenService.removeFolderFromSettings(folder.id!);
-          for (final path in imagePaths) {
-            try {
-              final f = File(path);
-              if (await f.exists()) await f.delete();
-            } catch (_) {}
-          }
-        }
-      }
-      // 푸시 알림 영향받았으면 한 번만 재스케줄 (folder_id NULL이라 알람 동작 변경됨)
-      if (needsPushReschedule) {
-        await NotificationService.rescheduleAll();
-      }
+      final regularFolders = selected.where((f) => !f.isBundle).toList();
+      final bundleFolders = selected.where((f) => f.isBundle).toList();
+      final regularIds = regularFolders.map((f) => f.id!).toList();
+      final bundleIds = bundleFolders.map((f) => f.id!).toList();
+
+      // ⚡ 즉시 atomic transaction — IN 절 기반 3 statements, 수백 ms 안에 commit.
+      //   이게 commit되는 순간 사용자 시점에선 "다 지워짐" 끝. swipe할 틈 없음.
+      final needsPushReschedule =
+          await DatabaseHelper.instance.deleteFoldersBatch(
+        regularFolderIds: regularIds,
+        bundleFolderIds: bundleIds,
+      );
+
+      // 🔄 사후 비동기 cleanup — fire-and-forget.
+      //   transaction은 이미 commit됨 → 사용자가 swipe해도 폴더는 영구 사라짐.
+      //   image/voice 파일이 일부 남으면 orphan resource (디스크만 차지, 동작엔 무관).
+      //   잠금화면 prefs / push 재스케줄도 한 번에 fire-and-forget.
+      unawaited(_cleanupAfterFolderDelete(
+        regularIds: regularIds,
+        needsPushReschedule: needsPushReschedule,
+      ));
     } catch (e) {
       debugPrint('[HOME] delete selected folders error: $e');
       if (mounted) await _loadFolders(); // 옵티미스틱 UI 롤백
@@ -602,6 +581,24 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     if (!mounted) return;
     await _loadFolders();
+  }
+
+  /// 폴더 삭제 transaction commit 후 사후 정리.
+  /// 모두 idempotent. fire-and-forget이므로 await 안 됨.
+  /// image/voice orphan 파일 정리는 별도 lazy scan job에서 처리 (추후 도입).
+  Future<void> _cleanupAfterFolderDelete({
+    required List<int> regularIds,
+    required bool needsPushReschedule,
+  }) async {
+    try {
+      // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
+      await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
+      if (needsPushReschedule) {
+        await NotificationService.rescheduleAll();
+      }
+    } catch (e) {
+      debugPrint('[HOME] post-delete cleanup error: $e');
+    }
   }
 
   void _exportSelectedFolders() {

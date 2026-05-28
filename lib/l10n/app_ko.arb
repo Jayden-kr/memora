@@ -274,6 +274,49 @@
   "importDoneTime": "소요 시간",
   "importErrorUnknown": "알 수 없는 에러",
   "importErrorBack": "돌아가기",
+
+  "multiImportTitle": "{count}개 파일",
+  "@multiImportTitle": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "multiImportLoading": "파일 분석 중...",
+  "multiImportFolderCardSummary": "폴더 {f} · 카드 {c}",
+  "@multiImportFolderCardSummary": {
+    "placeholders": {
+      "f": { "type": "int" },
+      "c": { "type": "int" }
+    }
+  },
+  "multiImportReadFail": "읽기 실패",
+  "multiImportRowCustomHint": "개별 설정으로 진행",
+  "multiImportHelp": "체크: 새 폴더로 일괄 임포트 · 해제: 개별 설정 화면",
+  "multiImportButtonBatchOnly": "{count}개 일괄 임포트",
+  "@multiImportButtonBatchOnly": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "multiImportButtonMixed": "일괄 {batch} + 개별 {custom} 시작",
+  "@multiImportButtonMixed": {
+    "placeholders": {
+      "batch": { "type": "int" },
+      "custom": { "type": "int" }
+    }
+  },
+  "multiImportButtonCustomOnly": "개별 {count}개 시작",
+  "@multiImportButtonCustomOnly": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "multiImportProgressFile": "파일 {idx}/{total}",
+  "@multiImportProgressFile": {
+    "placeholders": {
+      "idx": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "multiImportDoneTitle": "일괄 임포트 완료",
+  "multiImportContinueCustom": "남은 {count}개 개별 설정",
+  "@multiImportContinueCustom": {
+    "placeholders": { "count": { "type": "int" } }
+  },
   "imageCountSuffix": "{count}장",
   "@imageCountSuffix": {
     "placeholders": {

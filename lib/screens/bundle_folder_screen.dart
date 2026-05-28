@@ -80,91 +80,37 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
       return;
     }
 
+    // 이름 중복 사전 체크 (transaction 밖, UNIQUE constraint도 fallback으로 동작)
+    if (!_isEditing || name != widget.existingBundle!.name) {
+      final existing = await DatabaseHelper.instance.getFolderByName(name);
+      if (existing != null &&
+          (!_isEditing || existing.id != widget.existingBundle!.id)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.homeFolderExists(name))),
+        );
+        return;
+      }
+    }
+
     setState(() => _saving = true);
 
     try {
+      // 편집 모드: 기존 child id 집합 미리 fetch
+      Set<int>? oldChildIds;
       if (_isEditing) {
-        // 이름 변경 시 중복 체크
-        if (name != widget.existingBundle!.name) {
-          final existing = await DatabaseHelper.instance.getFolderByName(name);
-          if (existing != null) {
-            if (!mounted) return;
-            setState(() => _saving = false);
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(t.homeFolderExists(name))),
-            );
-            return;
-          }
-        }
-
-        // 기존 묶음 수정
-        await DatabaseHelper.instance.updateFolder(
-          widget.existingBundle!.copyWith(
-            name: name,
-            folderCount: _selectedFolderIds.length,
-          ),
-        );
-
-        // 기존 하위 폴더 해제
         final oldChildren = await DatabaseHelper.instance
             .getChildFolders(widget.existingBundle!.id!);
-        for (final child in oldChildren) {
-          if (!_selectedFolderIds.contains(child.id)) {
-            await DatabaseHelper.instance
-                .updateFolder(child.copyWith(parentFolderId: null));
-          }
-        }
-
-        // 새 하위 폴더 설정 + 실제 연결 수 카운트 (삭제된 폴더 대응)
-        int actualLinked = 0;
-        for (final folderId in _selectedFolderIds) {
-          final folder = await DatabaseHelper.instance.getFolderById(folderId);
-          if (folder != null) {
-            await DatabaseHelper.instance.updateFolder(
-              folder.copyWith(parentFolderId: widget.existingBundle!.id),
-            );
-            actualLinked++;
-          }
-        }
-        // folderCount를 실제 연결된 수로 보정
-        if (actualLinked != _selectedFolderIds.length) {
-          await DatabaseHelper.instance.updateFolder(
-            widget.existingBundle!.copyWith(
-                name: name, folderCount: actualLinked),
-          );
-        }
-      } else {
-        // 새 묶음 생성
-        final existing = await DatabaseHelper.instance.getFolderByName(name);
-        if (existing != null) {
-          if (!mounted) return;
-          setState(() => _saving = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(t.homeFolderExists(name))),
-          );
-          return;
-        }
-
-        final maxSeq = await DatabaseHelper.instance.getMaxFolderSequence();
-        final bundleFolder = Folder(
-          name: name,
-          isBundle: true,
-          folderCount: _selectedFolderIds.length,
-          sequence: maxSeq + 1,
-        );
-        final bundleId =
-            await DatabaseHelper.instance.insertFolder(bundleFolder);
-
-        // 하위 폴더 설정
-        for (final folderId in _selectedFolderIds) {
-          final folder = await DatabaseHelper.instance.getFolderById(folderId);
-          if (folder != null) {
-            await DatabaseHelper.instance.updateFolder(
-              folder.copyWith(parentFolderId: bundleId),
-            );
-          }
-        }
+        oldChildIds = oldChildren.map((f) => f.id!).toSet();
       }
+
+      // ⚡ 단일 transaction으로 묶음 row + child parent 변경 모두 atomic 처리
+      await DatabaseHelper.instance.saveBundleFolder(
+        bundleId: _isEditing ? widget.existingBundle!.id : null,
+        bundleName: name,
+        selectedChildIds: _selectedFolderIds,
+        oldChildIds: oldChildIds,
+      );
 
       if (!mounted) return;
       Navigator.pop(context);
@@ -180,7 +126,10 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context);
-    return Scaffold(
+    return PopScope(
+      // 저장 중에는 시스템 back gesture 차단 — transaction 도중 빠져나가 잠재적 불일치 방지
+      canPop: !_saving,
+      child: Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? t.bundleEditTitle : t.bundleNewTitle),
         actions: [
@@ -250,6 +199,7 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                 ],
               ),
             ),
+      ),
     );
   }
 }

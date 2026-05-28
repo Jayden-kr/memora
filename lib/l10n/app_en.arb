@@ -162,6 +162,50 @@
   "importDoneTime": "Elapsed",
   "importErrorUnknown": "Unknown error",
   "importErrorBack": "Go back",
+
+  "multiImportTitle": "{count} files",
+  "@multiImportTitle": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "multiImportLoading": "Reading files...",
+  "multiImportFolderCardSummary": "{f} folder(s) · {c} card(s)",
+  "@multiImportFolderCardSummary": {
+    "placeholders": {
+      "f": { "type": "int" },
+      "c": { "type": "int" }
+    }
+  },
+  "multiImportReadFail": "Read failed",
+  "multiImportRowCustomHint": "Custom setup",
+  "multiImportHelp": "Checked: import as new folders · Unchecked: open custom setup",
+  "multiImportButtonBatchOnly": "Import {count} files",
+  "@multiImportButtonBatchOnly": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "multiImportButtonMixed": "Batch {batch} + custom {custom}",
+  "@multiImportButtonMixed": {
+    "placeholders": {
+      "batch": { "type": "int" },
+      "custom": { "type": "int" }
+    }
+  },
+  "multiImportButtonCustomOnly": "Custom {count}",
+  "@multiImportButtonCustomOnly": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "multiImportProgressFile": "File {idx}/{total}",
+  "@multiImportProgressFile": {
+    "placeholders": {
+      "idx": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "multiImportDoneTitle": "Batch import done",
+  "multiImportContinueCustom": "Continue with {count} custom",
+  "@multiImportContinueCustom": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+
   "imageCountSuffix": "{count}",
   "durationMinSec": "{m}m {s}s",
   "durationSec": "{s}s",

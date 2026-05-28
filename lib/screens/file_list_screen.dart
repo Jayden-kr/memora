@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,7 @@ class _FileListScreenState extends State<FileListScreen> {
 
   final Set<int> _selectedIds = {};
   bool get _isSelecting => _selectedIds.isNotEmpty;
+  bool _isDeleting = false; // batch delete 재진입 차단
 
   @override
   void initState() {
@@ -384,6 +386,7 @@ class _FileListScreenState extends State<FileListScreen> {
       _files.where((f) => _selectedIds.contains(f['id'] as int)).toList();
 
   Future<void> _deleteSelected() async {
+    if (_isDeleting) return; // 재진입 차단
     final t = AppLocalizations.of(context);
     final selected = _selectedFiles;
     final confirm = await showDialog<bool>(
@@ -406,21 +409,29 @@ class _FileListScreenState extends State<FileListScreen> {
     );
     if (confirm != true) return;
 
-    for (final file in selected) {
+    _isDeleting = true;
+    try {
+      // ⚡ DB는 단일 transaction으로 batch delete (수십~수백 ms)
+      final ids = selected.map((f) => f['id'] as int).toList();
+      await DatabaseHelper.instance.deleteExportedFilesBatch(ids);
       if (!mounted) return;
-      try {
+
+      // commit 직후 UI 즉시 정리
+      setState(() {
+        _files.removeWhere((f) => ids.contains(f['id'] as int));
+        _selectedIds.clear();
+      });
+
+      // 🔄 .mra 파일 시스템 삭제는 fire-and-forget. DB는 이미 commit.
+      for (final file in selected) {
         final filePath = file['file_path'] as String?;
         if (filePath != null) {
-          final f = File(filePath);
-          if (await f.exists()) await f.delete();
+          File(filePath).delete().ignore();
         }
-      } catch (_) {}
-      await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
+      }
+    } finally {
+      _isDeleting = false;
     }
-
-    if (!mounted) return;
-    setState(() => _selectedIds.clear());
-    await _loadFiles();
   }
 
   Future<void> _shareSelected() async {

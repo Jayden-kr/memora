@@ -21,11 +21,19 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   List<Folder> _folders = [];
   Set<int> _selectedFolderIds = {};
   int _finishedFilter = -1; // -1=전체, 0=암기중, 1=완료
-  bool _randomOrder = true;
+  String _sortOrder = 'sequence'; // sequence | newest | oldest | name_asc | random
   bool _reversed = false;
   int _bgColor = 0xFF1A1A2E;
   bool _loading = true;
   bool _checkingOverlay = false;
+
+  static const _sortOptions = <String>[
+    'sequence',
+    'newest',
+    'oldest',
+    'name_asc',
+    'random',
+  ];
 
   static const List<int> _bgColorPresets = [
     0xFF1A1A2E,
@@ -77,7 +85,14 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             .toSet();
       }
       _finishedFilter = settings['finishedFilter'] as int? ?? -1;
-      _randomOrder = settings['randomOrder'] as bool? ?? true;
+      final rawSort = settings['sortOrder'];
+      if (rawSort is String && _sortOptions.contains(rawSort)) {
+        _sortOrder = rawSort;
+      } else {
+        // 구버전 prefs(random_order bool) 호환
+        final legacyRandom = settings['randomOrder'] as bool? ?? false;
+        _sortOrder = legacyRandom ? 'random' : 'sequence';
+      }
       _reversed = settings['reversed'] as bool? ?? false;
       _bgColor = settings['bgColor'] as int? ?? 0xFF1A1A2E;
       _loading = false;
@@ -135,7 +150,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         enabled: true,
         folderIds: _selectedFolderIds.toList(),
         finishedFilter: _finishedFilter,
-        randomOrder: _randomOrder,
+        sortOrder: _sortOrder,
         reversed: _reversed,
         bgColor: _bgColor,
       );
@@ -145,7 +160,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         enabled: false,
         folderIds: _selectedFolderIds.toList(),
         finishedFilter: _finishedFilter,
-        randomOrder: _randomOrder,
+        sortOrder: _sortOrder,
         reversed: _reversed,
         bgColor: _bgColor,
       );
@@ -172,6 +187,22 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       await _checkOverlayAndStart();
     } else {
       await _applySettings();
+    }
+  }
+
+  String _sortLabel(AppLocalizations t, String opt) {
+    switch (opt) {
+      case 'newest':
+        return t.cardListSortNewest;
+      case 'oldest':
+        return t.cardListSortOldest;
+      case 'name_asc':
+        return t.cardListSortName;
+      case 'random':
+        return t.cardListSortRandom;
+      case 'sequence':
+      default:
+        return t.cardListSortDefault;
     }
   }
 
@@ -252,26 +283,18 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Wrap(
               spacing: 8,
-              children: [
-                ChoiceChip(
-                  label: Text(t.lockOrderSequential),
-                  selected: !_randomOrder,
+              runSpacing: 4,
+              children: _sortOptions.map((opt) {
+                return ChoiceChip(
+                  label: Text(_sortLabel(t, opt)),
+                  selected: _sortOrder == opt,
                   onSelected: (s) {
                     if (!s) return;
-                    setState(() => _randomOrder = false);
+                    setState(() => _sortOrder = opt);
                     _onSettingChanged();
                   },
-                ),
-                ChoiceChip(
-                  label: Text(t.lockOrderRandom),
-                  selected: _randomOrder,
-                  onSelected: (s) {
-                    if (!s) return;
-                    setState(() => _randomOrder = true);
-                    _onSettingChanged();
-                  },
-                ),
-              ],
+                );
+              }).toList(),
             ),
           ),
           const Divider(),

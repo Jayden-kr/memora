@@ -9,7 +9,7 @@ class LockScreenService {
     required bool enabled,
     required List<int> folderIds,
     int finishedFilter = -1,
-    bool randomOrder = true,
+    String sortOrder = 'sequence',
     bool reversed = false,
     int bgColor = 0xFF1A1A2E,
   }) async {
@@ -18,7 +18,7 @@ class LockScreenService {
         'enabled': enabled,
         'folderIds': folderIds,
         'finishedFilter': finishedFilter,
-        'randomOrder': randomOrder,
+        'sortOrder': sortOrder,
         'reversed': reversed,
         'bgColor': bgColor,
       });
@@ -41,7 +41,7 @@ class LockScreenService {
     required bool enabled,
     required List<int> folderIds,
     int finishedFilter = -1,
-    bool randomOrder = true,
+    String sortOrder = 'sequence',
     bool reversed = false,
     int bgColor = 0xFF1A1A2E,
   }) async {
@@ -50,7 +50,7 @@ class LockScreenService {
         'enabled': enabled,
         'folderIds': folderIds,
         'finishedFilter': finishedFilter,
-        'randomOrder': randomOrder,
+        'sortOrder': sortOrder,
         'reversed': reversed,
         'bgColor': bgColor,
       });
@@ -122,7 +122,7 @@ class LockScreenService {
       final newFolderIds = folderIds.where((id) => id != folderId).toList();
       final enabled = settings['enabled'] as bool? ?? false;
       final finishedFilter = (settings['finishedFilter'] as num?)?.toInt() ?? -1;
-      final randomOrder = settings['randomOrder'] as bool? ?? true;
+      final sortOrder = settings['sortOrder'] as String? ?? 'sequence';
       final reversed = settings['reversed'] as bool? ?? false;
       final bgColor =
           (settings['bgColor'] as num?)?.toInt() ?? 0xFF1A1A2E;
@@ -135,7 +135,7 @@ class LockScreenService {
           enabled: false,
           folderIds: const [],
           finishedFilter: finishedFilter,
-          randomOrder: randomOrder,
+          sortOrder: sortOrder,
           reversed: reversed,
           bgColor: bgColor,
         );
@@ -144,7 +144,7 @@ class LockScreenService {
           enabled: enabled,
           folderIds: newFolderIds,
           finishedFilter: finishedFilter,
-          randomOrder: randomOrder,
+          sortOrder: sortOrder,
           reversed: reversed,
           bgColor: bgColor,
         );
@@ -153,13 +153,81 @@ class LockScreenService {
           enabled: enabled,
           folderIds: newFolderIds,
           finishedFilter: finishedFilter,
-          randomOrder: randomOrder,
+          sortOrder: sortOrder,
           reversed: reversed,
           bgColor: bgColor,
         );
       }
     } catch (e) {
       debugPrint('[LockScreenService] removeFolderFromSettings error: $e');
+    }
+  }
+
+  /// 여러 폴더 ID를 잠금화면 설정의 folderIds에서 한 번에 제거.
+  /// settings read 1회 + write 1회로 N회 호출 대비 SharedPreferences I/O 최소화.
+  static Future<void> removeFoldersFromSettingsBatch(
+      List<int> folderIdsToRemove) async {
+    if (folderIdsToRemove.isEmpty) return;
+    try {
+      final settings = await getSettings();
+      final rawIds = settings['folderIds'];
+      final folderIds = <int>[];
+      if (rawIds is List) {
+        for (final v in rawIds) {
+          if (v is int) {
+            folderIds.add(v);
+          } else if (v != null) {
+            final parsed = int.tryParse(v.toString());
+            if (parsed != null) folderIds.add(parsed);
+          }
+        }
+      }
+      final removeSet = folderIdsToRemove.toSet();
+      final newFolderIds =
+          folderIds.where((id) => !removeSet.contains(id)).toList();
+      if (newFolderIds.length == folderIds.length) return; // 변경 없음
+
+      final enabled = settings['enabled'] as bool? ?? false;
+      final finishedFilter = (settings['finishedFilter'] as num?)?.toInt() ?? -1;
+      final sortOrder = settings['sortOrder'] as String? ?? 'sequence';
+      final reversed = settings['reversed'] as bool? ?? false;
+      final bgColor =
+          (settings['bgColor'] as num?)?.toInt() ?? 0xFF1A1A2E;
+
+      final running = await isRunning();
+
+      if (newFolderIds.isEmpty) {
+        if (running) await stopService();
+        await saveSettings(
+          enabled: false,
+          folderIds: const [],
+          finishedFilter: finishedFilter,
+          sortOrder: sortOrder,
+          reversed: reversed,
+          bgColor: bgColor,
+        );
+      } else if (running && enabled) {
+        await startService(
+          enabled: enabled,
+          folderIds: newFolderIds,
+          finishedFilter: finishedFilter,
+          sortOrder: sortOrder,
+          reversed: reversed,
+          bgColor: bgColor,
+        );
+      } else {
+        await saveSettings(
+          enabled: enabled,
+          folderIds: newFolderIds,
+          finishedFilter: finishedFilter,
+          sortOrder: sortOrder,
+          reversed: reversed,
+          bgColor: bgColor,
+        );
+      }
+    } catch (e) {
+      debugPrint(
+          '[LockScreenService] removeFoldersFromSettingsBatch error: $e');
     }
   }
 }

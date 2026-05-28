@@ -61,9 +61,12 @@ class LockScreenService : Service() {
     // 설정
     private var folderIds: List<Int> = emptyList()
     private var finishedFilter: Int = -1
-    private var randomOrder: Boolean = true
+    private var sortOrder: String = "sequence"
     private var reversed: Boolean = false
     private var bgColor: Int = 0xFF1A1A2E.toInt()
+    // 영구 stable한 random seed — prefs 저장으로 service 재시작에도 유지.
+    // loadSettings에서 prefs 읽기, 없으면 새로 생성 + 저장.
+    private var randomSeed: Long = 0L
 
     // Coral Orange 테마 색상
     private val coralPrimary = Color.parseColor("#FF6B6B")
@@ -274,10 +277,26 @@ class LockScreenService : Service() {
             ?.mapNotNull { it.toIntOrNull() }
             ?: emptyList()
         finishedFilter = prefs.getInt("finished_filter", -1)
-        randomOrder = prefs.getBoolean("random_order", true)
+        sortOrder = prefs.getString("sort_order", null) ?: run {
+            // 구버전 prefs(random_order bool) 호환
+            if (prefs.contains("random_order")) {
+                if (prefs.getBoolean("random_order", false)) "random" else "sequence"
+            } else {
+                "sequence"
+            }
+        }
         reversed = prefs.getBoolean("reversed", false)
         bgColor = prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
-        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, bg=$bgColor")
+        // random seed: prefs에 있으면 재사용, 없으면 새로 생성 + 저장 (영구 stable)
+        val savedSeed = prefs.getLong("random_seed", 0L)
+        randomSeed = if (savedSeed != 0L) {
+            savedSeed
+        } else {
+            val newSeed = System.currentTimeMillis()
+            prefs.edit().putLong("random_seed", newSeed).apply()
+            newSeed
+        }
+        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, sort=$sortOrder, bg=$bgColor, randomSeed=$randomSeed")
     }
 
     /**
@@ -328,11 +347,15 @@ class LockScreenService : Service() {
             val where = if (whereParts.isNotEmpty()) whereParts.joinToString(" AND ") else null
             val args = if (whereArgs.isNotEmpty()) whereArgs.toTypedArray() else null
 
+            // DB ORDER BY는 sequence 기준 일관 fetch — 정렬/reversed/random은 kotlin 측에서 후처리
+            // (NO_LOCALIZED_COLLATORS 환경에서 SQLite byte-order ASC가 한글에서 의도와 다름)
+            val orderBy = "sequence ASC"
+
             val result = mutableListOf<CardData>()
-            val columns = arrayOf("id", "folder_id", "question", "answer", "finished",
+            val columns = arrayOf("id", "folder_id", "question", "answer", "finished", "sequence",
                 "question_image_path", "question_image_path_2", "question_image_path_3", "question_image_path_4", "question_image_path_5",
                 "answer_image_path", "answer_image_path_2", "answer_image_path_3", "answer_image_path_4", "answer_image_path_5")
-            db.query("cards", columns, where, args, null, null, "sequence ASC").use { cursor ->
+            db.query("cards", columns, where, args, null, null, orderBy).use { cursor ->
                 while (cursor.moveToNext()) {
                     val qImages = mutableListOf<String>()
                     val aImages = mutableListOf<String>()
@@ -355,8 +378,22 @@ class LockScreenService : Service() {
                     ))
                 }
             }
-            cards = if (randomOrder) result.shuffled() else result
-            Log.d(TAG, "Loaded ${cards.size} cards from DB")
+            // kotlin 측 정렬 — name_asc는 Korean Collator, random은 fixed seed로 stable
+            val sorted: List<CardData> = when (sortOrder) {
+                "newest" -> result.sortedByDescending { it.id }
+                "oldest" -> result.sortedBy { it.id }
+                "name_asc" -> {
+                    // device locale 기반 Collator — 한국어/영어/일본어 모두 해당 언어 규칙으로 정렬
+                    val collator = java.text.Collator.getInstance(java.util.Locale.getDefault()).apply {
+                        strength = java.text.Collator.SECONDARY // 대소문자 무시
+                    }
+                    result.sortedWith(compareBy(collator) { it.question })
+                }
+                "random" -> result.shuffled(java.util.Random(randomSeed))
+                else -> result // sequence ASC는 DB query에서 이미 적용됨
+            }
+            cards = if (reversed) sorted.reversed() else sorted
+            Log.d(TAG, "Loaded ${cards.size} cards from DB (sort=$sortOrder, reversed=$reversed)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load cards", e)
             cards = emptyList()
