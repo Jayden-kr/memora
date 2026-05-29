@@ -12,9 +12,9 @@ Production track > Create new release > What's new in this release
 - 카드 편집 시 텍스트 입력칸이 내용 길이에 맞춰 자동으로 조정됩니다.
 </ko-KR>
 <en-US>
-- Added a bulk import screen for selecting multiple .memk/.mra files at once.
-- Improved batch delete reliability so folders and cards are consistently removed even if the app is sent to the background mid-action.
-- Lock screen name sorting now respects your device language (Korean, Japanese, etc.).
-- Lock screen random order now shows a fresh card every time you wake the screen, fixing an issue where the same card kept appearing. (Other orders — sequential, by name, and so on — also advance to the next card on each wake.)
-- Card edit text fields now resize to fit content length automatically.
+- Bulk import: pick multiple .memk/.mra files at once.
+- More reliable batch delete for folders and cards.
+- Lock screen "by name" sort now follows your device language.
+- Lock screen random now shows a fresh card each time you wake the screen (other sort orders advance too).
+- Card edit fields auto-resize to fit your text.
 </en-US>
