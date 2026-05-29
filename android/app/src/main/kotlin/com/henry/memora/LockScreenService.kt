@@ -64,9 +64,6 @@ class LockScreenService : Service() {
     private var sortOrder: String = "sequence"
     private var reversed: Boolean = false
     private var bgColor: Int = 0xFF1A1A2E.toInt()
-    // 영구 stable한 random seed — prefs 저장으로 service 재시작에도 유지.
-    // loadSettings에서 prefs 읽기, 없으면 새로 생성 + 저장.
-    private var randomSeed: Long = 0L
 
     // Coral Orange 테마 색상
     private val coralPrimary = Color.parseColor("#FF6B6B")
@@ -287,16 +284,13 @@ class LockScreenService : Service() {
         }
         reversed = prefs.getBoolean("reversed", false)
         bgColor = prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
-        // random seed: prefs에 있으면 재사용, 없으면 새로 생성 + 저장 (영구 stable)
-        val savedSeed = prefs.getLong("random_seed", 0L)
-        randomSeed = if (savedSeed != 0L) {
-            savedSeed
-        } else {
-            val newSeed = System.currentTimeMillis()
-            prefs.edit().putLong("random_seed", newSeed).apply()
-            newSeed
+        // 과거 버전이 prefs에 박아둔 고정 random_seed를 제거한다. 이 값이 남아 있으면
+        // 매번 동일한 순열로 셔플돼 "랜덤인데 항상 같은 카드"가 떴다(이번 버그의 핵심 원인).
+        // 이제 랜덤은 잠금마다 새로 섞고(loadCardsFromDb), 글랜스마다 다음 카드로 넘긴다(advanceCard).
+        if (prefs.contains("random_seed")) {
+            prefs.edit().remove("random_seed").apply()
         }
-        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, sort=$sortOrder, bg=$bgColor, randomSeed=$randomSeed")
+        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, sort=$sortOrder, bg=$bgColor")
     }
 
     /**
@@ -378,7 +372,7 @@ class LockScreenService : Service() {
                     ))
                 }
             }
-            // kotlin 측 정렬 — name_asc는 Korean Collator, random은 fixed seed로 stable
+            // kotlin 측 정렬 — name_asc는 locale Collator, random은 잠금마다 새로 셔플(고정 seed 폐기)
             val sorted: List<CardData> = when (sortOrder) {
                 "newest" -> result.sortedByDescending { it.id }
                 "oldest" -> result.sortedBy { it.id }
@@ -389,7 +383,7 @@ class LockScreenService : Service() {
                     }
                     result.sortedWith(compareBy(collator) { it.question })
                 }
-                "random" -> result.shuffled(java.util.Random(randomSeed))
+                "random" -> result.shuffled()
                 else -> result // sequence ASC는 DB query에서 이미 적용됨
             }
             cards = if (reversed) sorted.reversed() else sorted
@@ -399,6 +393,40 @@ class LockScreenService : Service() {
             cards = emptyList()
         } finally {
             db?.close()
+        }
+    }
+
+    /**
+     * 화면을 껐다 켤 때마다 다음 카드로 진행시킨다.
+     * - 랜덤: 이미 섞인 덱을 한 칸 진행. 덱을 다 돌면 재셔플하고,
+     *   재셔플 직후 맨 앞이 직전에 본 카드면 맨 뒤와 교환해 즉시 반복을 막는다.
+     * - 그 외 정렬(sequence/newest/oldest/name_asc, reversed 포함): 다음 인덱스로(끝이면 처음).
+     * 카드가 0~1장이면 0번을 유지한다.
+     */
+    private fun advanceCard() {
+        synchronized(this) {
+            val list = cards
+            val size = list.size
+            if (size <= 1) {
+                currentIndex = 0
+                return
+            }
+            if (sortOrder == "random") {
+                currentIndex++
+                if (currentIndex >= size) {
+                    val lastId = list[size - 1].id
+                    val reshuffled = list.shuffled().toMutableList()
+                    if (reshuffled[0].id == lastId) {
+                        val tmp = reshuffled[0]
+                        reshuffled[0] = reshuffled[size - 1]
+                        reshuffled[size - 1] = tmp
+                    }
+                    cards = reshuffled
+                    currentIndex = 0
+                }
+            } else {
+                currentIndex = (currentIndex + 1) % size
+            }
         }
     }
 
@@ -416,12 +444,27 @@ class LockScreenService : Service() {
             Log.w(TAG, "No overlay permission")
             return
         }
+
+        // 설정을 매번 다시 읽어 정렬 방식 변경을 즉시 반영
+        loadSettings()
+
+        // 이미 오버레이가 떠 있는 경우 = 화면을 껐다 켜는 "글랜스"가 반복되는 상황.
+        // 예전엔 여기서 그냥 return 해서 카드가 첫 1장에 고정됐다(어떤 정렬이든 동일 증상).
+        // → 오버레이를 재생성하지 않고 "다음 카드"로 진행시킨다. 화면이 꺼진 동안
+        //   갱신하므로 다시 켜면 새 카드가 보인다.
         if (overlayView != null) {
-            Log.d(TAG, "Overlay already showing, skip")
+            mainHandler.post {
+                if (!isServiceActive || overlayView == null) return@post
+                if (cards.isEmpty()) return@post
+                advanceCard()
+                try {
+                    updateCardDisplay()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to advance card display", e)
+                }
+            }
             return
         }
-
-        loadSettings()
 
         // DB 쿼리를 백그라운드 스레드에서 실행하여 ANR 방지
         ensureBgThread()
@@ -732,6 +775,7 @@ class LockScreenService : Service() {
         }
 
         val card = localCards[currentIndex]
+        Log.d(TAG, "Display card: index=$currentIndex/${localCards.size} id=${card.id} sort=$sortOrder")
 
         // reversed 모드: 질문/답 순서 바꿈
         val qText: String; val aText: String
