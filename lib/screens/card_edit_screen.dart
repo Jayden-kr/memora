@@ -559,7 +559,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
             // 폴더 선택 드롭다운
             if (_folders.isNotEmpty)
               DropdownButtonFormField<int>(
-                value: _folders.any((f) => f.id == _currentFolderId)
+                initialValue: _folders.any((f) => f.id == _currentFolderId)
                     ? _currentFolderId
                     : null,
                 decoration: InputDecoration(

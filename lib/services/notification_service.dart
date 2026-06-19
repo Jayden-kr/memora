@@ -147,11 +147,12 @@ class NotificationService {
         importance: Importance.high,
         priority: Priority.high,
         icon: '@drawable/ic_notification',
+        autoCancel: false,
       ),
     );
 
     try {
-      await _plugin.show(99999, 'Memora', body, notificationDetails,
+      await _plugin.show(99999, null, body, notificationDetails,
           payload: payload);
     } catch (e) {
       debugPrint('[NOTIF] 테스트 알림 표시 실패: $e');

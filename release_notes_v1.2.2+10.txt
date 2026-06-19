@@ -1,0 +1,14 @@
+============================================================
+Play Console — v1.2.2+10 Release Notes
+Production track > Create new release > What's new in this release
+아래 블록 전체를 복사해서 그대로 붙여넣기
+============================================================
+
+<ko-KR>
+- 카드 푸시 알림에서 앱 이름(Memora) 표시를 제거했습니다.
+- 푸시 알림을 탭해도 사라지지 않습니다. 스와이프로만 직접 제거할 수 있습니다.
+</ko-KR>
+<en-US>
+- Removed app name (Memora) from card push notifications.
+- Notifications no longer dismiss on tap — swipe to remove them manually.
+</en-US>
