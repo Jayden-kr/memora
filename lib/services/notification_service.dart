@@ -147,7 +147,7 @@ class NotificationService {
         importance: Importance.high,
         priority: Priority.high,
         icon: '@drawable/ic_notification',
-        autoCancel: false,
+        autoCancel: true,
       ),
     );
 

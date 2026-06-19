@@ -416,7 +416,7 @@ class PushNotificationService : Service() {
             val builder = NotificationCompat.Builder(this, "review_notification_channel")
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentText(question)
-                .setAutoCancel(false)
+                .setAutoCancel(true)
                 .setContentIntent(pi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
