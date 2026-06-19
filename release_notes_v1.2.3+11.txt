@@ -1,0 +1,7 @@
+<ko-KR>
+푸시 알림을 탭하면 알림이 자동으로 사라집니다.
+</ko-KR>
+
+<en-US>
+Push notification now dismisses automatically when tapped.
+</en-US>
