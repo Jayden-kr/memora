@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 음성 녹음 (카드 음성 첨부) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- RECORD_AUDIO는 Play가 마이크를 '필수'로 간주해 마이크 없는 기기를 배제한다.
+         녹음은 선택 기능(파일 첨부·재생·나머지는 마이크 없이 동작)이므로 required=false로
+         명시해 그 기기들의 설치/업데이트를 유지한다. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <!-- 정확한 알림 스케줄링 -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- USE_EXACT_ALARM 제거: 알람 앱이 아니므로 Play Store 정책 위반 가능 -->

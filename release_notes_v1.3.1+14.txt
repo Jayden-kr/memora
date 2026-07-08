@@ -1,5 +1,5 @@
 ============================================================
-Play Console — v1.3.1+13 Release Notes
+Play Console — v1.3.1+14 Release Notes
 Production track > Create new release > What's new in this release
 아래 블록 전체를 복사해서 그대로 붙여넣기
 ============================================================
