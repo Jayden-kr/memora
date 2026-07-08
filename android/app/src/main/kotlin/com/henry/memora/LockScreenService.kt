@@ -813,14 +813,12 @@ class LockScreenService : Service() {
 
         // Question 섹션
         root.findViewWithTag<TextView>("labelText")?.text = qLabel
-        root.findViewWithTag<TextView>("mainText")?.text =
-            if (qText.isEmpty()) "(내용 없음)" else qText
+        root.findViewWithTag<TextView>("mainText")?.text = qText
         loadImages(root.findViewWithTag("imageContainer"), qImages)
 
         // Answer 섹션
         root.findViewWithTag<TextView>("answerLabel")?.text = aLabel
-        root.findViewWithTag<TextView>("answerText")?.text =
-            if (aText.isEmpty()) "(내용 없음)" else aText
+        root.findViewWithTag<TextView>("answerText")?.text = aText
         loadImages(root.findViewWithTag("answerImageContainer"), aImages)
     }
 

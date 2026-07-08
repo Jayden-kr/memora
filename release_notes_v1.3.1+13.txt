@@ -1,0 +1,20 @@
+============================================================
+Play Console — v1.3.1+13 Release Notes
+Production track > Create new release > What's new in this release
+아래 블록 전체를 복사해서 그대로 붙여넣기
+============================================================
+
+<ko-KR>
+- 카드에 음성을 녹음하거나 오디오 파일을 첨부하고, 편집·학습 화면에서 재생할 수 있습니다.
+- 카드 편집 중 뒤로가기를 눌렀을 때 입력한 내용이 확인 없이 사라지던 문제를 수정했습니다.
+- 알림을 끈 뒤에도 간격 알림이 계속 오던 문제와, '전체 폴더' 선택이 반영되지 않던 문제를 수정했습니다.
+- 잠금화면에서 앞면(질문) 이미지가 표시되지 않던 문제를 수정했습니다.
+- 내용이 비어 있는 카드에서 앱 화면과 잠금화면 모두 '(내용 없음)' 표시 없이 그대로 비워 두도록 변경했습니다.
+</ko-KR>
+<en-US>
+- Record a voice memo or attach an audio file to a card, and play it back on the edit and study screens.
+- Fixed unsaved text being lost without confirmation when leaving the card edit screen.
+- Fixed interval notifications that kept arriving after being turned off, and the "All folders" option not being applied.
+- Fixed the front (question) image not appearing on the lock screen.
+- Empty cards no longer show an "(empty)" placeholder anywhere, including the lock screen.
+</en-US>
