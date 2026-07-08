@@ -14,7 +14,6 @@ import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.*
 import androidx.core.app.NotificationCompat
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -845,10 +844,19 @@ class LockScreenService : Service() {
         }
     }
 
-    private val imageLoadGeneration = AtomicInteger(0)
+    // 컨테이너별 세대 토큰. 예전엔 단일 카운터를 질문/답 컨테이너가 공유해서, 답 컨테이너의
+    // loadImages 호출이 세대를 증가시켜 질문 컨테이너의 백그라운드 콜백을 항상 무효화했다 →
+    // 질문 이미지가 결코 표시되지 않음(#4). 컨테이너 아이덴티티로 세대를 분리한다. 모든 접근은
+    // 메인 스레드(뷰 조작)이며, 오버레이 재생성 시 죽은 컨테이너가 새지 않도록 WeakHashMap 사용.
+    private val imageLoadGenerations = java.util.WeakHashMap<LinearLayout, Int>()
 
     private fun loadImages(container: LinearLayout?, images: List<String>) {
-        val generation = imageLoadGeneration.incrementAndGet() // 세대 토큰으로 구 콜백 무효화
+        // 이 컨테이너만의 세대 토큰을 증가시켜 캡처 (다른 컨테이너의 세대는 건드리지 않음)
+        val generation = if (container != null) {
+            val g = (imageLoadGenerations[container] ?: 0) + 1
+            imageLoadGenerations[container] = g
+            g
+        } else 0
         // 이전 Bitmap을 drawable 해제 후 다음 프레임에서 recycle (draw pipeline 완료 보장)
         container?.let { c ->
             val oldBitmaps = mutableListOf<Bitmap>()
@@ -910,7 +918,7 @@ class LockScreenService : Service() {
             // 메인 스레드에서 ImageView에 세팅
             mainHandler.post {
                 // 세대 불일치 (새 loadImages 호출됨) 또는 서비스 파괴 시: bitmap 정리
-                if (generation != imageLoadGeneration.get() || !isServiceActive || container.parent == null) {
+                if (generation != imageLoadGenerations[container] || !isServiceActive || container.parent == null) {
                     bitmaps.forEach { if (!it.isRecycled) it.recycle() }
                     return@post
                 }

@@ -512,5 +512,24 @@
   "cardTileMenuEdit": "편집",
   "cardTileMenuDuplicate": "복제",
   "cardTileMenuMove": "다른 폴더로 이동",
-  "imageNotFound": "이미지를 찾을 수 없습니다"
+  "imageNotFound": "이미지를 찾을 수 없습니다",
+  "cardAudioSection": "음성",
+  "cardAudioRecord": "녹음",
+  "cardAudioStop": "정지",
+  "cardAudioAttach": "파일 첨부",
+  "cardAudioDelete": "음성 삭제",
+  "cardAudioRecording": "녹음 중",
+  "cardAudioPermissionDenied": "마이크 권한이 필요합니다",
+  "cardAudioRecordFail": "녹음 실패: {error}",
+  "@cardAudioRecordFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "cardAudioAttachFail": "파일 첨부 실패: {error}",
+  "@cardAudioAttachFail": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  }
 }

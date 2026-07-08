@@ -61,3 +61,8 @@ app.*.map.json
 # Build outputs at project root
 /app-release.aab
 /app-debug.apk
+
+# 릴리즈 서명키 (절대 커밋 금지)
+key.properties
+*.jks
+*.keystore

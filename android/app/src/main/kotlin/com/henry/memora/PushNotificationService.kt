@@ -59,6 +59,21 @@ class PushNotificationService : Service() {
 
         if (intent?.action == ACTION_STOP) {
             Log.d(TAG, "STOP 수신 — 서비스 종료")
+            // stopService는 startForegroundService(ACTION_STOP)로 호출되므로, 서비스가
+            // 미실행 상태였다면 여기서 콜드스타트된다. 그 경우 startForeground를 먼저 호출하지
+            // 않으면 ForegroundServiceDidNotStartInTimeException으로 크래시한다(TICK 분기와 동일
+            // 이유). 아래에서 곧바로 stopForeground로 제거하므로 알림은 사용자에게 보이지 않는다.
+            createNotificationChannel()
+            try {
+                val notification = createServiceNotification()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(SERVICE_NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                } else {
+                    startForeground(SERVICE_NOTIF_ID, notification)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "STOP startForeground 실패", e)
+            }
             // AlarmManager PendingIntent 취소 (tick + restart)
             cancelTickAlarm()
             cancelRestartAlarm()
@@ -122,8 +137,15 @@ class PushNotificationService : Service() {
         intervalMin = maxOf(5, intent?.getIntExtra("intervalMin", prefs.getInt("intervalMin", 30)) ?: prefs.getInt("intervalMin", 30))
         startTotal = intent?.getIntExtra("startTotal", prefs.getInt("startTotal", 540)) ?: prefs.getInt("startTotal", 540)
         endTotal = intent?.getIntExtra("endTotal", prefs.getInt("endTotal", 1320)) ?: prefs.getInt("endTotal", 1320)
-        folderId = intent?.getIntExtra("folderId", prefs.getInt("folderId", -1))?.let { if (it == -1) null else it }
-            ?: prefs.getInt("folderId", -1).let { if (it == -1) null else it }
+        // -1은 '전체 폴더'를 의미한다. 예전 코드는 intent의 -1을 .let으로 null로 바꾼 뒤
+        // 엘비스(?:)가 그 null을 '값 없음'으로 오해해 prefs의 이전 폴더로 폴백했다 → '특정 폴더
+        // → 전체 폴더' 전환이 무시되고 이전 필터가 영구 고착됐다(#2). intent가 folderId를
+        // 명시적으로 넘겼는지를 hasExtra로 판별해, 넘겼으면 prefs 폴백 없이 그 값(-1→null=전체)을 쓴다.
+        folderId = if (intent != null && intent.hasExtra("folderId")) {
+            intent.getIntExtra("folderId", -1).let { if (it == -1) null else it }
+        } else {
+            prefs.getInt("folderId", -1).let { if (it == -1) null else it }
+        }
         soundEnabled = intent?.getBooleanExtra("soundEnabled", prefs.getBoolean("soundEnabled", true))
             ?: prefs.getBoolean("soundEnabled", true)
 

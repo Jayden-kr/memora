@@ -11,6 +11,7 @@ import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import '../widgets/card_audio_field.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/native_text_field.dart';
 
@@ -45,6 +46,10 @@ class _CardEditScreenState extends State<CardEditScreen> {
   List<double?> _questionImageRatios = List.filled(5, null);
   List<String?> _answerImages = List.filled(5, null);
   List<double?> _answerImageRatios = List.filled(5, null);
+
+  // 카드당 1개 음성 (기존 questionVoiceRecordPath 슬롯 재사용, images/ 에 저장)
+  String? _voicePath;
+  int? _voiceLenMs;
 
   bool get _isEditing => widget.existingCard != null;
 
@@ -86,6 +91,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
         c.answerImageRatio4,
         c.answerImageRatio5,
       ];
+      _voicePath = c.questionVoiceRecordPath;
+      _voiceLenMs = c.questionVoiceRecordLength;
     }
     _loadFolders();
   }
@@ -201,6 +208,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
       c.questionImagePath4, c.questionImagePath5,
       c.answerImagePath, c.answerImagePath2, c.answerImagePath3,
       c.answerImagePath4, c.answerImagePath5,
+      c.questionVoiceRecordPath,
     ].contains(path);
   }
 
@@ -217,9 +225,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
     }
   }
 
-  /// 변경사항 폐기 시 새로 추가된 이미지 파일을 디스크에서 삭제 (orphan 방지)
+  /// 변경사항 폐기 시 새로 추가된 이미지/음성 파일을 디스크에서 삭제 (orphan 방지)
   void _cleanupNewImages() {
-    for (final path in [..._questionImages, ..._answerImages]) {
+    for (final path in [..._questionImages, ..._answerImages, _voicePath]) {
       if (path != null && path.isNotEmpty && !_isOriginalPath(path)) {
         File(path).delete().ignore();
       }
@@ -240,9 +248,11 @@ class _CardEditScreenState extends State<CardEditScreen> {
       original.answerImagePath5,
     ];
     final currentPaths = <String?>[
-      ..._questionImages, ..._answerImages,
+      ..._questionImages, ..._answerImages, _voicePath,
     ];
-    for (final path in originalPaths) {
+    // 원본 음성도 교체/제거됐으면 삭제 대상에 포함
+    final allOriginal = <String?>[...originalPaths, original.questionVoiceRecordPath];
+    for (final path in allOriginal) {
       if (path != null && path.isNotEmpty && !currentPaths.contains(path)) {
         File(path).delete().ignore();
       }
@@ -279,6 +289,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
       for (final path in [...card.questionImagePaths, ...card.answerImagePaths]) {
         File(path).delete().ignore();
       }
+      final vp = card.questionVoiceRecordPath;
+      if (vp != null && vp.isNotEmpty) File(vp).delete().ignore();
     } catch (e) {
       debugPrint('[CARD_EDIT] delete failed: $e');
       if (!mounted) return;
@@ -313,13 +325,14 @@ class _CardEditScreenState extends State<CardEditScreen> {
       final answer = (_nativeAnswerKey.currentState?.text ?? _answerController.text).trim();
       final hasImages = _questionImages.any((img) => img != null) ||
           _answerImages.any((img) => img != null);
+      final hasAudio = _voicePath != null;
 
       final cardIdLog = widget.existingCard?.id;
       debugPrint('[CARD_SAVE] start: editing=$_isEditing cardId=$cardIdLog '
           'q.len=${question.length} a.len=${answer.length} '
-          'hasImages=$hasImages mounted=$mounted');
+          'hasImages=$hasImages hasAudio=$hasAudio mounted=$mounted');
 
-      if (question.isEmpty && answer.isEmpty && !hasImages) {
+      if (question.isEmpty && answer.isEmpty && !hasImages && !hasAudio) {
         if (mounted) {
           final t = AppLocalizations.of(context);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -375,6 +388,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
           answerImageRatio4: _answerImageRatios[3],
           answerImagePath5: _answerImages[4],
           answerImageRatio5: _answerImageRatios[4],
+          questionVoiceRecordPath: _voicePath,
+          questionVoiceRecordLength: _voiceLenMs,
           finished: _finished,
           modified: modifiedStr,
         );
@@ -434,6 +449,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
           answerImageRatio4: _answerImageRatios[3],
           answerImagePath5: _answerImages[4],
           answerImageRatio5: _answerImageRatios[4],
+          questionVoiceRecordPath: _voicePath,
+          questionVoiceRecordLength: _voiceLenMs,
           finished: _finished,
           sequence: maxSeq + 1,
           modified: modifiedStr,
@@ -498,20 +515,30 @@ class _CardEditScreenState extends State<CardEditScreen> {
             c.answerImagePath, c.answerImagePath2,
             c.answerImagePath3, c.answerImagePath4,
             c.answerImagePath5,
-          ]);
+          ]) ||
+          _voicePath != c.questionVoiceRecordPath;
     }
     return q.isNotEmpty || a.isNotEmpty ||
         _questionImages.any((img) => img != null) ||
-        _answerImages.any((img) => img != null);
+        _answerImages.any((img) => img != null) ||
+        _voicePath != null;
   }
 
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context);
     return PopScope(
-      canPop: !_hasChanges,
+      // canPop을 build 시점 스냅샷(!_hasChanges)에 의존하면, 네이티브 텍스트 입력이
+      // 부모 State의 setState를 트리거하지 않아 canPop이 stale-true로 남고 확인 없이 pop된다.
+      // 항상 가로채서(canPop:false) pop 시점에 _hasChanges(라이브 값)를 새로 평가한다.
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
+        // 변경 없음: 즉시 프로그램적으로 pop (폐기 다이얼로그 불필요)
+        if (!_hasChanges) {
+          if (context.mounted) Navigator.pop(context);
+          return;
+        }
         final discard = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -577,6 +604,19 @@ class _CardEditScreenState extends State<CardEditScreen> {
                 },
               ),
             const SizedBox(height: 16),
+
+            // 카드 음성 (카드당 1개)
+            CardAudioField(
+              initialPath: _voicePath,
+              initialDurationMs: _voiceLenMs,
+              onChanged: (path, durationMs) {
+                setState(() {
+                  _voicePath = path;
+                  _voiceLenMs = durationMs;
+                });
+              },
+            ),
+            const SizedBox(height: 24),
 
             // 앞면
             Text(t.cardEditFront,

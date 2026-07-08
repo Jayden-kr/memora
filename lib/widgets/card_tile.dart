@@ -97,10 +97,7 @@ class CardTile extends StatelessWidget {
                         children: [
                           _buildHighlightedText(
                             context,
-                            card.question.isEmpty &&
-                                    card.questionImagePaths.isEmpty
-                                ? AppLocalizations.of(context).commonEmpty
-                                : card.question,
+                            card.question,
                             searchQuery,
                             const TextStyle(
                               fontSize: 20,

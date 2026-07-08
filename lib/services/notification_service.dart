@@ -350,12 +350,13 @@ class NotificationService {
 
   static Future<void> stopIntervalService() async {
     try {
-      final running =
-          await _pushNotifChannel.invokeMethod<bool>('isRunning') ?? false;
-      if (running) {
-        await _pushNotifChannel.invokeMethod('stopService');
-        debugPrint('[NOTIF] 서비스 중지 완료');
-      }
+      // isRunning 게이트 제거: 'running' 플래그는 :push 별도 프로세스가 기록하고 여기(메인
+      // 프로세스)는 SharedPreferences의 프로세스별 캐시 때문에 stale false를 볼 수 있어,
+      // 서비스가 실제로 켜져 있어도 stop을 건너뛰어 OFF 후에도 알림이 지속됐다(#3).
+      // stop은 미실행 서비스에도 무해하다: 네이티브 ACTION_STOP 핸들러가 startForeground로
+      // 콜드스타트 안전성을 확보한 뒤 즉시 정리한다. 따라서 무조건 stop을 보낸다.
+      await _pushNotifChannel.invokeMethod('stopService');
+      debugPrint('[NOTIF] 서비스 중지 요청 전송');
     } catch (e) {
       debugPrint('[NOTIF] 서비스 중지 실패: $e');
     }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/card.dart';
+import '../widgets/card_audio_field.dart';
 import '../widgets/image_viewer.dart';
 import 'card_edit_screen.dart';
 
@@ -108,7 +109,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
                     ),
                     const SizedBox(height: 12),
                     SelectableText(
-                      _card.question.isEmpty ? t.commonEmpty : _card.question,
+                      _card.question,
                       style: textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -118,6 +119,15 @@ class _CardViewScreenState extends State<CardViewScreen> {
                       Padding(
                         padding: const EdgeInsets.only(top: 16),
                         child: _buildImages(_card.questionImagePaths, colorScheme),
+                      ),
+                    // 카드 음성 (있으면 재생 컨트롤)
+                    if ((_card.questionVoiceRecordPath ?? '').isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 16),
+                        child: AudioPlayerButton(
+                          path: _card.questionVoiceRecordPath!,
+                          durationMs: _card.questionVoiceRecordLength,
+                        ),
                       ),
                   ],
                 ),
@@ -159,7 +169,7 @@ class _CardViewScreenState extends State<CardViewScreen> {
                       if (_answerRevealed) ...[
                         const SizedBox(height: 12),
                         SelectableText(
-                          _card.answer.isEmpty ? t.commonEmpty : _card.answer,
+                          _card.answer,
                           style: textTheme.bodyLarge,
                         ),
                         // Answer images

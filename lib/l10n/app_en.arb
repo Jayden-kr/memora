@@ -311,5 +311,14 @@
   "cardTileMenuEdit": "Edit",
   "cardTileMenuDuplicate": "Duplicate",
   "cardTileMenuMove": "Move to folder",
-  "imageNotFound": "Image not found"
+  "imageNotFound": "Image not found",
+  "cardAudioSection": "Audio",
+  "cardAudioRecord": "Record",
+  "cardAudioStop": "Stop",
+  "cardAudioAttach": "Attach file",
+  "cardAudioDelete": "Delete audio",
+  "cardAudioRecording": "Recording",
+  "cardAudioPermissionDenied": "Microphone permission required",
+  "cardAudioRecordFail": "Recording failed: {error}",
+  "cardAudioAttachFail": "File attach failed: {error}"
 }
