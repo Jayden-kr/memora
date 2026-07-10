@@ -25,12 +25,14 @@ class AudioPlayerButton extends StatefulWidget {
   final String path;
   final int? durationMs; // DB에 저장된 길이(있으면 초기 표시에 사용)
   final bool compact; // true면 리스트/좁은 곳용 (라벨 축소)
+  final bool lazy; // true면 첫 재생(탭) 시점에 player 생성 — 리스트 등 다수 인스턴스용
 
   const AudioPlayerButton({
     super.key,
     required this.path,
     this.durationMs,
     this.compact = false,
+    this.lazy = false,
   });
 
   @override
@@ -38,7 +40,10 @@ class AudioPlayerButton extends StatefulWidget {
 }
 
 class _AudioPlayerButtonState extends State<AudioPlayerButton> {
-  late final AudioPlayer _player;
+  // 앱 전체에서 동시에 하나만 재생: 새 재생이 시작되면 직전 인스턴스를 일시정지.
+  static _AudioPlayerButtonState? _activeInstance;
+
+  AudioPlayer? _player;
   PlayerState _state = PlayerState.stopped;
   Duration _position = Duration.zero;
   Duration? _duration;
@@ -48,20 +53,31 @@ class _AudioPlayerButtonState extends State<AudioPlayerButton> {
   @override
   void initState() {
     super.initState();
-    _player = AudioPlayer();
     if (widget.durationMs != null && widget.durationMs! > 0) {
       _duration = Duration(milliseconds: widget.durationMs!);
     }
-    _subs.add(_player.onDurationChanged.listen((d) {
+    // lazy=false(기본): 기존처럼 즉시 player 생성. lazy=true: 첫 재생 탭까지 미룸.
+    if (!widget.lazy) {
+      _ensurePlayer();
+    }
+  }
+
+  /// player를 (없으면) 생성하고 스트림 구독을 건다. eager/lazy 공용 진입점.
+  AudioPlayer _ensurePlayer() {
+    final existing = _player;
+    if (existing != null) return existing;
+    final player = AudioPlayer();
+    _player = player;
+    _subs.add(player.onDurationChanged.listen((d) {
       if (mounted) setState(() => _duration = d);
     }));
-    _subs.add(_player.onPositionChanged.listen((pos) {
+    _subs.add(player.onPositionChanged.listen((pos) {
       if (mounted) setState(() => _position = pos);
     }));
-    _subs.add(_player.onPlayerStateChanged.listen((s) {
+    _subs.add(player.onPlayerStateChanged.listen((s) {
       if (mounted) setState(() => _state = s);
     }));
-    _subs.add(_player.onPlayerComplete.listen((_) {
+    _subs.add(player.onPlayerComplete.listen((_) {
       if (mounted) {
         setState(() {
           _state = PlayerState.completed;
@@ -69,6 +85,7 @@ class _AudioPlayerButtonState extends State<AudioPlayerButton> {
         });
       }
     }));
+    return player;
   }
 
   @override
@@ -76,7 +93,7 @@ class _AudioPlayerButtonState extends State<AudioPlayerButton> {
     super.didUpdateWidget(oldWidget);
     // 경로가 바뀌면(재녹음/교체) 재생 상태 초기화
     if (oldWidget.path != widget.path) {
-      _player.stop();
+      _player?.stop();
       setState(() {
         _state = PlayerState.stopped;
         _position = Duration.zero;
@@ -89,22 +106,35 @@ class _AudioPlayerButtonState extends State<AudioPlayerButton> {
 
   @override
   void dispose() {
+    if (identical(_activeInstance, this)) _activeInstance = null;
     for (final s in _subs) {
       s.cancel();
     }
-    _player.dispose();
+    _player?.dispose();
     super.dispose();
   }
 
+  /// 이 버튼을 '현재 재생 중'으로 등록하고, 직전 재생 중이던 다른 버튼을 일시정지.
+  void _becomeActive() {
+    final prev = _activeInstance;
+    if (prev != null && !identical(prev, this)) {
+      prev._player?.pause().catchError((_) {});
+    }
+    _activeInstance = this;
+  }
+
   Future<void> _toggle() async {
+    final player = _ensurePlayer(); // lazy면 여기서 최초 생성
     try {
       if (_state == PlayerState.playing) {
-        await _player.pause();
+        await player.pause();
       } else if (_state == PlayerState.paused) {
-        await _player.resume();
+        _becomeActive(); // 재개도 재생 시작 — 다른 재생 정지
+        await player.resume();
       } else {
         // stopped / completed → 처음부터 재생
-        await _player.play(DeviceFileSource(widget.path));
+        _becomeActive();
+        await player.play(DeviceFileSource(widget.path));
       }
     } catch (_) {
       // 파일 손상/미존재 등 — 조용히 무시 (UI는 stopped 유지)

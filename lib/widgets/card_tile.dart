@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/card.dart';
+import 'card_audio_field.dart';
 
 class CardTile extends StatelessWidget {
   final CardModel card;
@@ -137,6 +138,20 @@ class CardTile extends StatelessWidget {
                                     ),
                                   );
                                 }).toList(),
+                              ),
+                            ),
+                          // 음성 재생 (질문에 음성 있을 때만; 접힘·선택모드에선 숨김)
+                          if (!isFolded &&
+                              !isSelectionMode &&
+                              (card.questionVoiceRecordPath ?? '').isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: AudioPlayerButton(
+                                key: ValueKey(card.questionVoiceRecordPath),
+                                path: card.questionVoiceRecordPath!,
+                                durationMs: card.questionVoiceRecordLength,
+                                compact: true,
+                                lazy: true,
                               ),
                             ),
                         ],

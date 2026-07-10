@@ -6,6 +6,7 @@ import android.content.*
 import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.*
+import android.media.MediaPlayer
 import android.os.*
 import android.provider.Settings
 import android.util.Log
@@ -51,11 +52,15 @@ class LockScreenService : Service() {
         val answer: String,
         val questionImages: List<String>,
         val answerImages: List<String>,
+        val questionVoiceRecordPath: String?,
         val finished: Boolean
     )
 
     @Volatile private var cards: List<CardData> = emptyList()
     @Volatile private var currentIndex = 0
+
+    // 잠금화면 질문 음성 재생 (카드당 1개, 로컬 m4a). 메인 스레드에서만 접근.
+    @Volatile private var voicePlayer: MediaPlayer? = null
 
     // 설정
     private var folderIds: List<Int> = emptyList()
@@ -345,7 +350,7 @@ class LockScreenService : Service() {
             val orderBy = "sequence ASC"
 
             val result = mutableListOf<CardData>()
-            val columns = arrayOf("id", "folder_id", "question", "answer", "finished", "sequence",
+            val columns = arrayOf("id", "folder_id", "question", "answer", "finished", "sequence", "question_voice_record_path",
                 "question_image_path", "question_image_path_2", "question_image_path_3", "question_image_path_4", "question_image_path_5",
                 "answer_image_path", "answer_image_path_2", "answer_image_path_3", "answer_image_path_4", "answer_image_path_5")
             db.query("cards", columns, where, args, null, null, orderBy).use { cursor ->
@@ -367,6 +372,9 @@ class LockScreenService : Service() {
                         answer = cursor.getString(cursor.getColumnIndexOrThrow("answer")) ?: "",
                         questionImages = qImages,
                         answerImages = aImages,
+                        questionVoiceRecordPath = cursor.getColumnIndex("question_voice_record_path").let { idx ->
+                            if (idx >= 0) cursor.getString(idx)?.takeIf { it.isNotEmpty() } else null
+                        },
                         finished = cursor.getInt(cursor.getColumnIndexOrThrow("finished")) == 1
                     ))
                 }
@@ -578,6 +586,22 @@ class LockScreenService : Service() {
             setPadding(0, dp(10), 0, 0)
         }
 
+        // 질문 음성 재생 버튼 (▶) — 음성 있을 때만 보임(updateCardDisplay에서 토글)
+        val voicePlayBtn = TextView(this).apply {
+            tag = "voicePlayButton"
+            text = "▶"
+            setTextColor(coralPrimary)
+            textSize = 20f
+            typeface = fontBold
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            visibility = View.GONE
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(Color.parseColor("#22FFFFFF"))
+            }
+        }
+
         // ─── Answer 구분선 ───
         val answerDivider = View(this).apply {
             setBackgroundColor(Color.parseColor("#33FFFFFF"))
@@ -613,6 +637,10 @@ class LockScreenService : Service() {
         cardContent.addView(labelText)
         cardContent.addView(mainText)
         cardContent.addView(imageContainer)
+        cardContent.addView(voicePlayBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(10)
+        })
         cardContent.addView(answerDivider, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
             topMargin = dp(16)
@@ -775,6 +803,7 @@ class LockScreenService : Service() {
 
         val card = localCards[currentIndex]
         Log.d(TAG, "Display card: index=$currentIndex/${localCards.size} id=${card.id} sort=$sortOrder")
+        releaseVoice() // 카드 전환 시 이전 음성 정지
 
         // reversed 모드: 질문/답 순서 바꿈
         val qText: String; val aText: String
@@ -816,10 +845,47 @@ class LockScreenService : Service() {
         root.findViewWithTag<TextView>("mainText")?.text = qText
         loadImages(root.findViewWithTag("imageContainer"), qImages)
 
+        // 질문 음성 재생 버튼: 질문 표시 모드(!reversed)이고 음성 파일이 실제 존재할 때만 노출
+        root.findViewWithTag<TextView>("voicePlayButton")?.let { btn ->
+            // 파일 존재 여부는 확인하지 않음(메인 스레드 disk I/O 회피 + 리스트/카드뷰와 동일 관행).
+            // 파일이 없으면 playVoice가 onError로 조용히 정리한다.
+            val vpath = if (!reversed) card.questionVoiceRecordPath else null
+            if (!vpath.isNullOrEmpty()) {
+                btn.visibility = View.VISIBLE
+                btn.setOnClickListener { playVoice(vpath) }
+            } else {
+                btn.visibility = View.GONE
+                btn.setOnClickListener(null)
+            }
+        }
+
         // Answer 섹션
         root.findViewWithTag<TextView>("answerLabel")?.text = aLabel
         root.findViewWithTag<TextView>("answerText")?.text = aText
         loadImages(root.findViewWithTag("answerImageContainer"), aImages)
+    }
+
+    /// 로컬 음성 파일을 재생. 이전 재생은 즉시 정리. prepareAsync로 메인 스레드 블로킹 회피.
+    private fun playVoice(path: String) {
+        releaseVoice()
+        try {
+            val mp = MediaPlayer()
+            voicePlayer = mp
+            mp.setOnPreparedListener { it.start() }
+            mp.setOnCompletionListener { releaseVoice() }
+            mp.setOnErrorListener { _, _, _ -> releaseVoice(); true }
+            mp.setDataSource(path)
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            Log.w(TAG, "voice play failed: ${e.message}")
+            releaseVoice()
+        }
+    }
+
+    private fun releaseVoice() {
+        val mp = voicePlayer ?: return
+        voicePlayer = null
+        try { mp.release() } catch (_: Exception) {}
     }
 
     private fun recycleViewBitmaps(view: android.view.View) {
@@ -1195,6 +1261,7 @@ class LockScreenService : Service() {
     }
 
     private fun dismissOverlay() {
+        releaseVoice()
         stopBottomBarIdleAnimation()
         overlayView?.let { view ->
             // 먼저 drawable 참조 해제 (setImageDrawable(null))
