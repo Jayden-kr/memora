@@ -116,7 +116,7 @@ class PdfGenerator(private val context: Context) {
 
     private fun measure(c: Card): Float {
         var h = PAD * 2 + 8f
-        h += mTxt(c.question.ifEmpty { "(내용 없음)" }, 12f, fontB)
+        h += mTxt(c.question, 12f, fontB)
         if (c.qImages.isNotEmpty()) h += IMG + 4f
         h += 8f // divider
         if (c.answer.isNotEmpty()) h += mTxt(c.answer, 11f, fontR)
@@ -136,7 +136,7 @@ class PdfGenerator(private val context: Context) {
         cv.drawRoundRect(M, y, PW - M, y + h, 4f, 4f, borderPaint)
         y += PAD
 
-        y = wrap(cv, c.question.ifEmpty { "(내용 없음)" }, M + PAD, y, 12f, fontB)
+        y = wrap(cv, c.question, M + PAD, y, 12f, fontB)
         if (c.qImages.isNotEmpty()) { y += 4f; y = imgs(cv, c.qImages, M + PAD, y) }
 
         y += 4f; ln(cv, M + PAD, y, PW - M - PAD, y); y += 4f

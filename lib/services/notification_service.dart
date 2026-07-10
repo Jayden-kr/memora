@@ -118,7 +118,6 @@ class NotificationService {
   static Future<void> showTestNotification() async {
     final isEn = LocaleService.currentLanguageCode() == 'en';
     String body = isEn ? 'Time to review your cards!' : '카드를 복습할 시간입니다!';
-    final emptyText = isEn ? '(empty)' : '(내용 없음)';
     String? payload;
 
     try {
@@ -130,7 +129,9 @@ class NotificationService {
       final card =
           await DatabaseHelper.instance.getRandomCard(folderId: folderId);
       if (card != null) {
-        body = card.question.isNotEmpty ? card.question : emptyText;
+        // 빈 질문이면 기본 복습 문구 유지(예약 푸시 PushNotificationService와 동일 폴백,
+        // '(내용 없음)' 플레이스홀더는 제거). 빈 알림 방지 + 테스트=실제 일치.
+        if (card.question.isNotEmpty) body = card.question;
         payload = '${card.folderId}:${card.id}';
       }
     } catch (e) {

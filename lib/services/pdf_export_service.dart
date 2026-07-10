@@ -272,7 +272,7 @@ class PdfExportService {
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Text(
-            question.isEmpty ? (_isEn ? '(empty)' : '(내용 없음)') : question,
+            question,
             style: pw.TextStyle(
               font: font,
               fontSize: 12,
