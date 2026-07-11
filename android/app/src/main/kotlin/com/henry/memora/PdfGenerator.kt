@@ -80,7 +80,10 @@ class PdfGenerator(private val context: Context) {
                     if (y + h > PH - M && y > M + 10f) {
                         cv = next()
                     }
-                    y = card(cv!!, c, y)
+                    // 카드가 한 페이지보다 길면 card()가 next()를 호출해 이어 그린다 (버그 #26: 잘림 방지)
+                    val (nc, ny) = card(cv!!, c, y) { next() }
+                    cv = nc
+                    y = ny
                     y += 10f
 
                     if (i % 20 == 0 || i == n - 1) {
@@ -130,21 +133,38 @@ class PdfGenerator(private val context: Context) {
             .setLineSpacing(0f, 1.3f).build().height.toFloat()
     }
 
-    private fun card(cv: Canvas, c: Card, sy: Float): Float {
+    // next: 현재 페이지에 다 안 들어갈 때 새 페이지 캔버스를 받아오는 콜백.
+    // 카드가 페이지를 넘어갈 수 있으므로 sy+h가 아니라 실제로 그려진 (마지막 캔버스, y)를 반환한다.
+    private fun card(cv: Canvas, c: Card, sy: Float, next: () -> Canvas): Pair<Canvas, Float> {
+        var canvas = cv
         var y = sy
         val h = measure(c)
-        cv.drawRoundRect(M, y, PW - M, y + h, 4f, 4f, borderPaint)
+        canvas.drawRoundRect(M, y, PW - M, y + h, 4f, 4f, borderPaint)
         y += PAD
 
-        y = wrap(cv, c.question, M + PAD, y, 12f, fontB)
-        if (c.qImages.isNotEmpty()) { y += 4f; y = imgs(cv, c.qImages, M + PAD, y) }
+        var r = wrapPaged(canvas, c.question, M + PAD, y, 12f, fontB, next)
+        canvas = r.first; y = r.second
+        if (c.qImages.isNotEmpty()) {
+            y += 4f
+            if (y + IMG > PH - M) { canvas = next(); y = M }
+            y = imgs(canvas, c.qImages, M + PAD, y)
+        }
 
-        y += 4f; ln(cv, M + PAD, y, PW - M - PAD, y); y += 4f
+        y += 4f
+        if (y > PH - M) { canvas = next(); y = M }
+        ln(canvas, M + PAD, y, PW - M - PAD, y); y += 4f
 
-        if (c.answer.isNotEmpty()) y = wrap(cv, c.answer, M + PAD, y, 11f, fontR)
-        if (c.aImages.isNotEmpty()) { y += 4f; y = imgs(cv, c.aImages, M + PAD, y) }
+        if (c.answer.isNotEmpty()) {
+            r = wrapPaged(canvas, c.answer, M + PAD, y, 11f, fontR, next)
+            canvas = r.first; y = r.second
+        }
+        if (c.aImages.isNotEmpty()) {
+            y += 4f
+            if (y + IMG > PH - M) { canvas = next(); y = M }
+            y = imgs(canvas, c.aImages, M + PAD, y)
+        }
 
-        return sy + h
+        return canvas to y
     }
 
     private fun imgs(cv: Canvas, paths: List<String>, x: Float, y: Float): Float {
@@ -181,12 +201,41 @@ class PdfGenerator(private val context: Context) {
         }
     }
 
-    private fun wrap(cv: Canvas, t: String, x: Float, y: Float, s: Float, tf: Typeface, col: Int = Color.BLACK): Float {
+    // 텍스트가 현재 페이지에 다 안 들어가면 next()로 새 페이지를 받아 줄 단위로 이어 그린다
+    // (한 페이지보다 긴 카드가 잘리는 문제 방지, 버그 #26). 한 페이지에 다 들어가는 일반적인
+    // 경우엔 한 번에 그려져서 기존 wrap()과 동일하게 동작한다.
+    private fun wrapPaged(
+        cv: Canvas, t: String, x: Float, y0: Float, s: Float, tf: Typeface,
+        next: () -> Canvas, col: Int = Color.BLACK,
+    ): Pair<Canvas, Float> {
         textPaint.textSize = s; textPaint.typeface = tf; textPaint.color = col
-        val l = StaticLayout.Builder.obtain(t, 0, t.length, textPaint, IW)
+        val layout = StaticLayout.Builder.obtain(t, 0, t.length, textPaint, IW)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL).setLineSpacing(0f, 1.3f).build()
-        cv.save(); cv.translate(x, y); l.draw(cv); cv.restore()
-        return y + l.height
+
+        var canvas = cv
+        var y = y0
+        var line = 0
+        val lineCount = layout.lineCount
+
+        while (line < lineCount) {
+            val top = if (line == 0) 0f else layout.getLineBottom(line - 1).toFloat()
+            val firstLineH = layout.getLineBottom(line).toFloat() - top
+            var avail = PH - M - y
+            if (avail < firstLineH) { canvas = next(); y = M; avail = PH - M - y }
+
+            var end = line
+            while (end + 1 < lineCount && layout.getLineBottom(end + 1) - top <= avail) end++
+
+            canvas.save()
+            canvas.clipRect(x, y, x + IW, y + avail)
+            canvas.translate(x, y - top)
+            layout.draw(canvas)
+            canvas.restore()
+
+            y += layout.getLineBottom(end).toFloat() - top
+            line = end + 1
+        }
+        return canvas to y
     }
 
     private fun txt(cv: Canvas, t: String, x: Float, y: Float, s: Float, tf: Typeface, col: Int = Color.BLACK): Float {
