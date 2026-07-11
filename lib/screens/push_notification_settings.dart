@@ -150,18 +150,10 @@ class _PushNotificationSettingsScreenState
       final startStr = _formatTime(_intervalStartTime);
       final endStr = _formatTime(_intervalEndTime);
 
-      final existingAlarms = await DatabaseHelper.instance.getAllPushAlarms();
-      for (final alarm in existingAlarms) {
-        if (!mounted) return;
-        if ((alarm['mode'] as String? ?? 'fixed') == 'interval') {
-          await DatabaseHelper.instance.deletePushAlarm(alarm['id'] as int);
-        }
-      }
-      if (!mounted) return;
-
-      await DatabaseHelper.instance.insertPushAlarm(
+      // delete+insert를 단일 트랜잭션으로 묶어 원자적으로 교체 — 화면이 중간에
+      // dispose되거나 insert가 실패해도 기존 알람이 삭제된 채로 남지 않음.
+      await DatabaseHelper.instance.replaceIntervalAlarm(
         time: startStr,
-        mode: 'interval',
         startTime: startStr,
         endTime: endStr,
         intervalMin: intervalMin,
@@ -169,9 +161,10 @@ class _PushNotificationSettingsScreenState
         soundEnabled: _soundEnabled ? 1 : 0,
       );
 
-      if (!mounted) return;
-
+      // DB 커밋 이후의 재스케줄은 화면 dispose 여부와 무관하게 항상 실행
+      // (그렇지 않으면 서비스가 새로 저장된 알람을 반영하지 못한 채로 남음).
       await NotificationService.rescheduleAll();
+
       if (!mounted) return;
 
       try {

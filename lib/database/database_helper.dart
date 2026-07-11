@@ -1408,6 +1408,45 @@ class DatabaseHelper {
     );
   }
 
+  /// interval 모드 알람을 삭제 + 삽입을 한 트랜잭션으로 원자적 교체.
+  /// 중간에 실패(또는 호출 화면이 dispose)해도 트랜잭션이 롤백되어
+  /// 기존 알람이 사라진 채 push_alarms가 비는 상태가 되지 않음.
+  Future<int> replaceIntervalAlarm({
+    required String time,
+    int enabled = 1,
+    int? folderId,
+    String? days,
+    int soundEnabled = 1,
+    required String startTime,
+    required String endTime,
+    required int intervalMin,
+  }) async {
+    final db = await database;
+    return await db.transaction((txn) async {
+      final existingAlarms = await txn.query(AppConstants.tablePushAlarms);
+      for (final alarm in existingAlarms) {
+        if ((alarm['mode'] as String? ?? 'fixed') == 'interval') {
+          await txn.delete(
+            AppConstants.tablePushAlarms,
+            where: 'id = ?',
+            whereArgs: [alarm['id'] as int],
+          );
+        }
+      }
+      return await txn.insert(AppConstants.tablePushAlarms, {
+        'time': time,
+        'enabled': enabled,
+        'folder_id': folderId,
+        'days': days,
+        'sound_enabled': soundEnabled,
+        'mode': 'interval',
+        'start_time': startTime,
+        'end_time': endTime,
+        'interval_min': intervalMin,
+      });
+    });
+  }
+
   /// 존재하지 않는 이미지/음성 파일 경로를 DB에서 일괄 제거
   /// 앱 시작 시 1회 실행하여 깨진 이미지 참조를 정리
   /// 배치 처리로 OOM 방지 (대량 카드 대응)
