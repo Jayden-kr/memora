@@ -81,12 +81,21 @@ class MemkExportService {
       for (final folderId in folderIds) {
         final folderName = folderNameMap[folderId] ?? '';
         const batchSize = 500;
-        int offset = 0;
-        while (true) {
-          final cards = await db.getCardsByFolderId(folderId,
-              limit: batchSize, offset: offset);
-          if (cards.isEmpty) break;
-          for (final card in cards) {
+        // id만 먼저 정렬 조회해 스냅샷으로 고정한다 (card_list_screen의
+        // _loadCardsChunked와 동일 패턴). 라이브 테이블에 LIMIT/OFFSET을
+        // 직접 쓰면 배치 사이 카드 삭제/삽입으로 OFFSET이 밀려 카드가
+        // 스킵되거나 중복 export되므로, 이후 배치 조회는 이 id 목록만 따른다.
+        final orderedIds =
+            await db.getCardIdsByFolderIdSorted(folderId, 'sequence');
+        for (var i = 0; i < orderedIds.length; i += batchSize) {
+          final end = (i + batchSize < orderedIds.length)
+              ? i + batchSize
+              : orderedIds.length;
+          final chunkIds = orderedIds.sublist(i, end);
+          final cardsById = await db.getCardsByIdsBatch(chunkIds);
+          for (final id in chunkIds) {
+            final card = cardsById[id];
+            if (card == null) continue; // 스냅샷 이후 삭제된 카드
             final json = card.toJson();
             json['folderName'] = folderName;
             _convertToMemkPaths(json, imageFileNames);
@@ -101,7 +110,6 @@ class MemkExportService {
                 ? 'Preparing card info... $processed / $totalCards'
                 : '카드 정보 준비 중... $processed / $totalCards',
           ));
-          offset += batchSize;
           await Future.delayed(Duration.zero);
         }
         // 소량 카드 폴더에서도 진행률 갱신 보장
@@ -117,14 +125,19 @@ class MemkExportService {
         }
       }
     } else {
-      // 전체 카드
+      // 전체 카드 — 위와 동일한 이유로 id 스냅샷 후 chunk 단위 조회
       final totalCards = await db.getTotalCardCount();
       const batchSize = 500;
-      int offset = 0;
-      while (true) {
-        final cards = await db.getAllCards(limit: batchSize, offset: offset);
-        if (cards.isEmpty) break;
-        for (final card in cards) {
+      final orderedIds = await db.getAllCardIds();
+      for (var i = 0; i < orderedIds.length; i += batchSize) {
+        final end = (i + batchSize < orderedIds.length)
+            ? i + batchSize
+            : orderedIds.length;
+        final chunkIds = orderedIds.sublist(i, end);
+        final cardsById = await db.getCardsByIdsBatch(chunkIds);
+        for (final id in chunkIds) {
+          final card = cardsById[id];
+          if (card == null) continue; // 스냅샷 이후 삭제된 카드
           final json = card.toJson();
           json['folderName'] = folderNameMap[card.folderId] ?? '';
           _convertToMemkPaths(json, imageFileNames);
@@ -137,7 +150,6 @@ class MemkExportService {
           total: totalCards,
           message: '카드 정보 준비 중... $processed / $totalCards',
         ));
-        offset += batchSize;
         await Future.delayed(Duration.zero);
       }
     }
