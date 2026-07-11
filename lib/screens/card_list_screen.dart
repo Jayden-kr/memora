@@ -415,6 +415,23 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     });
   }
 
+  /// 이동된 카드들의 folderId를 _cards 리스트에서 in-place 갱신
+  /// (DB 이동은 호출자가 이미 수행). allCards 모드는 카드를 리스트에서
+  /// 빼지 않으므로 이걸 안 하면 CardModel.folderId가 stale로 남아,
+  /// 그 카드를 곧바로 편집→저장할 때 stale folderId == originalFolderId로
+  /// 판정되어 moveCard가 스킵되고 updateCard가 옛 folder_id를 그대로
+  /// 되써서 방금 한 이동이 조용히 되돌아가는 버그 방지.
+  void _updateCardsFolderLocally(Iterable<int> ids, int newFolderId) {
+    final idSet = ids.toSet();
+    setState(() {
+      for (var i = 0; i < _cards.length; i++) {
+        if (idSet.contains(_cards[i].id)) {
+          _cards[i] = _cards[i].copyWith(folderId: newFolderId);
+        }
+      }
+    });
+  }
+
   /// 새로 만든 카드 1장을 _cards 특정 위치에 삽입.
   /// afterCardId가 주어지면 그 카드 다음에, 없으면 맨 앞에 삽입.
   Future<void> _insertCardLocally(int newCardId, {int? afterCardId}) async {
@@ -876,7 +893,9 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       if (_searchQuery.isNotEmpty) {
         unawaited(_loadCards());
       } else if (widget.allCards) {
-        // allCards 모드: 카드는 그대로 표시 — folder 변경은 화면 표시에 영향 없음
+        // allCards 모드: 카드는 그대로 표시되지만 folderId는 갱신해야 함
+        // (안 하면 stale folderId로 인해 이후 편집 저장 시 이동이 되돌아감)
+        _updateCardsFolderLocally(idsToMove, target.id!);
       } else {
         // 일반 폴더 모드: 다른 폴더로 이동된 카드들을 현재 리스트에서 제거
         _removeCardsLocally(idsToMove);
