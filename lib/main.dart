@@ -166,6 +166,12 @@ Future<void> _doNavigate(
       return;
     }
 
+    // 편집 화면이 열려 있으면 popUntil이 PopScope의 미저장-변경 가드를 우회해
+    // 편집 중인 내용을 조용히 날려버린다 — 편집 중엔 알림 네비게이션을 건너뛴다.
+    if (CardEditScreen.isOpen) {
+      debugPrint('[MAIN] CardEditScreen open, skipping notification navigation');
+      return;
+    }
     debugPrint('[MAIN] navigating to folder="${resolvedFolder.name}" scrollToCard=${card.id}');
     nav.popUntil((route) => route.isFirst);
     nav.push(MaterialPageRoute(
@@ -215,6 +221,12 @@ Future<void> _doEditNavigate(
     final resolvedFolder = folder;
     if (resolvedFolder == null) {
       debugPrint('[MAIN] edit folder not found');
+      return;
+    }
+    // 이미 편집 화면이 열려 있으면 popUntil이 PopScope의 미저장-변경 가드를
+    // 우회해 편집 중인 내용을 조용히 날려버린다 — 이 경우 편집 네비게이션을 건너뛴다.
+    if (CardEditScreen.isOpen) {
+      debugPrint('[MAIN] CardEditScreen open, skipping edit navigation');
       return;
     }
     nav.popUntil((route) => route.isFirst);
@@ -276,6 +288,13 @@ void _handleSettingsNavigation(String target) {
       screen = const PushNotificationSettingsScreen();
     default:
       return;
+  }
+
+  // 편집 화면이 열려 있으면 popUntil이 PopScope의 미저장-변경 가드를 우회해
+  // 편집 중인 내용을 조용히 날려버린다 — 편집 중엔 설정 네비게이션을 건너뛴다.
+  if (CardEditScreen.isOpen) {
+    debugPrint('[MAIN] CardEditScreen open, skipping settings navigation');
+    return;
   }
 
   nav.popUntil((route) => route.isFirst);

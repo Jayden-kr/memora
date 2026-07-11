@@ -19,6 +19,10 @@ class CardEditScreen extends StatefulWidget {
   final int folderId;
   final CardModel? existingCard;
 
+  /// 현재 CardEditScreen이 열려 있는지 추적 (알림 네비게이션의 popUntil이
+  /// PopScope 미저장-변경 가드를 우회해 편집 중인 내용을 날리는 것 방지)
+  static bool isOpen = false;
+
   const CardEditScreen({
     super.key,
     required this.folderId,
@@ -57,6 +61,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
   @override
   void initState() {
     super.initState();
+    CardEditScreen.isOpen = true;
     _currentFolderId = widget.folderId;
     if (_isEditing) {
       final c = widget.existingCard!;
@@ -100,6 +105,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
   @override
   void dispose() {
+    CardEditScreen.isOpen = false;
     _questionController.dispose();
     _answerController.dispose();
     super.dispose();
