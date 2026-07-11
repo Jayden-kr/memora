@@ -161,57 +161,71 @@ class MemkExportService {
     // 스트리밍 ZIP 생성 — ZipFileEncoder는 파일을 디스크에서 직접 스트리밍하므로
     // 모든 이미지를 메모리에 올리지 않아 OOM 방지
     final zipEncoder = ZipFileEncoder();
-    zipEncoder.create(outputPath);
+    try {
+      zipEncoder.create(outputPath);
 
-    // JSON 파일 추가 (소량 데이터 — in-memory OK)
-    zipEncoder.addArchiveFile(_createArchiveFile(
-      AppConstants.memkFoldersJson,
-      utf8.encode(foldersJsonStr),
-    ));
-    zipEncoder.addArchiveFile(_createArchiveFile(
-      AppConstants.memkCardsJson,
-      utf8.encode(cardsJsonStr),
-    ));
-    zipEncoder.addArchiveFile(_createArchiveFile(
-      AppConstants.memkCounterJson,
-      utf8.encode(counterJsonStr),
-    ));
-    zipEncoder.addArchiveFile(_createArchiveFile(
-      AppConstants.memkPrefsJson,
-      utf8.encode(prefsJsonStr),
-    ));
+      // JSON 파일 추가 (소량 데이터 — in-memory OK)
+      zipEncoder.addArchiveFile(_createArchiveFile(
+        AppConstants.memkFoldersJson,
+        utf8.encode(foldersJsonStr),
+      ));
+      zipEncoder.addArchiveFile(_createArchiveFile(
+        AppConstants.memkCardsJson,
+        utf8.encode(cardsJsonStr),
+      ));
+      zipEncoder.addArchiveFile(_createArchiveFile(
+        AppConstants.memkCounterJson,
+        utf8.encode(counterJsonStr),
+      ));
+      zipEncoder.addArchiveFile(_createArchiveFile(
+        AppConstants.memkPrefsJson,
+        utf8.encode(prefsJsonStr),
+      ));
 
-    // 이미지 파일 추가 — 디스크에서 스트리밍 (한 번에 한 파일만 메모리 사용)
-    final imageDir = '$appDocDir/${AppConstants.imageDir}';
-    int imageCount = 0;
-    for (final fileName in imageFileNames) {
-      final file = File('$imageDir/$fileName');
-      if (file.existsSync()) {
-        await zipEncoder.addFile(file, fileName);
-        imageCount++;
+      // 이미지 파일 추가 — 디스크에서 스트리밍 (한 번에 한 파일만 메모리 사용)
+      final imageDir = '$appDocDir/${AppConstants.imageDir}';
+      int imageCount = 0;
+      for (final fileName in imageFileNames) {
+        final file = File('$imageDir/$fileName');
+        if (file.existsSync()) {
+          await zipEncoder.addFile(file, fileName);
+          imageCount++;
 
-        if (imageCount % 20 == 0) {
-          onProgress(ExportProgress(
-            phase: 'images',
-            current: imageCount,
-            total: imageFileNames.length,
-            message: _isEn
-                ? 'Adding images... $imageCount / ${imageFileNames.length}'
-                : '이미지 추가 중... $imageCount / ${imageFileNames.length}',
-          ));
-          await Future.delayed(Duration.zero);
+          if (imageCount % 20 == 0) {
+            onProgress(ExportProgress(
+              phase: 'images',
+              current: imageCount,
+              total: imageFileNames.length,
+              message: _isEn
+                  ? 'Adding images... $imageCount / ${imageFileNames.length}'
+                  : '이미지 추가 중... $imageCount / ${imageFileNames.length}',
+            ));
+            await Future.delayed(Duration.zero);
+          }
         }
       }
-    }
 
-    onProgress(ExportProgress(
-      phase: 'zipping',
-      current: 1,
-      total: 1,
-      message: _isEn ? 'Finalizing ZIP...' : 'ZIP 마무리 중...',
-    ));
-    await Future.delayed(Duration.zero);
-    await zipEncoder.close();
+      onProgress(ExportProgress(
+        phase: 'zipping',
+        current: 1,
+        total: 1,
+        message: _isEn ? 'Finalizing ZIP...' : 'ZIP 마무리 중...',
+      ));
+      await Future.delayed(Duration.zero);
+      await zipEncoder.close();
+    } catch (_) {
+      // 실패 시(디스크 부족 등) zipEncoder를 닫고 미완성 zip을 삭제 —
+      // exported_files 테이블에 기록되지 않는 고아 파일(FileListScreen에
+      // 노출되지 않고 UI로 지울 수도 없음)이 영구히 남는 것을 방지
+      try {
+        await zipEncoder.close();
+      } catch (_) {}
+      try {
+        final partial = File(outputPath);
+        if (await partial.exists()) await partial.delete();
+      } catch (_) {}
+      rethrow;
+    }
 
     onProgress(ExportProgress(
         phase: 'done',
