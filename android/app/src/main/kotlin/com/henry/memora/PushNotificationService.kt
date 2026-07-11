@@ -111,11 +111,28 @@ class PushNotificationService : Service() {
                 return START_NOT_STICKY
             }
 
+            val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+
+            // STOP이 이 TICK 디스패치 직후 처리된 경쟁 상태 대비: AlarmManager.cancel()은 이미
+            // 디스패치된 PendingIntent를 회수하지 못한다. STOP은 running=false로 바꾸고
+            // nextFireTime을 지우므로, 둘 중 하나라도 tombstone이면 즉시 종료해야 사용자가
+            // 방금 끈 알림이 되살아나지 않는다.
+            if (!prefs.getBoolean("running", false) || !prefs.contains("nextFireTime")) {
+                Log.d(TAG, "TICK — STOP 이후 잔여 알람 감지, 종료")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
             saveRunning(true)
 
             // 다음 알람을 먼저 예약 (프로세스가 fireIfInRange 도중 죽어도 체인 유지)
             // 핵심: 예정시각(savedNextFireTime) 기준으로 다음 계산 → 드리프트 누적 방지
-            val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
             val intervalMs = intervalMin * 60 * 1000L
             val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
             var nextFireTime = savedFireTime + intervalMs
@@ -189,17 +206,22 @@ class PushNotificationService : Service() {
             val nextFireTime = prefs.getLong("nextFireTime", 0L)
             val now = System.currentTimeMillis()
             val remaining = nextFireTime - now
+            val intervalMs = intervalMin * 60 * 1000L
 
-            if (remaining > 0) {
+            // interval 알람이므로 remaining은 정상적으로 intervalMs를 넘을 수 없다. 기기
+            // 시계를 과거로 돌리면 remaining이 intervalMs보다 훨씬 커질 수 있는데(시계 스큐),
+            // 그대로 유지하면 시계가 따라잡을 때까지 며칠씩 알림이 멈춘다 — 그런 경우도
+            // 새 interval로 리셋한다.
+            if (remaining in 1L..intervalMs) {
                 scheduleNextAlarm(remaining)
                 Log.d(TAG, "타이머 유지: ${remaining / 60000}분 ${(remaining % 60000) / 1000}초 남음")
             } else {
-                // 이전 예약 시간이 이미 지남 → 새 interval 시작 (즉시 발화 X)
+                // 이전 예약 시간이 이미 지났거나(remaining<=0) 시계 스큐로 비정상적으로 먼
+                // 미래임(remaining>intervalMs) → 새 interval 시작 (즉시 발화 X)
                 // 알림은 TICK 알람만 발사해야 함. 앱 열기 = 알림 트리거 아님.
-                val delayMs = intervalMin * 60 * 1000L
-                saveNextFireTime(System.currentTimeMillis() + delayMs)
-                scheduleNextAlarm(delayMs)
-                Log.d(TAG, "타이머 만료 → ${intervalMin}분 후 다음 알림 예약")
+                saveNextFireTime(System.currentTimeMillis() + intervalMs)
+                scheduleNextAlarm(intervalMs)
+                Log.d(TAG, "타이머 리셋 → ${intervalMin}분 후 다음 알림 예약")
             }
         } else {
             // 새로 시작 or 설정 변경 → 전체 interval 타이머
