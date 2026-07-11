@@ -1,0 +1,17 @@
+=== ko-KR ===
+안정성 대폭 개선 및 설정 화면 정리
+
+- 앱 전반의 드문 크래시·데이터 유실 문제 다수 수정
+- 대량 카드 삭제/이동, 폴더 삭제 시 파일 정리 안정화
+- 가져오기/내보내기, PDF, 푸시 알림, 잠금화면 안정성 향상
+- 오래된 안드로이드(7~11) 호환성 개선
+- 설정 화면 선택지 디자인 정리
+
+=== en-US ===
+Major stability improvements + refreshed settings
+
+- Fixed many rare crashes and data-loss issues across the app
+- More reliable bulk delete/move and folder-deletion cleanup
+- Improved import/export, PDF, push notifications, and lock screen
+- Better compatibility with older Android (7-11)
+- Cleaner settings screen selectors
