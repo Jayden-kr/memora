@@ -553,8 +553,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // ⚡ 즉시 atomic transaction — IN 절 기반 3 statements, 수백 ms 안에 commit.
       //   이게 commit되는 순간 사용자 시점에선 "다 지워짐" 끝. swipe할 틈 없음.
-      final needsPushReschedule =
-          await DatabaseHelper.instance.deleteFoldersBatch(
+      final deleteResult = await DatabaseHelper.instance.deleteFoldersBatch(
         regularFolderIds: regularIds,
         bundleFolderIds: bundleIds,
       );
@@ -562,10 +561,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // 🔄 사후 비동기 cleanup — fire-and-forget.
       //   transaction은 이미 commit됨 → 사용자가 swipe해도 폴더는 영구 사라짐.
       //   image/voice 파일이 일부 남으면 orphan resource (디스크만 차지, 동작엔 무관).
-      //   잠금화면 prefs / push 재스케줄도 한 번에 fire-and-forget.
+      //   잠금화면 prefs / push 재스케줄 / 미디어 파일 삭제를 한 번에 fire-and-forget.
       unawaited(_cleanupAfterFolderDelete(
         regularIds: regularIds,
-        needsPushReschedule: needsPushReschedule,
+        needsPushReschedule: deleteResult.pushReschedNeeded,
+        filePaths: deleteResult.filePaths,
       ));
     } catch (e) {
       debugPrint('[HOME] delete selected folders error: $e');
@@ -585,10 +585,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   /// 폴더 삭제 transaction commit 후 사후 정리.
   /// 모두 idempotent. fire-and-forget이므로 await 안 됨.
-  /// image/voice orphan 파일 정리는 별도 lazy scan job에서 처리 (추후 도입).
+  /// image/voice 파일 삭제도 여기서 처리 — deleteFoldersBatch가 삭제 전에 수집해 넘겨준 경로.
   Future<void> _cleanupAfterFolderDelete({
     required List<int> regularIds,
     required bool needsPushReschedule,
+    required List<String> filePaths,
   }) async {
     try {
       // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
@@ -596,8 +597,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       if (needsPushReschedule) {
         await NotificationService.rescheduleAll();
       }
+      await _deleteFiles(filePaths);
     } catch (e) {
       debugPrint('[HOME] post-delete cleanup error: $e');
+    }
+  }
+
+  /// 파일 경로 리스트의 파일들을 디스크에서 삭제 (card_list_screen과 동일 패턴)
+  Future<void> _deleteFiles(List<String> paths) async {
+    for (final path in paths) {
+      try {
+        final f = File(path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
     }
   }
 

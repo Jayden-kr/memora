@@ -393,15 +393,20 @@ class DatabaseHelper {
 
   /// 여러 폴더를 한 트랜잭션으로 원자적 삭제. IN 절은 청크 단위로 분할 실행.
   /// 5 폴더 + 수만 카드라도 보통 수백 ms 안에 commit 완료 → 사용자가 swipe할 틈 없음.
-  /// 이미지/음성 파일 정리와 잠금화면 prefs 정리는 호출자가 transaction 밖에서 처리.
-  /// 리턴값은 push_alarms.folder_id를 NULL로 바꾼 행이 있는지(=재스케줄 필요 여부).
-  Future<bool> deleteFoldersBatch({
+  /// 삭제되는 카드들의 이미지/음성 파일 경로를 삭제 전에 수집해 반환 — 실제 파일
+  /// 삭제(디스크 I/O)와 잠금화면 prefs 정리는 호출자가 transaction 밖에서 처리.
+  /// pushReschedNeeded: push_alarms.folder_id를 NULL로 바꾼 행이 있는지(=재스케줄 필요 여부).
+  /// filePaths: 삭제된 카드들의 non-empty 이미지/음성 경로 전체 (orphan 파일 방지용).
+  Future<({bool pushReschedNeeded, List<String> filePaths})> deleteFoldersBatch({
     required List<int> regularFolderIds,
     required List<int> bundleFolderIds,
   }) async {
-    if (regularFolderIds.isEmpty && bundleFolderIds.isEmpty) return false;
+    if (regularFolderIds.isEmpty && bundleFolderIds.isEmpty) {
+      return (pushReschedNeeded: false, filePaths: <String>[]);
+    }
     final db = await database;
     bool pushReschedNeeded = false;
+    final filePaths = <String>[];
     await db.transaction((txn) async {
       // Bundle 폴더: 자식 unset + bundle 삭제 (청크별)
       if (bundleFolderIds.isNotEmpty) {
@@ -431,6 +436,25 @@ class DatabaseHelper {
                   ? regularFolderIds.length
                   : i + _sqlInChunkSize);
           final ph = List.filled(chunk.length, '?').join(',');
+          // 삭제 전 미디어 경로 수집. 대형 폴더를 한 번에 SELECT하면 getCardsByIdsBatch와
+          // 같은 Android Binder transaction(1MB) 한계에 걸릴 수 있어 500행씩 페이징한다.
+          // transaction 내부라 동시 쓰기가 없어 LIMIT/OFFSET 페이징이 안전하다.
+          var offset = 0;
+          while (true) {
+            final rows = await txn.rawQuery(
+              'SELECT ${_pathColumns.join(', ')} FROM ${AppConstants.tableCards} '
+              'WHERE folder_id IN ($ph) LIMIT ? OFFSET ?',
+              [...chunk, 500, offset],
+            );
+            for (final row in rows) {
+              for (final col in _pathColumns) {
+                final path = row[col] as String?;
+                if (path != null && path.isNotEmpty) filePaths.add(path);
+              }
+            }
+            if (rows.length < 500) break;
+            offset += 500;
+          }
           await txn.rawDelete(
             'DELETE FROM ${AppConstants.tableCards} WHERE folder_id IN ($ph)',
             chunk,
@@ -447,7 +471,7 @@ class DatabaseHelper {
         }
       }
     });
-    return pushReschedNeeded;
+    return (pushReschedNeeded: pushReschedNeeded, filePaths: filePaths);
   }
 
   /// 묶음 폴더 생성/편집을 단일 transaction으로 처리. swipe 도중에도 atomic.
