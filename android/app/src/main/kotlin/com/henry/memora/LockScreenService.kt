@@ -528,6 +528,9 @@ class LockScreenService : Service() {
             Log.e(TAG, "Failed to add overlay view", e)
             // 부분적으로 추가된 뷰 정리 시도
             try { windowManager?.removeView(overlayView) } catch (_: Exception) {}
+            // createOverlayLayout() 내부에서 이미 시작된 무한 반복 애니메이터를 정리
+            // (안 그러면 owner 없는 ValueAnimator가 계속 프레임마다 돌아감 — #43)
+            stopBottomBarIdleAnimation()
             overlayView = null
             return
         }
@@ -543,7 +546,7 @@ class LockScreenService : Service() {
     private fun createOverlayLayout(): View {
         val density = resources.displayMetrics.density
 
-        val root = FrameLayout(this).apply {
+        val root = SwipeRootLayout(this).apply {
             setBackgroundColor(bgColor)
         }
 
@@ -657,7 +660,10 @@ class LockScreenService : Service() {
             topMargin = dp(16)
             bottomMargin = dp(12)
         })
-        // Answer 영역을 감싸는 컨테이너 (좌우 스와이프 → 카드 넘기기)
+        // Answer 영역을 감싸는 컨테이너. 좌우 스와이프 카드 넘기기는 더 이상 여기 개별
+        // 리스너로 감지하지 않는다 — ScrollView가 자식이 있으면 ACTION_DOWN에 항상 true를
+        // 반환해(OS 표준 동작) 이 리스너는 UP/MOVE를 받지 못해 fling이 무효했다(#23).
+        // root의 dispatchTouchEvent(SwipeRootLayout, setupGestures)에서 일괄 감지한다.
         val answerContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             tag = "answerContainer"
@@ -665,33 +671,6 @@ class LockScreenService : Service() {
         answerContainer.addView(answerLabel)
         answerContainer.addView(answerText)
         answerContainer.addView(answerImageContainer)
-
-        val cardGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                if (e1 == null) return false
-                val diffX = e2.x - e1.x
-                val diffY = e2.y - e1.y
-                if (abs(diffX) > abs(diffY) && abs(diffX) > 100 && abs(velocityX) > 100) {
-                    val localCards = cards // snapshot to prevent race
-                    synchronized(this@LockScreenService) {
-                        if (diffX < 0 && currentIndex < localCards.size - 1) {
-                            currentIndex++
-                            updateCardDisplay()
-                        } else if (diffX > 0 && currentIndex > 0) {
-                            currentIndex--
-                            updateCardDisplay()
-                        }
-                    }
-                    return true
-                }
-                return false
-            }
-        })
-        answerContainer.setOnTouchListener { _, event ->
-            // fling 감지만 시도하고 항상 false 반환하여 ScrollView 스크롤 허용
-            cardGesture.onTouchEvent(event)
-            false
-        }
 
         cardContent.addView(answerContainer)
         scrollView.addView(cardContent)
@@ -731,6 +710,10 @@ class LockScreenService : Service() {
             Gravity.BOTTOM
         ))
 
+        // 하단 막대는 자체 좌우 드래그 제스처(setupBottomBarDrag)를 갖고 있으므로 카드
+        // 넘기기 스와이프 감지에서 제외 — 안 그러면 막대를 드래그해서 편집을 열 때 currentIndex가
+        // 동시에 바뀌어 엉뚱한 카드가 편집화면에 열릴 수 있다.
+        root.excludedView = bottomContainer
         setupGestures(root)
         return root
     }
@@ -766,7 +749,31 @@ class LockScreenService : Service() {
         dismissOverlay()
     }
 
-    private fun setupGestures(view: View) {
+    /**
+     * 오버레이 root. dispatchTouchEvent에서 스와이프 감지기를 먼저 먹인 뒤 super로
+     * 넘긴다 — ScrollView는 자식이 있으면 ACTION_DOWN에 항상 true를 반환해(OS 표준
+     * 동작) 자식이 이벤트를 가져가 버리면 일반 OnTouchListener는 MOVE/UP을 보지
+     * 못한다. dispatch 단계에서 가로채면 어떤 자식이 최종 소비하든 항상 감지되고,
+     * super 결과를 그대로 반환하므로 ScrollView 스크롤/하단 막대 드래그는 그대로
+     * 동작한다(#23). excludedView 위에서 시작한 제스처는 감지기에 먹이지 않는다
+     * (하단 막대는 자체 좌우 드래그 액션을 갖고 있어 currentIndex 충돌 방지용).
+     */
+    private class SwipeRootLayout(context: Context) : FrameLayout(context) {
+        var swipeDetector: GestureDetector? = null
+        var excludedView: View? = null
+        private var feedSwipe = true
+
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            if (ev.action and MotionEvent.ACTION_MASK == MotionEvent.ACTION_DOWN) {
+                val ex = excludedView
+                feedSwipe = ex == null || ev.y < ex.top || ev.y > ex.bottom
+            }
+            if (feedSwipe) swipeDetector?.onTouchEvent(ev)
+            return super.dispatchTouchEvent(ev)
+        }
+    }
+
+    private fun setupGestures(view: SwipeRootLayout) {
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             private val SWIPE_THRESHOLD = 100
             private val SWIPE_VELOCITY_THRESHOLD = 100
@@ -798,10 +805,7 @@ class LockScreenService : Service() {
             }
         })
 
-        view.setOnTouchListener { _, event ->
-            gestureDetector.onTouchEvent(event)
-            true
-        }
+        view.swipeDetector = gestureDetector
     }
 
     private fun updateCardDisplay() {
@@ -952,6 +956,9 @@ class LockScreenService : Service() {
         }
         if (images.isEmpty() || container == null) return
         val screenWidth = maxOf(resources.displayMetrics.widthPixels, 360)
+        // 폭만 기준으로 샘플링하면 긴 스크린샷(세로로 매우 긴 이미지)이 그대로 한 번에
+        // 디코딩되어 OOM을 유발할 수 있다 — 높이도 함께 제한한다(#24).
+        val maxHeight = 2 * resources.displayMetrics.heightPixels
         val service = this
 
         // 이미지 디코딩을 백그라운드 스레드에서 실행하여 ANR 방지
@@ -973,7 +980,8 @@ class LockScreenService : Service() {
                     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) continue
                     var sampleSize = 1
                     val imgWidth = bounds.outWidth
-                    while (imgWidth / sampleSize > screenWidth) {
+                    val imgHeight = bounds.outHeight
+                    while (imgWidth / sampleSize > screenWidth || imgHeight / sampleSize > maxHeight) {
                         sampleSize *= 2
                     }
                     val options = BitmapFactory.Options().apply {
@@ -988,12 +996,18 @@ class LockScreenService : Service() {
                             bitmaps.add(bmp)
                         }
                     }
-                } catch (_: Exception) { }
+                } catch (_: Throwable) {
+                    // OutOfMemoryError는 Exception이 아니라 Error라 잡히지 않았다 — 디코딩
+                    // 실패한 이미지 한 장만 건너뛰고 서비스/프로세스는 죽지 않게 한다(#24).
+                }
             }
             // 메인 스레드에서 ImageView에 세팅
             mainHandler.post {
                 // 세대 불일치 (새 loadImages 호출됨) 또는 서비스 파괴 시: bitmap 정리
-                if (generation != imageLoadGenerations[container] || !isServiceActive || container.parent == null) {
+                // container.parent는 오버레이가 windowManager에서 removeView된 후에도 null이
+                // 되지 않는다(뷰 트리 자체는 그대로 유지됨) — isAttachedToWindow()로 실제
+                // 윈도우 부착 여부를 확인해야 dismiss된 오버레이에 bitmap이 새는 걸 막는다(#42).
+                if (generation != imageLoadGenerations[container] || !isServiceActive || !container.isAttachedToWindow()) {
                     bitmaps.forEach { if (!it.isRecycled) it.recycle() }
                     return@post
                 }
