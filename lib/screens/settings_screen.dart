@@ -4,6 +4,7 @@ import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../services/locale_service.dart';
 import '../utils/constants.dart';
+import '../widgets/soft_segmented_control.dart';
 
 class SettingsScreen extends StatefulWidget {
   final ValueNotifier<ThemeMode>? themeModeNotifier;
@@ -112,18 +113,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: SegmentedButton<String>(
+            child: SoftSegmentedControl<String>(
               segments: [
-                ButtonSegment(
+                SoftSegment(
                     value: 'expanded',
-                    label: Text(t.settingsAnswerFoldExpanded)),
-                ButtonSegment(
+                    label: t.settingsAnswerFoldExpanded),
+                SoftSegment(
                     value: 'collapsed',
-                    label: Text(t.settingsAnswerFoldCollapsed)),
+                    label: t.settingsAnswerFoldCollapsed),
               ],
-              selected: {answerFold},
-              onSelectionChanged: (v) =>
-                  _setSetting(AppConstants.settingAnswerFold, v.first),
+              selected: answerFold,
+              onChanged: (v) =>
+                  _setSetting(AppConstants.settingAnswerFold, v),
             ),
           ),
           const Divider(),
@@ -136,16 +137,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: SegmentedButton<String>(
+            child: SoftSegmentedControl<String>(
               segments: [
-                ButtonSegment(
-                    value: 'visible', label: Text(t.settingsAnswerVisible)),
-                ButtonSegment(
-                    value: 'hidden', label: Text(t.settingsAnswerHidden)),
+                SoftSegment(
+                    value: 'visible', label: t.settingsAnswerVisible),
+                SoftSegment(
+                    value: 'hidden', label: t.settingsAnswerHidden),
               ],
-              selected: {answerVisibility},
-              onSelectionChanged: (v) =>
-                  _setSetting(AppConstants.settingAnswerVisibility, v.first),
+              selected: answerVisibility,
+              onChanged: (v) =>
+                  _setSetting(AppConstants.settingAnswerVisibility, v),
             ),
           ),
           const Divider(),
@@ -186,18 +187,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: SegmentedButton<String>(
+            child: SoftSegmentedControl<String>(
               segments: [
-                ButtonSegment(
-                    value: 'system', label: Text(t.settingsThemeSystem)),
-                ButtonSegment(
-                    value: 'light', label: Text(t.settingsThemeLight)),
-                ButtonSegment(
-                    value: 'dark', label: Text(t.settingsThemeDark)),
+                SoftSegment(
+                    value: 'system', label: t.settingsThemeSystem),
+                SoftSegment(
+                    value: 'light', label: t.settingsThemeLight),
+                SoftSegment(
+                    value: 'dark', label: t.settingsThemeDark),
               ],
-              selected: {themeMode},
-              onSelectionChanged: (v) =>
-                  _setSetting(AppConstants.settingThemeMode, v.first),
+              selected: themeMode,
+              onChanged: (v) =>
+                  _setSetting(AppConstants.settingThemeMode, v),
             ),
           ),
           const Divider(),
@@ -215,19 +216,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               return Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: SegmentedButton<String>(
+                child: SoftSegmentedControl<String>(
                   segments: [
-                    ButtonSegment(
-                        value: 'system', label: Text(t.settingsLanguageSystem)),
-                    ButtonSegment(
-                        value: 'ko', label: Text(t.settingsLanguageKorean)),
-                    ButtonSegment(
-                        value: 'en', label: Text(t.settingsLanguageEnglish)),
+                    SoftSegment(
+                        value: 'system', label: t.settingsLanguageSystem),
+                    SoftSegment(
+                        value: 'ko', label: t.settingsLanguageKorean),
+                    SoftSegment(
+                        value: 'en', label: t.settingsLanguageEnglish),
                   ],
-                  selected: {selected},
-                  onSelectionChanged: (v) {
-                    final code = v.first;
-                    LocaleService.setLocale(code == 'system' ? null : code);
+                  selected: selected,
+                  onChanged: (v) {
+                    LocaleService.setLocale(v == 'system' ? null : v);
                   },
                 ),
               );
