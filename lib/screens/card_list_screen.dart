@@ -815,6 +815,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       // 🔄 파일 정리는 fire-and-forget. DB는 이미 commit됨 → swipe해도 카드는 영구 사라짐.
       //    일부 image/voice 파일이 orphan으로 남아도 동작엔 무관.
       unawaited(_deleteFiles(allFilePaths));
+    } catch (e) {
+      debugPrint('[CARD_LIST] batch card delete failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.cardDeleteFail)),
+      );
     } finally {
       _isBatchActioning = false;
     }

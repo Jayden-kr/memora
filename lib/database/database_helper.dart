@@ -391,7 +391,7 @@ class DatabaseHelper {
     });
   }
 
-  /// 여러 폴더를 한 트랜잭션으로 원자적 삭제. IN 절 기반 단일 statement로 최소화.
+  /// 여러 폴더를 한 트랜잭션으로 원자적 삭제. IN 절은 청크 단위로 분할 실행.
   /// 5 폴더 + 수만 카드라도 보통 수백 ms 안에 commit 완료 → 사용자가 swipe할 틈 없음.
   /// 이미지/음성 파일 정리와 잠금화면 prefs 정리는 호출자가 transaction 밖에서 처리.
   /// 리턴값은 push_alarms.folder_id를 NULL로 바꾼 행이 있는지(=재스케줄 필요 여부).
@@ -403,34 +403,48 @@ class DatabaseHelper {
     final db = await database;
     bool pushReschedNeeded = false;
     await db.transaction((txn) async {
-      // Bundle 폴더: 자식 unset + bundle 삭제 (IN 한 번에)
+      // Bundle 폴더: 자식 unset + bundle 삭제 (청크별)
       if (bundleFolderIds.isNotEmpty) {
-        final ph = List.filled(bundleFolderIds.length, '?').join(',');
-        await txn.rawUpdate(
-          'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = NULL WHERE parent_folder_id IN ($ph)',
-          bundleFolderIds,
-        );
-        await txn.rawDelete(
-          'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
-          bundleFolderIds,
-        );
+        for (var i = 0; i < bundleFolderIds.length; i += _sqlInChunkSize) {
+          final chunk = bundleFolderIds.sublist(
+              i,
+              i + _sqlInChunkSize > bundleFolderIds.length
+                  ? bundleFolderIds.length
+                  : i + _sqlInChunkSize);
+          final ph = List.filled(chunk.length, '?').join(',');
+          await txn.rawUpdate(
+            'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = NULL WHERE parent_folder_id IN ($ph)',
+            chunk,
+          );
+          await txn.rawDelete(
+            'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
+            chunk,
+          );
+        }
       }
-      // 일반 폴더: cards / folders / push_alarms 단일 statement씩 (IN 한 번에)
+      // 일반 폴더: cards / folders / push_alarms 단일 statement씩 (청크별)
       if (regularFolderIds.isNotEmpty) {
-        final ph = List.filled(regularFolderIds.length, '?').join(',');
-        await txn.rawDelete(
-          'DELETE FROM ${AppConstants.tableCards} WHERE folder_id IN ($ph)',
-          regularFolderIds,
-        );
-        await txn.rawDelete(
-          'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
-          regularFolderIds,
-        );
-        final cleared = await txn.rawUpdate(
-          'UPDATE ${AppConstants.tablePushAlarms} SET folder_id = NULL WHERE folder_id IN ($ph)',
-          regularFolderIds,
-        );
-        if (cleared > 0) pushReschedNeeded = true;
+        for (var i = 0; i < regularFolderIds.length; i += _sqlInChunkSize) {
+          final chunk = regularFolderIds.sublist(
+              i,
+              i + _sqlInChunkSize > regularFolderIds.length
+                  ? regularFolderIds.length
+                  : i + _sqlInChunkSize);
+          final ph = List.filled(chunk.length, '?').join(',');
+          await txn.rawDelete(
+            'DELETE FROM ${AppConstants.tableCards} WHERE folder_id IN ($ph)',
+            chunk,
+          );
+          await txn.rawDelete(
+            'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
+            chunk,
+          );
+          final cleared = await txn.rawUpdate(
+            'UPDATE ${AppConstants.tablePushAlarms} SET folder_id = NULL WHERE folder_id IN ($ph)',
+            chunk,
+          );
+          if (cleared > 0) pushReschedNeeded = true;
+        }
       }
     });
     return pushReschedNeeded;
@@ -921,23 +935,35 @@ class DatabaseHelper {
   }
 
   /// 배치 삭제 (영향받는 폴더 card_count 자동 갱신)
+  /// cardIds 개수에 제한 없음 — IN 절은 청크 단위로 분할 실행.
   Future<int> deleteCardsBatch(List<int> cardIds) async {
     if (cardIds.isEmpty) return 0;
     final db = await database;
-    final placeholders = List.filled(cardIds.length, '?').join(',');
     int deleted = 0;
     await db.transaction((txn) async {
-      // 삭제 전 영향받는 폴더 ID 수집
-      final affected = await txn.rawQuery(
-        'SELECT DISTINCT folder_id FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
-        cardIds,
-      );
-      final folderIds = affected.map((r) => r['folder_id'] as int).toSet();
+      final folderIds = <int>{};
 
-      deleted = await txn.rawDelete(
-        'DELETE FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
-        cardIds,
-      );
+      for (var i = 0; i < cardIds.length; i += _sqlInChunkSize) {
+        final chunk = cardIds.sublist(
+            i,
+            i + _sqlInChunkSize > cardIds.length
+                ? cardIds.length
+                : i + _sqlInChunkSize);
+        final placeholders = List.filled(chunk.length, '?').join(',');
+
+        // 삭제 전 영향받는 폴더 ID 수집 (청크별)
+        final affected = await txn.rawQuery(
+          'SELECT DISTINCT folder_id FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+          chunk,
+        );
+        folderIds.addAll(affected.map((r) => r['folder_id'] as int));
+
+        // 청크별 DELETE
+        deleted += await txn.rawDelete(
+          'DELETE FROM ${AppConstants.tableCards} WHERE id IN ($placeholders)',
+          chunk,
+        );
+      }
 
       // 영향받는 폴더 card_count 갱신
       for (final fid in folderIds) {
@@ -1255,15 +1281,27 @@ class DatabaseHelper {
     );
   }
 
-  /// .mra 파일 row 여러개를 단일 transaction으로 삭제 (IN 절).
+  /// .mra 파일 row 여러개를 단일 transaction으로 삭제.
+  /// ids 개수에 제한 없음 — IN 절은 청크 단위로 분할 실행.
   Future<int> deleteExportedFilesBatch(List<int> ids) async {
     if (ids.isEmpty) return 0;
     final db = await database;
-    final ph = List.filled(ids.length, '?').join(',');
-    return await db.rawDelete(
-      'DELETE FROM ${AppConstants.tableExportedFiles} WHERE id IN ($ph)',
-      ids,
-    );
+    int deleted = 0;
+    await db.transaction((txn) async {
+      for (var i = 0; i < ids.length; i += _sqlInChunkSize) {
+        final chunk = ids.sublist(
+            i,
+            i + _sqlInChunkSize > ids.length
+                ? ids.length
+                : i + _sqlInChunkSize);
+        final ph = List.filled(chunk.length, '?').join(',');
+        deleted += await txn.rawDelete(
+          'DELETE FROM ${AppConstants.tableExportedFiles} WHERE id IN ($ph)',
+          chunk,
+        );
+      }
+    });
+    return deleted;
   }
 
   Future<int> deleteExportedFileByPath(String filePath) async {

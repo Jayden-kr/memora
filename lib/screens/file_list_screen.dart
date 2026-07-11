@@ -429,6 +429,13 @@ class _FileListScreenState extends State<FileListScreen> {
           File(filePath).delete().ignore();
         }
       }
+    } catch (e) {
+      debugPrint('[FILE_LIST] batch file delete failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.fileDeleteFail(e.toString()))),
+        );
+      }
     } finally {
       _isDeleting = false;
     }
