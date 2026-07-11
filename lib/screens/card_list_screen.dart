@@ -321,6 +321,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           ..clear()
           ..addAll(cards);
         _loading = false;
+        _pruneSelection();
       });
       _precacheCardImages();
       return;
@@ -368,6 +369,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         ..clear()
         ..addAll(cards);
       _loading = false;
+      _pruneSelection();
     });
     _precacheCardImages();
     // 스크롤 위치 복원
@@ -467,6 +469,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       _cards.addAll(results);
       _totalCount = results.length;
       _loading = false;
+      _pruneSelection();
     });
   }
 
@@ -777,6 +780,18 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         _selectedCardIds.addAll(_cards.where((c) => c.id != null).map((c) => c.id!));
       }
     });
+  }
+
+  /// _cards가 통째로 교체된 뒤 _selectedCardIds를 화면에 남은 카드로만 정리.
+  /// 선택 모드 중에도 검색창은 그대로 보이고 입력 가능해서(별개 상태값)
+  /// 검색어를 바꾸면 _performSearch/_loadCards가 _cards를 다른 결과로
+  /// 갈아치우는데, 이걸 안 하면 화면에서 사라진 카드의 선택이 그대로 남아
+  /// _deleteSelected가 안 보이는 카드까지 지우면서 그 카드의 파일 경로
+  /// 수집(_cards 기반)은 놓쳐 orphan 파일이 생기는 버그 방지.
+  void _pruneSelection() {
+    if (_selectedCardIds.isEmpty) return;
+    _selectedCardIds.retainAll(_cards.map((c) => c.id).whereType<int>());
+    if (_selectedCardIds.isEmpty) _isSelectionMode = false;
   }
 
   Future<void> _deleteSelected() async {
