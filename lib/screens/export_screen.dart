@@ -70,6 +70,9 @@ class _ExportScreenState extends State<ExportScreen> {
 
     // export 완료/에러 체크
     if (!_controller.isRunning && _controller.currentOperation == null) {
+      // 화면이 export 진행 중에 열려 initState에서 _loadFolders를 건너뛴
+      // 경우 (line 46) — 여기서 뒤늦게 로드해서 "내보낼 폴더 없음" 오표시 방지.
+      if (_folders.isEmpty && !widget.progressOnly) _loadFolders();
       _checkExportResult();
     }
   }
@@ -77,7 +80,12 @@ class _ExportScreenState extends State<ExportScreen> {
   void _checkExportResult() {
     if (!mounted) return;
 
-    if (_controller.lastExportError != null) {
+    if (_controller.lastExportFileNames != null) {
+      // 파일이 하나라도 생성됐으면 완료 다이얼로그로 안내 (중간 실패로
+      // lastExportError도 함께 설정된 부분 성공 케이스 포함 — 그렇지 않으면
+      // 컨트롤러가 보존한 부분 결과가 여기서 그냥 버려진다).
+      _showCompletionDialog();
+    } else if (_controller.lastExportError != null) {
       final error = _controller.lastExportError;
       _controller.clearExportResult();
       final t = AppLocalizations.of(context);
@@ -85,8 +93,6 @@ class _ExportScreenState extends State<ExportScreen> {
         SnackBar(content: Text(t.exportFailSnack(error.toString()))),
       );
       if (widget.progressOnly) Navigator.pop(context);
-    } else if (_controller.lastExportFileNames != null) {
-      _showCompletionDialog();
     } else if (widget.progressOnly && !_isExporting) {
       // 알림 탭했으나 결과도 진행도 없음 — 뒤로
       Navigator.pop(context);
@@ -96,16 +102,21 @@ class _ExportScreenState extends State<ExportScreen> {
   Future<void> _showCompletionDialog() async {
     final fileNames = List<String>.from(_controller.lastExportFileNames!);
     final filePaths = List<String>.from(_controller.lastExportFilePaths!);
+    // clearExportResult로 지워지기 전에 부분 실패 여부를 먼저 읽어둔다 —
+    // 중간 실패 시에도 이미 만들어진 파일은 공유 가능하게 보여준다.
+    final partialError = _controller.lastExportError;
     _controller.clearExportResult();
     final t = AppLocalizations.of(context);
+    final body = partialError == null
+        ? t.exportDoneBody(fileNames.length, fileNames.join('\n'))
+        : '${t.exportDoneBody(fileNames.length, fileNames.join('\n'))}\n\n'
+            '${t.exportFailSnack(partialError.toString())}';
 
     final shouldShare = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(t.exportDoneTitle),
-        content: Text(
-          t.exportDoneBody(fileNames.length, fileNames.join('\n')),
-        ),
+        content: Text(body),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -161,6 +172,17 @@ class _ExportScreenState extends State<ExportScreen> {
 
   Future<void> _export() async {
     if (_isExporting || _selectedFolderIds.isEmpty) return;
+
+    // import 등 export가 아닌 다른 작업이 실행 중이면 startXxxExport의
+    // operationLock 체크에서 조용히 no-op한다 — 디렉토리 생성/충돌 다이얼로그를
+    // 다 거치고 나서야 아무 일도 안 일어나는 것을 막기 위해 여기서 먼저 차단.
+    if (_controller.isRunning) {
+      final t = AppLocalizations.of(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.importBusy)),
+      );
+      return;
+    }
 
     final appDocDir = await getApplicationDocumentsDirectory();
     final exportDir = Directory('${appDocDir.path}/exports');

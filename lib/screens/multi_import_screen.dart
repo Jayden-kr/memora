@@ -225,8 +225,11 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context);
     return PopScope(
-      // import 진행 중이면 시스템 back gesture 차단 — 사용자가 hold 못하고 빠지는 것 방지.
-      canPop: _stage != _Stage.importing,
+      // batch loop은 위젯 생명주기와 분리되어 있어 (dispose 후에도 controller가
+      // 끝까지 진행, line 170-172 주석 참고) importing 중에도 뒤로 가기를 막을
+      // 필요가 없다 — 막으면 화면에 보여주는 importBackgroundNote 문구
+      // ("뒤로 가기를 눌러도 백그라운드에서 계속 진행됩니다")와 모순된다.
+      canPop: true,
       child: Scaffold(
         appBar: AppBar(
           title: Text(t.multiImportTitle(_files.length)),
