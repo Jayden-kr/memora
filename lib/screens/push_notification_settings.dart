@@ -41,7 +41,14 @@ class _PushNotificationSettingsScreenState
 
   @override
   void dispose() {
+    final hadPendingSettings = _settingsDebounce?.isActive ?? false;
     _settingsDebounce?.cancel();
+    if (hadPendingSettings) {
+      // 대기 중이던 debounce를 flush — 그냥 취소만 하면 폴더/사운드 변경이
+      // DB에 반영되지 않은 채 화면을 벗어나 유실된다. context/setState를 쓰지
+      // 않으므로 dispose 이후에도 fire-and-forget으로 안전하게 완료 가능.
+      _applyGlobalSettings();
+    }
     _intervalMinController.dispose();
     super.dispose();
   }
@@ -118,28 +125,31 @@ class _PushNotificationSettingsScreenState
 
   // ─── Interval mode ───
 
-  Future<void> _saveIntervalAlarm() async {
-    if (_saving) return;
+  Future<bool> _saveIntervalAlarm() async {
+    if (_saving) return false;
     final t = AppLocalizations.of(context);
 
     final intervalMin = int.tryParse(_intervalMinController.text);
-    if (intervalMin == null || intervalMin < 5) {
-      if (!mounted) return;
+    // NotificationService._rescheduleAllImpl의 범위(5~1440분)와 동일하게 검증 —
+    // 그렇지 않으면 저장은 성공 처리되지만 스케줄러가 알람을 거부해 서비스가
+    // 조용히 중지된다.
+    if (intervalMin == null || intervalMin < 5 || intervalMin > 1440) {
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.pushIntervalMinError)),
       );
-      return;
+      return false;
     }
 
     final startMinutes =
         _intervalStartTime.hour * 60 + _intervalStartTime.minute;
     final endMinutes = _intervalEndTime.hour * 60 + _intervalEndTime.minute;
     if (endMinutes == startMinutes) {
-      if (!mounted) return;
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.pushTimeSameError)),
       );
-      return;
+      return false;
     }
 
     setState(() => _saving = true);
@@ -165,23 +175,25 @@ class _PushNotificationSettingsScreenState
       // (그렇지 않으면 서비스가 새로 저장된 알람을 반영하지 못한 채로 남음).
       await NotificationService.rescheduleAll();
 
-      if (!mounted) return;
+      if (!mounted) return true;
 
       try {
         const channel = MethodChannel('com.henry.memora/push_notif');
         await channel.invokeMethod<bool>('requestBatteryOptimization');
       } catch (_) {}
 
-      if (!mounted) return;
+      if (!mounted) return true;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.pushSaveSuccess)),
       );
+      return true;
     } catch (e) {
       debugPrint('[PUSH_SETTINGS] save failed: $e');
-      if (!mounted) return;
+      if (!mounted) return false;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.pushSaveFail)),
       );
+      return false;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -199,7 +211,8 @@ class _PushNotificationSettingsScreenState
   }
 
   Future<void> _applyGlobalSettings() async {
-    if (!mounted) return;
+    // NOTE: context나 setState를 쓰지 않으므로 mounted 가드 불필요 — dispose()가
+    // 대기 중인 debounce를 flush할 때도(#20) 안전하게 끝까지 실행되어야 한다.
     try {
       final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
       for (final alarm in allAlarms) {
@@ -208,7 +221,6 @@ class _PushNotificationSettingsScreenState
           'sound_enabled': _soundEnabled ? 1 : 0,
         });
       }
-      if (!mounted) return;
       await NotificationService.rescheduleAll();
     } catch (e) {
       debugPrint('[PUSH_SETTINGS] global settings apply failed: $e');
@@ -277,7 +289,33 @@ class _PushNotificationSettingsScreenState
                             await DatabaseHelper.instance.upsertSetting(
                                 _settingNotificationEnabled, v.toString());
                             if (!mounted) return;
-                            await NotificationService.rescheduleAll();
+                            // Fresh-install trap: 저장된 알람이 하나도 없으면
+                            // rescheduleAll이 빈 알람 목록에서 조용히 반환돼
+                            // 토글만 켜질 뿐 실제로는 아무 것도 예약되지 않는다.
+                            // Save 버튼과 동일한 경로로 현재 UI 값을 기본
+                            // interval 알람으로 저장해 실제로 동작하게 한다.
+                            final existingAlarms =
+                                await DatabaseHelper.instance.getAllPushAlarms();
+                            if (!mounted) return;
+                            if (v && existingAlarms.isEmpty) {
+                              final created = await _saveIntervalAlarm();
+                              if (!created) {
+                                // 검증 실패로 알람이 생성되지 않음 — 토글만
+                                // ON으로 남고 알람 0개인 상태(#39가 고치려던
+                                // 무음 no-op)가 재발하지 않도록 되돌린다.
+                                await DatabaseHelper.instance.upsertSetting(
+                                    _settingNotificationEnabled,
+                                    previousEnabled.toString());
+                                if (mounted) {
+                                  setState(() => _enabled = previousEnabled);
+                                  messenger.showSnackBar(
+                                    SnackBar(content: Text(t.pushToggleFail)),
+                                  );
+                                }
+                              }
+                            } else {
+                              await NotificationService.rescheduleAll();
+                            }
                           } catch (e) {
                             debugPrint('[PUSH_SETTINGS] toggle failed: $e');
                             if (!mounted) return;
