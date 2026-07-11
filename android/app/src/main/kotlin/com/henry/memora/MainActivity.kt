@@ -9,6 +9,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.webkit.MimeTypeMap
 import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -169,9 +170,13 @@ class MainActivity : FlutterActivity() {
                                         return@Thread
                                     }
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        // 확장자로 MIME 추정 (.mra 등 미등록 확장자는 기존과 동일하게 octet-stream)
+                                        val extension = fileName.substringAfterLast('.', "").lowercase()
+                                        val mimeType = MimeTypeMap.getSingleton()
+                                            .getMimeTypeFromExtension(extension) ?: "application/octet-stream"
                                         val values = ContentValues().apply {
                                             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                                            put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                                            put(MediaStore.Downloads.MIME_TYPE, mimeType)
                                             put(MediaStore.Downloads.IS_PENDING, 1)
                                         }
                                         val uri = contentResolver.insert(
@@ -253,10 +258,12 @@ class MainActivity : FlutterActivity() {
                                 } else {
                                     startService(intent)
                                 }
-                            } catch (_: Exception) {
-                                // 서비스가 없으면 prefs만 정리 (commit으로 동기 저장)
-                                getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-                                    .edit().putBoolean("running", false).commit()
+                            } catch (e: Exception) {
+                                // push_notif_prefs는 :push 프로세스와 공유되는 파일이다. SharedPreferences는
+                                // 프로세스별로 전체 맵을 메모리에 캐시했다가 commit() 시 통째로 다시 쓰므로,
+                                // 여기서 메인 프로세스가 커밋하면 :push가 그 사이 기록한 최신 스케줄
+                                // (nextFireTime 등)을 되돌려버릴 수 있다 — prefs는 건드리지 않고 로그만 남긴다.
+                                Log.w(TAG, "Failed to send STOP to PushNotificationService: ${e.message}")
                             }
                             result.success(true)
                         }
