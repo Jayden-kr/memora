@@ -101,6 +101,21 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
       _files.where((e) => !_checked.contains(e.filePath) && e.error == null).toList();
 
   Future<void> _start() async {
+    final t = AppLocalizations.of(context);
+
+    // 다른 import/export가 이미 실행 중이면 (백그라운드 계속 진행 설계상)
+    // batch loop 진입 자체를 막는다. 안 막으면 startImport가 락에 걸려
+    // 조용히 no-op하고, 루프는 stale lastImportResult를 모든 파일에
+    // 잘못 귀속시켜 가짜 성공 화면을 띄운다 (ImportScreen._startImport와 동일 가드).
+    if (_controller.isRunning) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.importBusy)),
+        );
+      }
+      return;
+    }
+
     final batch = _batchEntries;
     final custom = _customEntries;
 
@@ -108,7 +123,6 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
 
     // batch가 있으면 충돌 검사 후 정책 선택
     if (batch.isNotEmpty) {
-      final t = AppLocalizations.of(context);
       final conflictNames = <String>{};
       for (final entry in batch) {
         for (final f in entry.folders ?? const []) {
