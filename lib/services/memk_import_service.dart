@@ -135,6 +135,10 @@ class MemkImportService {
       _cachedArchive = null;
       _cachedFilePath = null;
     } else {
+      // 캐시가 다른 파일 것이면 즉시 해제 (stale archive를 물고 있는 채로
+      // 새 파일을 디코딩하면 메모리 사용량이 두 배로 뜀 — multi-import에서 OOM 위험)
+      _cachedArchive = null;
+      _cachedFilePath = null;
       final bytes = await File(filePath).readAsBytes();
       archive = ZipDecoder().decodeBytes(bytes, verify: false);
     }
