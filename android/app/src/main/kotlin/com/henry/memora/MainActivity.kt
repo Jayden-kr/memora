@@ -1,15 +1,19 @@
 package com.henry.memora
 
+import android.Manifest
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import android.webkit.MimeTypeMap
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import java.io.File
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -19,8 +23,13 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.henry.memora/lockscreen"
     private val IMPORT_EXPORT_CHANNEL = "com.henry.memora/import_export"
     private val TAG = "AmkiWang"
+    // 고유값 사용: record 플러그인이 1001을 RECORD_AUDIO에 하드코딩해 충돌하므로 피한다.
+    private val REQUEST_CODE_WRITE_STORAGE = 20259
 
     private var importExportChannel: MethodChannel? = null
+    // saveToDownloads가 WRITE_EXTERNAL_STORAGE 런타임 요청으로 중단된 동안 보관하는 인자.
+    // onRequestPermissionsResult에서 권한 승인 시 이걸로 저장을 재개한다.
+    private var pendingSaveToDownloads: Triple<String, String, MethodChannel.Result>? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -161,64 +170,21 @@ class MainActivity : FlutterActivity() {
                                 result.error("ERROR", "sourcePath and fileName required", null)
                                 return@setMethodCallHandler
                             }
-                            // 백그라운드 스레드에서 파일 I/O 수행 (ANR 방지)
-                            Thread {
-                                try {
-                                    val sourceFile = File(sourcePath)
-                                    if (!sourceFile.exists()) {
-                                        runOnUiThread { result.error("ERROR", "Source file not found", null) }
-                                        return@Thread
-                                    }
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        // 확장자로 MIME 추정 (.mra 등 미등록 확장자는 기존과 동일하게 octet-stream)
-                                        val extension = fileName.substringAfterLast('.', "").lowercase()
-                                        val mimeType = MimeTypeMap.getSingleton()
-                                            .getMimeTypeFromExtension(extension) ?: "application/octet-stream"
-                                        val values = ContentValues().apply {
-                                            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                                            put(MediaStore.Downloads.MIME_TYPE, mimeType)
-                                            put(MediaStore.Downloads.IS_PENDING, 1)
-                                        }
-                                        val uri = contentResolver.insert(
-                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                                        )
-                                        if (uri != null) {
-                                            try {
-                                                val outputStream = contentResolver.openOutputStream(uri)
-                                                if (outputStream != null) {
-                                                    outputStream.use { output ->
-                                                        sourceFile.inputStream().use { input ->
-                                                            input.copyTo(output)
-                                                        }
-                                                    }
-                                                    values.clear()
-                                                    values.put(MediaStore.Downloads.IS_PENDING, 0)
-                                                    contentResolver.update(uri, values, null, null)
-                                                    runOnUiThread { result.success(true) }
-                                                } else {
-                                                    contentResolver.delete(uri, null, null)
-                                                    runOnUiThread { result.error("ERROR", "Failed to open output stream", null) }
-                                                }
-                                            } catch (e: Exception) {
-                                                contentResolver.delete(uri, null, null)
-                                                runOnUiThread { result.error("ERROR", e.message, e.stackTraceToString()) }
-                                            }
-                                        } else {
-                                            runOnUiThread { result.error("ERROR", "Failed to create MediaStore entry", null) }
-                                        }
-                                    } else {
-                                        @Suppress("DEPRECATION")
-                                        val downloadsDir = Environment.getExternalStoragePublicDirectory(
-                                            Environment.DIRECTORY_DOWNLOADS
-                                        )
-                                        val destFile = File(downloadsDir, fileName)
-                                        sourceFile.copyTo(destFile, overwrite = true)
-                                        runOnUiThread { result.success(true) }
-                                    }
-                                } catch (e: Exception) {
-                                    runOnUiThread { result.error("ERROR", e.message, e.stackTraceToString()) }
-                                }
-                            }.start()
+                            // Android 9 이하(API 28-)는 공개 Downloads 폴더에 직접 쓰므로
+                            // WRITE_EXTERNAL_STORAGE 런타임 권한이 필요하다 (Q+는 MediaStore 경유라 불필요).
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                != PackageManager.PERMISSION_GRANTED) {
+                                Log.d(TAG, "WRITE_EXTERNAL_STORAGE 미승인, 런타임 요청 후 재개")
+                                pendingSaveToDownloads = Triple(sourcePath, fileName, result)
+                                ActivityCompat.requestPermissions(
+                                    this,
+                                    arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                                    REQUEST_CODE_WRITE_STORAGE
+                                )
+                                return@setMethodCallHandler
+                            }
+                            performSaveToDownloads(sourcePath, fileName, result)
                         }
                         else -> result.notImplemented()
                     }
@@ -567,6 +533,29 @@ class MainActivity : FlutterActivity() {
         handleEditCardNavigationIntent(intent)
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_WRITE_STORAGE) {
+            val pending = pendingSaveToDownloads
+            pendingSaveToDownloads = null
+            if (pending == null) return
+            val (sourcePath, fileName, result) = pending
+            if (grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED &&
+                permissions.getOrNull(0) == "android.permission.WRITE_EXTERNAL_STORAGE") {
+                Log.d(TAG, "WRITE_EXTERNAL_STORAGE 승인됨, saveToDownloads 재개")
+                performSaveToDownloads(sourcePath, fileName, result)
+            } else {
+                Log.w(TAG, "WRITE_EXTERNAL_STORAGE 거부됨, saveToDownloads 취소")
+                result.error("PERMISSION_DENIED", "WRITE_EXTERNAL_STORAGE permission denied", null)
+            }
+        }
+    }
+
     private fun handleEditCardNavigationIntent(intent: Intent) {
         if (!intent.getBooleanExtra("navigate_to_edit_card", false)) return
         intent.removeExtra("navigate_to_edit_card")
@@ -614,6 +603,72 @@ class MainActivity : FlutterActivity() {
                 "cardId" to cardId
             ))
         }
+    }
+
+    /**
+     * sourcePath 파일을 공개 Downloads 폴더에 저장. 호출 전 (pre-Q 경로의 경우)
+     * WRITE_EXTERNAL_STORAGE 권한 확인/요청이 끝난 상태여야 한다 — saveToDownloads
+     * 핸들러와 onRequestPermissionsResult 승인 콜백 양쪽에서 호출된다.
+     */
+    private fun performSaveToDownloads(sourcePath: String, fileName: String, result: MethodChannel.Result) {
+        // 백그라운드 스레드에서 파일 I/O 수행 (ANR 방지)
+        Thread {
+            try {
+                val sourceFile = File(sourcePath)
+                if (!sourceFile.exists()) {
+                    runOnUiThread { result.error("ERROR", "Source file not found", null) }
+                    return@Thread
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // 확장자로 MIME 추정 (.mra 등 미등록 확장자는 기존과 동일하게 octet-stream)
+                    val extension = fileName.substringAfterLast('.', "").lowercase()
+                    val mimeType = MimeTypeMap.getSingleton()
+                        .getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                        put(MediaStore.Downloads.MIME_TYPE, mimeType)
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val uri = contentResolver.insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                    )
+                    if (uri != null) {
+                        try {
+                            val outputStream = contentResolver.openOutputStream(uri)
+                            if (outputStream != null) {
+                                outputStream.use { output ->
+                                    sourceFile.inputStream().use { input ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                                values.clear()
+                                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                                contentResolver.update(uri, values, null, null)
+                                runOnUiThread { result.success(true) }
+                            } else {
+                                contentResolver.delete(uri, null, null)
+                                runOnUiThread { result.error("ERROR", "Failed to open output stream", null) }
+                            }
+                        } catch (e: Exception) {
+                            contentResolver.delete(uri, null, null)
+                            runOnUiThread { result.error("ERROR", e.message, e.stackTraceToString()) }
+                        }
+                    } else {
+                        runOnUiThread { result.error("ERROR", "Failed to create MediaStore entry", null) }
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS
+                    )
+                    val destFile = File(downloadsDir, fileName)
+                    sourceFile.copyTo(destFile, overwrite = true)
+                    runOnUiThread { result.success(true) }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { result.error("ERROR", e.message, e.stackTraceToString()) }
+            }
+        }.start()
     }
 
     private fun isServiceRunning(): Boolean {
