@@ -469,6 +469,14 @@ class DatabaseHelper {
           );
           if (cleared > 0) pushReschedNeeded = true;
         }
+        // 삭제된 일반 폴더가 어느 묶음의 자식이었을 수 있음. parent_folder_id는 FK/trigger가
+        // 없어 saveBundleFolder 밖에서 폴더가 사라지면 folder_count가 자동 갱신되지 않는다 →
+        // 모든 묶음의 folder_count를 실제 자식 수 기준으로 재계산해 stale 값을 방지한다.
+        await txn.rawUpdate(
+          'UPDATE ${AppConstants.tableFolders} SET folder_count = '
+          '(SELECT COUNT(*) FROM ${AppConstants.tableFolders} c WHERE c.parent_folder_id = ${AppConstants.tableFolders}.id) '
+          'WHERE is_bundle = 1',
+        );
       }
     });
     return (pushReschedNeeded: pushReschedNeeded, filePaths: filePaths);
