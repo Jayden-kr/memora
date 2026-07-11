@@ -214,10 +214,10 @@ class CardAudioField extends StatefulWidget {
   });
 
   @override
-  State<CardAudioField> createState() => _CardAudioFieldState();
+  State<CardAudioField> createState() => CardAudioFieldState();
 }
 
-class _CardAudioFieldState extends State<CardAudioField> {
+class CardAudioFieldState extends State<CardAudioField> {
   final AudioRecorder _recorder = AudioRecorder();
 
   String? _path;
@@ -227,9 +227,16 @@ class _CardAudioFieldState extends State<CardAudioField> {
   Duration _elapsed = Duration.zero;
   Timer? _timer;
 
+  /// 녹음 중인 파일의 목적지 경로. _stopRecording으로 정지되기 전에 화면이
+  /// 닫히면 dispose()가 이 경로로 orphan 정리를 한다.
+  String? _activeRecordingPath;
+
   /// 이 위젯이 이번 세션에 생성한 파일들 (교체/삭제 시 orphan 정리 대상).
   /// 원본(initialPath) 파일은 여기 없으므로, 원본 삭제는 부모의 저장 시점 cleanup이 담당.
   final Set<String> _created = {};
+
+  /// 녹음 진행 중인지 (부모의 미저장 변경 감지용 — 예: 뒤로가기 시 폐기 다이얼로그).
+  bool get isRecording => _recording;
 
   @override
   void initState() {
@@ -241,6 +248,14 @@ class _CardAudioFieldState extends State<CardAudioField> {
   @override
   void dispose() {
     _timer?.cancel();
+    if (_recording) {
+      // 정지 없이(Save/뒤로가기 등으로) 녹음 중 화면이 닫히는 경우 —
+      // 정지 후 부분 녹음 파일을 삭제해 orphan을 남기지 않는다.
+      final orphan = _activeRecordingPath;
+      _recorder.stop().whenComplete(() {
+        if (orphan != null) File(orphan).delete().ignore();
+      }).ignore();
+    }
     _recorder.dispose();
     super.dispose();
   }
@@ -298,6 +313,7 @@ class _CardAudioFieldState extends State<CardAudioField> {
       setState(() {
         _recording = true;
         _elapsed = Duration.zero;
+        _activeRecordingPath = dest;
       });
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -313,7 +329,17 @@ class _CardAudioFieldState extends State<CardAudioField> {
     }
   }
 
-  Future<void> _stopRecording() async {
+  /// [commit]=false면 정지만 하고 결과 파일은 커밋하지 않은 채 삭제한다 (폐기용).
+  Future<void> _stopRecording({bool commit = true}) async {
+    // 재진입 가드: finishRecording(commit)과 cancelRecording(폐기)이 await 사이에
+    // 동시 진입하면 stop()이 두 번 불려 두 번째가 같은 경로를 echo→방금 커밋한
+    // 파일을 삭제하는 경합이 생긴다. await 전에 플래그를 내려 2차 호출을 차단.
+    if (!_recording) return;
+    if (mounted) {
+      setState(() => _recording = false);
+    } else {
+      _recording = false;
+    }
     _timer?.cancel();
     final durationMs = _elapsed.inMilliseconds;
     String? resultPath;
@@ -322,12 +348,32 @@ class _CardAudioFieldState extends State<CardAudioField> {
     } catch (_) {
       resultPath = null;
     }
-    if (!mounted) return;
-    setState(() => _recording = false);
+    _activeRecordingPath = null;
+    if (!mounted) {
+      // 정지 완료를 기다리는 사이 위젯이 dispose됨 — 완성된 파일을 이제 아무도
+      // 추적하지 않으므로(orphan) 즉시 삭제.
+      if (resultPath != null) File(resultPath).delete().ignore();
+      return;
+    }
     if (resultPath == null) return;
+    if (!commit) {
+      File(resultPath).delete().ignore();
+      return;
+    }
     _created.add(resultPath);
     _disposeSupersededFile(_path, resultPath);
     _commit(resultPath, durationMs > 0 ? durationMs : null);
+  }
+
+  /// 부모(CardEditScreen)의 저장 흐름에서 호출: 녹음 중이면 정지 후 커밋까지
+  /// 마쳐서, 정지 버튼을 누르지 않고 저장해도 진행 중이던 녹음이 포함되게 한다.
+  Future<void> finishRecording() async {
+    if (_recording) await _stopRecording();
+  }
+
+  /// 부모의 폐기(뒤로가기 확인) 흐름에서 호출: 녹음 중이면 정지 후 파일을 버린다.
+  Future<void> cancelRecording() async {
+    if (_recording) await _stopRecording(commit: false);
   }
 
   Future<void> _attachFile() async {

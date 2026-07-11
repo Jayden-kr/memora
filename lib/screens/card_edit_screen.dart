@@ -34,6 +34,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
   final _answerController = TextEditingController();
   final _nativeQuestionKey = GlobalKey<NativeTextFieldState>();
   final _nativeAnswerKey = GlobalKey<NativeTextFieldState>();
+  final _audioFieldKey = GlobalKey<CardAudioFieldState>();
   final _picker = ImagePicker();
 
   bool _finished = false;
@@ -313,6 +314,10 @@ class _CardEditScreenState extends State<CardEditScreen> {
     _saving = true;
 
     try {
+      // 녹음 중이면 저장 전에 정지+커밋 — 안 그러면 정지 버튼을 안 누르고 저장
+      // 시 진행 중이던 녹음이 조용히 유실된다 (파일은 orphan으로 남음).
+      await _audioFieldKey.currentState?.finishRecording();
+
       // 한글 IME 조합 중인 글자를 controller에 commit (focus 해제로 트리거).
       // 이 단계 없이 바로 controller.text를 읽으면 마지막 받침/조합 글자가 누락됨.
       // 50ms는 일부 IME (특히 Samsung Keyboard)에서 부족 → 200ms로 상향.
@@ -501,6 +506,9 @@ class _CardEditScreenState extends State<CardEditScreen> {
   bool get _hasChanges {
     final q = (_nativeQuestionKey.currentState?.text ?? _questionController.text).trim();
     final a = (_nativeAnswerKey.currentState?.text ?? _answerController.text).trim();
+    // 녹음 중인데 아직 정지(커밋) 전이면 그 자체로 미저장 변경 — 그래야 뒤로가기
+    // 시 폐기 다이얼로그 없이 조용히 사라지지(그리고 파일이 orphan 되지) 않는다.
+    if (_audioFieldKey.currentState?.isRecording ?? false) return true;
     if (_isEditing) {
       final c = widget.existingCard!;
       return q != c.question || a != c.answer ||
@@ -557,6 +565,8 @@ class _CardEditScreenState extends State<CardEditScreen> {
           ),
         );
         if (discard == true && context.mounted) {
+          await _audioFieldKey.currentState?.cancelRecording();
+          if (!context.mounted) return;
           _cleanupNewImages();
           Navigator.pop(context);
         }
@@ -607,6 +617,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
             // 카드 음성 (카드당 1개)
             CardAudioField(
+              key: _audioFieldKey,
               initialPath: _voicePath,
               initialDurationMs: _voiceLenMs,
               onChanged: (path, durationMs) {
