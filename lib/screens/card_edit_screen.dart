@@ -306,6 +306,10 @@ class _CardEditScreenState extends State<CardEditScreen> {
       );
       return;
     }
+    // 이 pop은 imperative라 PopScope.onPopInvokedWithResult가 didPop=true로
+    // 바로 return하고 폐기 다이얼로그 경로의 _cleanupNewImages()를 못 탄다 —
+    // 이번 세션에서 새로 추가된(원본에 없던) 이미지/음성 파일은 여기서 직접 정리.
+    _cleanupNewImages();
     if (!mounted) return;
     Navigator.pop(context, -1);
   }

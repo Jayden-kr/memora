@@ -303,6 +303,11 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   /// 전체 카드 로드 (페이지네이션 없음 — 전체 로드 방식)
   Future<void> _loadCards() async {
+    // _searchGeneration을 모든 리로드 경로의 세대 토큰으로 사용 — 이 호출보다
+    // 늦게 시작된 다른 _loadCards/_performSearch가 있으면 그쪽이 이긴다.
+    // (검색 중 X버튼으로 검색을 닫으면 이 리로드가 늦게 도착한 검색 결과에
+    // 덮어써지는 것을 방지)
+    final gen = ++_searchGeneration;
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {
       if (widget.allCards) {
@@ -315,7 +320,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       // 있어 id-only 쿼리 + chunk 로드(getCardsByIdsBatch)로 우회한다.
       final orderedIds = await _fetchOrderedCardIds();
       final cards = await _loadCardsChunked(orderedIds);
-      if (!mounted) return;
+      if (!mounted || gen != _searchGeneration) return;
       setState(() {
         _cards
           ..clear()
@@ -349,7 +354,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     }
 
     if (_searchQuery.isNotEmpty) {
-      await _performSearch();
+      await _performSearch(gen);
       return;
     }
 
@@ -363,7 +368,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     // 있어 id-only 쿼리 + chunk 로드(getCardsByIdsBatch)로 우회한다.
     final orderedIds = await _fetchOrderedCardIds();
     final cards = await _loadCardsChunked(orderedIds);
-    if (!mounted) return;
+    if (!mounted || gen != _searchGeneration) return;
     setState(() {
       _cards
         ..clear()
@@ -452,8 +457,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     _precacheCardImages();
   }
 
-  Future<void> _performSearch() async {
-    final generation = ++_searchGeneration;
+  /// [generation]은 호출자(_loadCards)가 진입 시점에 이미 발급한 세대 토큰을
+  /// 그대로 넘겨받는다 — 여기서 별도로 다시 발급하면 _loadCards의 다른 분기
+  /// (알림 모드 리로드, 기본 리로드)가 검색과 같은 세대를 공유하지 못해
+  /// 서로의 stale 여부를 못 걸러낸다 (검색 도중 검색을 닫아도 늦게 끝난
+  /// 검색 결과가 리로드 결과를 덮어쓰는 문제).
+  Future<void> _performSearch(int generation) async {
     List<CardModel> results;
     if (widget.allCards) {
       results =

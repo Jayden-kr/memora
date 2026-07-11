@@ -201,6 +201,13 @@ class CardTile extends StatelessWidget {
 
     final lowerText = text.toLowerCase();
     final lowerQuery = query.toLowerCase();
+    // toLowerCase()는 length-preserving이 아닌 유니코드 문자(예: 'İ')가 있으면
+    // lowerText/lowerQuery 길이가 원본과 달라질 수 있다. 그러면 lowerText에서 찾은
+    // index를 원본 text.substring에 그대로 쓰면 RangeError가 난다 — 그런 경우
+    // 하이라이트 없이 원본 텍스트만 렌더링한다.
+    if (text.length != lowerText.length || query.length != lowerQuery.length) {
+      return Text(text, style: style, maxLines: maxLines, overflow: overflow);
+    }
     final highlightColor = Theme.of(context).colorScheme.primary;
     final spans = <TextSpan>[];
     int start = 0;
@@ -215,10 +222,10 @@ class CardTile extends StatelessWidget {
         spans.add(TextSpan(text: text.substring(start, index)));
       }
       spans.add(TextSpan(
-        text: text.substring(index, index + query.length),
+        text: text.substring(index, index + lowerQuery.length),
         style: TextStyle(backgroundColor: highlightColor),
       ));
-      start = index + (query.isNotEmpty ? query.length : 1);
+      start = index + (lowerQuery.isNotEmpty ? lowerQuery.length : 1);
     }
 
     return Text.rich(
