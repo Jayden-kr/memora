@@ -203,6 +203,8 @@ class NotificationService {
 
     if (alarms.isEmpty) {
       debugPrint('[NOTIF] rescheduleAll: 설정된 알람 없음');
+      // 알람 테이블이 비어있어도 서비스가 실행 중일 수 있으므로 정리 (자가 치유)
+      try { await stopIntervalService(); } catch (_) {}
       return;
     }
 
