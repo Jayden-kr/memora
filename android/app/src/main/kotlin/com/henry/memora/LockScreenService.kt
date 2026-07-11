@@ -224,10 +224,21 @@ class LockScreenService : Service() {
         val recreateIntent = Intent(this, LockScreenService::class.java).apply {
             action = "RECREATE_NOTIFICATION"
         }
-        val deletePendingIntent = PendingIntent.getForegroundService(
-            this, 100, recreateIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        // getForegroundService()는 API 26+ 전용 — minSdk 24 기기(Android 7.0/7.1)에서
+        // 가드 없이 호출하면 NoSuchMethodError(Error, onStartCommand의 catch(Exception)에
+        // 안 잡힘)로 프로세스가 죽는다. Pre-O는 getService로 충분(당시 startForeground는
+        // startForegroundService 경유를 요구하지 않음).
+        val deletePendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(
+                this, 100, recreateIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        } else {
+            PendingIntent.getService(
+                this, 100, recreateIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")

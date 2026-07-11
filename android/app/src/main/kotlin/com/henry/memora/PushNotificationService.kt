@@ -217,6 +217,21 @@ class PushNotificationService : Service() {
         super.onDestroy()
     }
 
+    /**
+     * getForegroundService()는 API 26+ 전용 — minSdk 24 기기(Android 7.0/7.1)에서 가드 없이
+     * 호출하면 NoSuchMethodError(Error, onStartCommand의 catch(Exception)에 안 잡힘)로
+     * 프로세스가 죽는다. Pre-O는 getService로 충분(당시 startForeground는
+     * startForegroundService 경유를 요구하지 않음). LockScreenService.kt와 동일 패턴 —
+     * 이 파일은 호출 지점이 여러 곳이라 헬퍼로 통합.
+     */
+    private fun foregroundServicePendingIntent(context: Context, reqCode: Int, intent: Intent, flags: Int): PendingIntent {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(context, reqCode, intent, flags)
+        } else {
+            PendingIntent.getService(context, reqCode, intent, flags)
+        }
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         // running 상태가 아니면 재시작 불필요
@@ -227,7 +242,7 @@ class PushNotificationService : Service() {
         }
         Log.d(TAG, "onTaskRemoved — AlarmManager로 서비스 재시작 예약")
         val restartIntent = Intent(applicationContext, PushNotificationService::class.java)
-        val pi = PendingIntent.getForegroundService(
+        val pi = foregroundServicePendingIntent(
             applicationContext, REQUEST_CODE_RESTART, restartIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -263,7 +278,7 @@ class PushNotificationService : Service() {
         val tickIntent = Intent(applicationContext, PushNotificationService::class.java).apply {
             action = ACTION_TICK
         }
-        val pi = PendingIntent.getForegroundService(
+        val pi = foregroundServicePendingIntent(
             applicationContext, REQUEST_CODE_TICK, tickIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -300,7 +315,7 @@ class PushNotificationService : Service() {
         val tickIntent = Intent(applicationContext, PushNotificationService::class.java).apply {
             action = ACTION_TICK
         }
-        val pi = PendingIntent.getForegroundService(
+        val pi = foregroundServicePendingIntent(
             applicationContext, REQUEST_CODE_TICK, tickIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -313,7 +328,7 @@ class PushNotificationService : Service() {
      */
     private fun cancelRestartAlarm() {
         val restartIntent = Intent(applicationContext, PushNotificationService::class.java)
-        val pi = PendingIntent.getForegroundService(
+        val pi = foregroundServicePendingIntent(
             applicationContext, REQUEST_CODE_RESTART, restartIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -503,7 +518,7 @@ class PushNotificationService : Service() {
         val recreateIntent = Intent(this, PushNotificationService::class.java).apply {
             action = "RECREATE_NOTIFICATION"
         }
-        val deletePi = PendingIntent.getForegroundService(
+        val deletePi = foregroundServicePendingIntent(
             this, 200, recreateIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
