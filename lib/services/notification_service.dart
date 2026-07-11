@@ -80,6 +80,28 @@ class NotificationService {
     }
   }
 
+  /// SCHEDULE_EXACT_ALARM이 실제로 허용되어 있는지 확인 (API 31+에서만 의미 있음,
+  /// API 31 미만은 네이티브 쪽에서 항상 true 반환)
+  static Future<bool> canScheduleExactAlarms() async {
+    try {
+      final result =
+          await _pushNotifChannel.invokeMethod<bool>('canScheduleExactAlarms');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('[NOTIF] canScheduleExactAlarms 실패: $e');
+      return false;
+    }
+  }
+
+  /// '알람 및 리마인더' 정확한 알림 설정 화면 열기 (API 31+)
+  static Future<void> openExactAlarmSettings() async {
+    try {
+      await _pushNotifChannel.invokeMethod('openExactAlarmSettings');
+    } catch (e) {
+      debugPrint('[NOTIF] openExactAlarmSettings 실패: $e');
+    }
+  }
+
   // ─── 알림 탭 처리 ───
 
   static void _onNotificationTap(NotificationResponse response) {

@@ -13,11 +13,10 @@
          녹음은 선택 기능(파일 첨부·재생·나머지는 마이크 없이 동작)이므로 required=false로
          명시해 그 기기들의 설치/업데이트를 유지한다. -->
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
-    <!-- 정확한 알림 스케줄링 — Memora는 복습 리마인더 앱이므로 USE_EXACT_ALARM 적용 대상.
-         API 33+: USE_EXACT_ALARM (자격 요건 충족 시 설치 시점 자동 부여, 별도 다이얼로그 불필요)
-         API 31-32: SCHEDULE_EXACT_ALARM (USE_EXACT_ALARM 미지원 구간의 대체 권한) -->
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <!-- 정확한 알림 스케줄링 — SCHEDULE_EXACT_ALARM은 모든 앱이 선언 가능한 권한.
+         API 31-32: 설치 시점 자동 부여. API 33+: 자동 부여 안 됨 → 설정 화면에서
+         사용자가 직접 허용해야 함 (앱 내 유도 프롬프트로 안내, canScheduleExactAlarms 참고). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- 파일 읽기/쓰기 (Android 9 이하 .memk import/export, 이미지 접근) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <!-- WRITE_EXTERNAL_STORAGE: Android 9 이하(API 28-)에서 Downloads 공개 폴더 직접 쓰기용.

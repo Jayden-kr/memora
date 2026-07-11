@@ -444,6 +444,9 @@
   "pushSaveFail": "저장에 실패했습니다. 다시 시도해 주세요.",
   "pushIntervalMinError": "간격은 최소 5분이어야 합니다.",
   "pushTimeSameError": "시작 시간과 종료 시간이 같습니다.",
+  "pushExactAlarmTitle": "정확한 시간 알림 권한이 필요합니다",
+  "pushExactAlarmBody": "복습 알림을 정확한 시간에 받으려면 '알람 및 리마인더' 권한을 허용해주세요. 허용하지 않으면 알림이 몇 분 늦게 도착할 수 있습니다.",
+  "pushExactAlarmButton": "권한 허용하기",
 
   "cardListSearchHint": "검색...",
   "cardListSearchEmpty": "검색 결과가 없습니다.",

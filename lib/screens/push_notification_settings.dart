@@ -18,13 +18,15 @@ class PushNotificationSettingsScreen extends StatefulWidget {
 }
 
 class _PushNotificationSettingsScreenState
-    extends State<PushNotificationSettingsScreen> {
+    extends State<PushNotificationSettingsScreen> with WidgetsBindingObserver {
   bool _enabled = false;
   List<Folder> _folders = [];
   int? _selectedFolderId;
   bool _soundEnabled = true;
   bool _loading = true;
   bool _saving = false;
+  // 기본값 true — 실제 체크가 끝나기 전까지 경고 카드가 잠깐 보였다 사라지는 깜빡임 방지.
+  bool _exactAlarmPermitted = true;
 
   TimeOfDay _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
   TimeOfDay _intervalEndTime = const TimeOfDay(hour: 22, minute: 0);
@@ -36,11 +38,14 @@ class _PushNotificationSettingsScreenState
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
+    _checkExactAlarmPermission();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     final hadPendingSettings = _settingsDebounce?.isActive ?? false;
     _settingsDebounce?.cancel();
     if (hadPendingSettings) {
@@ -51,6 +56,21 @@ class _PushNotificationSettingsScreenState
     }
     _intervalMinController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 사용자가 '알람 및 리마인더' 설정 화면에 다녀온 뒤 이 화면으로 돌아왔을 때
+    // 재확인 — 설정 변경은 이 화면으로 돌아와야 알 수 있으므로 resume 시점에 체크.
+    if (state == AppLifecycleState.resumed) {
+      _checkExactAlarmPermission();
+    }
+  }
+
+  Future<void> _checkExactAlarmPermission() async {
+    final permitted = await NotificationService.canScheduleExactAlarms();
+    if (!mounted) return;
+    setState(() => _exactAlarmPermitted = permitted);
   }
 
   Future<void> _loadData() async {
@@ -256,6 +276,8 @@ class _PushNotificationSettingsScreenState
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
+                if (!_exactAlarmPermitted) _buildExactAlarmPrompt(t),
+
                 ListTile(
                   title: Text(t.pushAlarm),
                   trailing: Transform.scale(
@@ -406,6 +428,79 @@ class _PushNotificationSettingsScreenState
                 ),
               ],
             ),
+    );
+  }
+
+  /// API 33+에서 SCHEDULE_EXACT_ALARM이 자동 부여되지 않아 사용자가 직접
+  /// '알람 및 리마인더'를 허용해야 하는 경우 보여주는 안내 카드.
+  /// API 31 미만은 canScheduleExactAlarms가 항상 true를 반환하므로 노출되지 않는다.
+  Widget _buildExactAlarmPrompt(AppLocalizations t) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = isDark
+        ? Colors.amber.shade900.withValues(alpha: 0.25)
+        : Colors.amber.shade50;
+    final fg = isDark ? Colors.amber.shade200 : Colors.amber.shade900;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Card(
+        color: bg,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.amber.shade400.withValues(alpha: 0.4)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: fg),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      t.pushExactAlarmTitle,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            color: fg,
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      t.pushExactAlarmBody,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: fg),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: fg,
+                          side: BorderSide(color: fg),
+                        ),
+                        onPressed: () async {
+                          await NotificationService.openExactAlarmSettings();
+                          // 설정 화면이 별도 앱 화면이 아니라 다이얼로그로 뜨는
+                          // 일부 기기 대비 즉시 1회 재확인 (주 경로는 위의
+                          // didChangeAppLifecycleState resumed 콜백).
+                          await _checkExactAlarmPermission();
+                        },
+                        child: Text(t.pushExactAlarmButton),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

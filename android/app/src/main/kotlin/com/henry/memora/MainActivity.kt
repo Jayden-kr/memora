@@ -1,6 +1,7 @@
 package com.henry.memora
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
@@ -253,6 +254,36 @@ class MainActivity : FlutterActivity() {
                             } catch (e: Exception) {
                                 result.error("ERROR", e.message, null)
                             }
+                        }
+                        "canScheduleExactAlarms" -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                val am = getSystemService(AlarmManager::class.java)
+                                result.success(am?.canScheduleExactAlarms() ?: true)
+                            } else {
+                                result.success(true) // API 31 미만은 항상 허용
+                            }
+                        }
+                        "openExactAlarmSettings" -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                try {
+                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
+                                        .setData(android.net.Uri.parse("package:$packageName"))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    startActivity(intent)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "ACTION_REQUEST_SCHEDULE_EXACT_ALARM 열기 실패, 앱 설정으로 폴백: ${e.message}")
+                                    try {
+                                        val fallback = Intent(
+                                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            android.net.Uri.parse("package:$packageName")
+                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        startActivity(fallback)
+                                    } catch (e2: Exception) {
+                                        Log.e(TAG, "앱 설정 화면 열기도 실패: ${e2.message}")
+                                    }
+                                }
+                            }
+                            result.success(true)
                         }
                         else -> result.notImplemented()
                     }

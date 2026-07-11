@@ -270,6 +270,9 @@
   "pushSaveFail": "Save failed. Please try again.",
   "pushIntervalMinError": "Interval must be at least 5 minutes.",
   "pushTimeSameError": "Start and end times are the same.",
+  "pushExactAlarmTitle": "Exact alarm permission needed",
+  "pushExactAlarmBody": "Allow \"Alarms & reminders\" access so review notifications arrive at the exact time. Without it, notifications may be delayed by a few minutes.",
+  "pushExactAlarmButton": "Grant permission",
 
   "cardListSearchHint": "Search...",
   "cardListSearchEmpty": "No matching cards.",
