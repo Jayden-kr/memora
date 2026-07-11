@@ -53,7 +53,14 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
   @override
   void dispose() {
+    final hadPendingSettings = _settingDebounce?.isActive ?? false;
     _settingDebounce?.cancel();
+    if (hadPendingSettings) {
+      // 대기 중이던 debounce를 flush — 그냥 취소만 하면 폴더/정렬/배경색 변경이
+      // 네이티브에 반영되지 않은 채 화면을 벗어나 유실된다. context/setState를 쓰지
+      // 않으므로 dispose 이후에도 fire-and-forget으로 안전하게 완료 가능.
+      _applySettings();
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
