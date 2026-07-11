@@ -273,6 +273,8 @@ class ImportExportController {
     final createdFileNames = <String>[];
     try {
       final totalFolders = selectedFolders.length;
+      // 이번 배치에서 이미 사용(claim)한 출력 경로 — 동일 배치 내 이름 충돌 감지용
+      final usedOutputPaths = <String>{};
 
       for (int i = 0; i < selectedFolders.length; i++) {
         final folder = selectedFolders[i];
@@ -282,7 +284,8 @@ class ImportExportController {
         final safeName = _sanitizeFileName(folder.name);
         var fileName = '$safeName.mra';
         var outputPath = p.join(exportDirPath, fileName);
-        if (conflictPolicy == 'overwrite') {
+        if (conflictPolicy == 'overwrite' &&
+            !usedOutputPaths.contains(outputPath)) {
           // 동일 이름 파일이 있으면 삭제 후 덮어쓰기 + DB 레코드도 정리
           final existing = File(outputPath);
           if (existing.existsSync()) {
@@ -293,14 +296,17 @@ class ImportExportController {
             } catch (_) {}
           }
         } else {
-          // 'rename' (기본값): 동일 이름 존재 시 숫자 접미사 추가
+          // 'rename' (기본값) 또는 이번 배치 내 이름 충돌: 숫자 접미사 추가
+          // (overwrite 정책이라도 방금 이 배치에서 만든 파일을 지우면 안 됨)
           var counter = 1;
-          while (File(outputPath).existsSync()) {
+          while (File(outputPath).existsSync() ||
+              usedOutputPaths.contains(outputPath)) {
             fileName = '${safeName}_$counter.mra';
             outputPath = p.join(exportDirPath, fileName);
             counter++;
           }
         }
+        usedOutputPaths.add(outputPath);
 
         await _exportService.exportMemk(
           outputPath: outputPath,
