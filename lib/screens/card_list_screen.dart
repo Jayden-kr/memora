@@ -142,29 +142,15 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       _applySettings(settings);
 
       // 1. id만 가져와 ordering + targetIndex 계산 (light query, 정확)
-      final List<int> orderedIds;
-      if (widget.allCards) {
-        orderedIds = await DatabaseHelper.instance
-            .getAllCardIds(sortBy: _sortOrder);
-      } else {
-        orderedIds = await DatabaseHelper.instance
-            .getCardIdsByFolderIdSorted(widget.folder.id!, _sortOrder);
-      }
+      final orderedIds = await _fetchOrderedCardIds();
       if (!mounted) return;
 
       final targetId = widget.scrollToCardId!;
       final targetIndex = orderedIds.indexOf(targetId);
 
       // 2. cards를 chunk 단위로 로드 (transaction 한계 회피)
-      final cardsById =
-          await DatabaseHelper.instance.getCardsByIdsBatch(orderedIds);
+      final cards = await _loadCardsChunked(orderedIds);
       if (!mounted) return;
-
-      // 3. id ordering 보존하며 정렬
-      final cards = orderedIds
-          .map((id) => cardsById[id])
-          .whereType<CardModel>()
-          .toList();
 
       setState(() {
         _cards
@@ -193,6 +179,28 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       _applySettings(settings);
       await _loadCards();
     }
+  }
+
+  /// allCards 여부에 따라 정렬된 id 목록만 조회 (SELECT * 없이 id 컬럼만).
+  Future<List<int>> _fetchOrderedCardIds() {
+    if (widget.allCards) {
+      return DatabaseHelper.instance.getAllCardIds(sortBy: _sortOrder);
+    }
+    return DatabaseHelper.instance
+        .getCardIdsByFolderIdSorted(widget.folder.id!, _sortOrder);
+  }
+
+  /// id 목록을 chunk 단위(getCardsByIdsBatch)로 조회해 CardModel 리스트로 변환.
+  /// 대량 카드를 SELECT *로 한 번에 가져오면 Android Binder transaction(1MB)
+  /// 한계로 일부 row가 silently corrupt되므로, 카드를 실제로 로드하는 모든
+  /// 경로가 이 헬퍼를 거치도록 한다 (id ordering은 그대로 보존).
+  Future<List<CardModel>> _loadCardsChunked(List<int> orderedIds) async {
+    final cardsById =
+        await DatabaseHelper.instance.getCardsByIdsBatch(orderedIds);
+    return orderedIds
+        .map((id) => cardsById[id])
+        .whereType<CardModel>()
+        .toList();
   }
 
   void _applySettings(Map<String, String> settings) {
@@ -297,18 +305,16 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   Future<void> _loadCards() async {
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {
-      List<CardModel> cards;
       if (widget.allCards) {
         _totalCount = await DatabaseHelper.instance.getTotalCardCount();
-        cards = await DatabaseHelper.instance.getAllCards(sortBy: _sortOrder);
       } else {
         _totalCount = await DatabaseHelper.instance
             .countCardsByFolderId(widget.folder.id!);
-        cards = await DatabaseHelper.instance.getCardsByFolderIdSorted(
-          widget.folder.id!,
-          _sortOrder,
-        );
       }
+      // 대량 카드에서 SELECT *를 한 번에 실행하면 row corruption이 발생할 수
+      // 있어 id-only 쿼리 + chunk 로드(getCardsByIdsBatch)로 우회한다.
+      final orderedIds = await _fetchOrderedCardIds();
+      final cards = await _loadCardsChunked(orderedIds);
       if (!mounted) return;
       setState(() {
         _cards
@@ -348,30 +354,21 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
     if (widget.allCards) {
       _totalCount = await DatabaseHelper.instance.getTotalCardCount();
-      final cards = await DatabaseHelper.instance.getAllCards(sortBy: _sortOrder);
-      if (!mounted) return;
-      setState(() {
-        _cards
-          ..clear()
-          ..addAll(cards);
-        _loading = false;
-      });
     } else {
       _totalCount = await DatabaseHelper.instance
           .countCardsByFolderId(widget.folder.id!);
-      final cards =
-          await DatabaseHelper.instance.getCardsByFolderIdSorted(
-        widget.folder.id!,
-        _sortOrder,
-      );
-      if (!mounted) return;
-      setState(() {
-        _cards
-          ..clear()
-          ..addAll(cards);
-        _loading = false;
-      });
     }
+    // 대량 카드에서 SELECT *를 한 번에 실행하면 row corruption이 발생할 수
+    // 있어 id-only 쿼리 + chunk 로드(getCardsByIdsBatch)로 우회한다.
+    final orderedIds = await _fetchOrderedCardIds();
+    final cards = await _loadCardsChunked(orderedIds);
+    if (!mounted) return;
+    setState(() {
+      _cards
+        ..clear()
+        ..addAll(cards);
+      _loading = false;
+    });
     _precacheCardImages();
     // 스크롤 위치 복원
     if (savedIndex != null && savedIndex > 0 && _cards.isNotEmpty) {
