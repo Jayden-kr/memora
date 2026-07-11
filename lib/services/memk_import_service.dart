@@ -383,7 +383,9 @@ class MemkImportService {
 
         final localPath = localImagePath(appDocDir, fileName);
         final localFile = File(localPath);
-        if (!localFile.existsSync()) {
+        // 크기까지 비교 — 중단된 이전 import가 남긴 손상/0바이트 파일은
+        // existsSync()만으로는 걸러지지 않아 재import해도 영구히 방치됨
+        if (!localFile.existsSync() || localFile.lengthSync() != zipFile.size) {
           await localFile.writeAsBytes(zipFile.content as List<int>);
         }
         imageCount++;
@@ -641,7 +643,11 @@ class MemkImportService {
         }
 
         final localPath = localImagePath(appDocDir, fileName);
-        await File(localPath).writeAsBytes(fileData);
+        // 임시 파일에 먼저 쓰고 rename — 쓰기 도중 강제종료돼도 최종 경로에는
+        // 완전한 파일만 존재하게 되어 손상 파일이 남지 않음
+        final tmpFile = File('$localPath.tmp');
+        await tmpFile.writeAsBytes(fileData);
+        await tmpFile.rename(localPath);
         extracted++;
       } catch (e) {
         debugPrint('[IMPORT] raw extraction failed: ${entry.key} — $e');
