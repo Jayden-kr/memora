@@ -1,15 +1,16 @@
-=== ko-KR ===
+<ko-KR>
 안정성 개선 + 설정 화면 정리
 
 - 여러 화면의 드문 크래시·데이터 유실 수정
 - 가져오기/내보내기·PDF·알림·잠금화면 안정화
 - 구형 안드로이드 호환성 개선
 - 설정 화면 디자인 정리
-
-=== en-US ===
+</ko-KR>
+<en-US>
 Stability improvements + refreshed settings
 
 - Fixed rare crashes and data-loss issues
 - More reliable import/export, PDF, notifications, lock screen
 - Better compatibility with older Android
 - Cleaner settings screen
+</en-US>
