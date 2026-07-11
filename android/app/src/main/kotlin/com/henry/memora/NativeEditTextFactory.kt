@@ -121,8 +121,37 @@ class NativeEditTextView(
                     editText.clearFocus()
                     result.success(null)
                 }
+                "setTheme" -> {
+                    val isDark = call.argument<Boolean>("isDark") ?: false
+                    val accentArgb = (call.argument<Number>("accentColor"))?.toLong() ?: 0xFFFF6B6B
+                    applyTheme(isDark, accentArgb)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    /**
+     * 런타임 테마 변경(OS 다크모드 토글 등) 시 Dart의 'setTheme' 호출로 실행.
+     * init 블록의 초기 색상 적용과 동일한 로직 — editText가 이미 생성된 뒤
+     * 다시 적용해야 하므로 별도 메서드로 분리.
+     */
+    private fun applyTheme(isDark: Boolean, accentArgb: Long) {
+        if (isDark) {
+            editText.setTextColor(Color.parseColor("#E0E0E0"))
+            editText.setHintTextColor(Color.parseColor("#808080"))
+        } else {
+            editText.setTextColor(Color.parseColor("#1C1B1F"))
+            editText.setHintTextColor(Color.parseColor("#909090"))
+        }
+        val rgb = accentArgb.toInt() and 0x00FFFFFF
+        editText.highlightColor = rgb or 0x40000000
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            editText.textCursorDrawable?.setTint(accentArgb.toInt())
+            editText.textSelectHandle?.setTint(accentArgb.toInt())
+            editText.textSelectHandleLeft?.setTint(accentArgb.toInt())
+            editText.textSelectHandleRight?.setTint(accentArgb.toInt())
         }
     }
 
