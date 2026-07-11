@@ -341,6 +341,7 @@ class NotificationService {
         'endTotal': endTotal,
         'folderId': folderId ?? -1,
         'soundEnabled': soundEnabled,
+        'lang': LocaleService.currentLanguageCode(),
       });
       debugPrint('[NOTIF] 서비스 시작: '
           '${startHour.toString().padLeft(2, "0")}:${startMinute.toString().padLeft(2, "0")}'

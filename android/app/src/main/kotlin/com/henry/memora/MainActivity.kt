@@ -241,6 +241,7 @@ class MainActivity : FlutterActivity() {
                                 putExtra("endTotal", (args["endTotal"] as? Number)?.toInt() ?: 1320)
                                 putExtra("folderId", (args["folderId"] as? Number)?.toInt() ?: -1)
                                 putExtra("soundEnabled", args["soundEnabled"] as? Boolean ?: true)
+                                putExtra("lang", (args["lang"] as? String) ?: "ko")
                             }
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)

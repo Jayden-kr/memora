@@ -25,6 +25,9 @@ void main() async {
   // 이전 실행에서 남은 stale 상태 정리 (앱 강제 종료 시 foreground 알림 잔류 방지)
   ImportExportController.instance.cleanupStaleState();
 
+  // 파일이 삭제/누락된 카드의 깨진 이미지·음성 경로를 blank 처리 (앱 시작 시 1회)
+  _cleanupBrokenImagePathsOnce();
+
   // 저장된 테마 모드 로드
   try {
     final settings = await DatabaseHelper.instance.getAllSettings();
@@ -114,6 +117,26 @@ void main() async {
       _handleSettingsNavigation(settingsTarget);
     }
   });
+}
+
+/// 앱 시작 시 1회, 깨진 이미지/음성 경로 정리 (fire-and-forget).
+/// import 진행 중이면 건너뜀 — insertCardsBatch 재복구가 빈 경로를 채우는
+/// 방식으로 동작하므로, 진행 중인 import의 임시 상태와 경합하지 않도록 한다.
+Future<void> _cleanupBrokenImagePathsOnce() async {
+  try {
+    final settings = await DatabaseHelper.instance.getAllSettings();
+    final importInProgress = settings['import_in_progress'];
+    if (importInProgress != null && importInProgress.isNotEmpty) {
+      debugPrint('[MAIN] import 진행 중, cleanupBrokenImagePaths 건너뜀');
+      return;
+    }
+    final cleaned = await DatabaseHelper.instance.cleanupBrokenImagePaths();
+    if (cleaned > 0) {
+      debugPrint('[MAIN] cleanupBrokenImagePaths: $cleaned개 경로 정리됨');
+    }
+  } catch (e) {
+    debugPrint('[MAIN] cleanupBrokenImagePaths 실패: $e');
+  }
 }
 
 /// Cold-start 시 navigator 준비 전에 도착한 설정 네비게이션 대상

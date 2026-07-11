@@ -36,11 +36,16 @@ class PushNotificationService : Service() {
     private var endTotal = 1320    // 22:00
     private var folderId: Int? = null
     private var soundEnabled = true
+    private var lang = "ko"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        // createNotificationChannel()이 intent 파싱(onStartCommand)보다 먼저 실행되므로,
+        // lang 필드가 기본값(ko)인 채로 채널이 생성되지 않도록 마지막 저장값을 미리 로드한다.
+        // main-branch/TICK에서 실제 intent 값으로 다시 갱신됨.
+        lang = getSharedPreferences("push_notif_prefs", MODE_PRIVATE).getString("lang", "ko") ?: "ko"
         createNotificationChannel()
         Log.d(TAG, "onCreate")
     }
@@ -165,6 +170,7 @@ class PushNotificationService : Service() {
         }
         soundEnabled = intent?.getBooleanExtra("soundEnabled", prefs.getBoolean("soundEnabled", true))
             ?: prefs.getBoolean("soundEnabled", true)
+        lang = intent?.getStringExtra("lang") ?: prefs.getString("lang", "ko") ?: "ko"
 
         // 타이밍 설정 변경 여부 판별 (폴더/알림음은 타이밍과 무관)
         val timingKey = "$intervalMin:$startTotal:$endTotal"
@@ -179,6 +185,7 @@ class PushNotificationService : Service() {
             .putInt("folderId", folderId ?: -1)
             .putBoolean("soundEnabled", soundEnabled)
             .putString("timingKey", timingKey)
+            .putString("lang", lang)
             .commit()  // apply() 대신 commit() — 서비스 kill 전 데이터 보존 보장
 
         Log.d(TAG, "시작: ${startTotal/60}:${String.format(java.util.Locale.US, "%02d", startTotal%60)}~${endTotal/60}:${String.format(java.util.Locale.US, "%02d", endTotal%60)}, ${intervalMin}분 간격")
@@ -368,6 +375,7 @@ class PushNotificationService : Service() {
         endTotal = prefs.getInt("endTotal", 1320)
         folderId = prefs.getInt("folderId", -1).let { if (it == -1) null else it }
         soundEnabled = prefs.getBoolean("soundEnabled", true)
+        lang = prefs.getString("lang", "ko") ?: "ko"
     }
 
     private fun fireIfInRange() {
@@ -429,7 +437,7 @@ class PushNotificationService : Service() {
                 return
             }
             if (question.isEmpty()) {
-                question = "카드를 복습할 시간입니다!"
+                question = if (lang == "en") "Time to review your cards!" else "카드를 복습할 시간입니다!"
             }
 
             // notifId = requestCode = CARD_NOTIF_BASE + cardId
@@ -444,10 +452,14 @@ class PushNotificationService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (nm?.getNotificationChannel("review_notification_channel") == null) {
                     val channel = NotificationChannel(
-                        "review_notification_channel", "복습 알림",
+                        "review_notification_channel",
+                        if (lang == "en") "Review notification" else "복습 알림",
                         NotificationManager.IMPORTANCE_HIGH
                     ).apply {
-                        description = "설정한 시간에 랜덤 카드 알림"
+                        description = if (lang == "en")
+                            "Random card notification at scheduled time"
+                        else
+                            "설정한 시간에 랜덤 카드 알림"
                         enableVibration(true)
                     }
                     nm?.createNotificationChannel(channel)
@@ -512,10 +524,14 @@ class PushNotificationService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID, "푸시 알림 서비스",
+                CHANNEL_ID,
+                if (lang == "en") "Push notification service" else "푸시 알림 서비스",
                 NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = "간격 반복 알림 백그라운드 서비스"
+                description = if (lang == "en")
+                    "Background service for interval notifications"
+                else
+                    "간격 반복 알림 백그라운드 서비스"
                 setShowBadge(false)
             }
             val nm = getSystemService(NotificationManager::class.java) ?: return
@@ -545,9 +561,15 @@ class PushNotificationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val rangeText = "${String.format(java.util.Locale.US, "%02d:%02d", startH, startM)}~${String.format(java.util.Locale.US, "%02d:%02d", endH, endM)}"
+        val contentText = if (lang == "en")
+            "$rangeText, notifications every ${intervalMin} min"
+        else
+            "$rangeText, ${intervalMin}분 간격 알림 활성화"
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")
-            .setContentText("${String.format(java.util.Locale.US, "%02d:%02d", startH, startM)}~${String.format(java.util.Locale.US, "%02d:%02d", endH, endM)}, ${intervalMin}분 간격 알림 활성화")
+            .setContentText(contentText)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pi)
             .setDeleteIntent(deletePi)
