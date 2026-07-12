@@ -1450,6 +1450,64 @@ class DatabaseHelper {
   /// 존재하지 않는 이미지/음성 파일 경로를 DB에서 일괄 제거
   /// 앱 시작 시 1회 실행하여 깨진 이미지 참조를 정리
   /// 배치 처리로 OOM 방지 (대량 카드 대응)
+  /// 어느 카드도 참조하지 않는 images/ 디렉토리의 고아 미디어 파일을 삭제한다.
+  /// 일괄/폴더 삭제의 fire-and-forget 파일정리가 앱 강제종료·개별 실패로 놓친
+  /// 잔여물을 청소해 "흔적 0"을 보장한다. 반환: 삭제한 파일 수.
+  ///
+  /// ⚠️ 파일을 영구 삭제하므로 참조 집합은 반드시 canonical [_pathColumns] 전체로
+  ///    정확히 구성한다(누락 시 실제 참조 파일이 지워질 수 있음). 호출자는 import
+  ///    진행 중이면 이 메서드를 건너뛴다(복사됐지만 카드 insert 전인 파일 보호).
+  ///    앱 시작 시점에만 호출해 카드 생성/편집과의 경합을 피한다.
+  Future<int> cleanupOrphanMediaFiles() async {
+    final db = await database;
+
+    // 1) 모든 카드가 참조하는 미디어 파일 basename 집합.
+    //    대형 라이브러리의 Android Binder(1MB) 커서 한계를 피해 id 기반 페이징
+    //    (offset 드리프트도 방지). 앱 시작 시점이라 동시 쓰기가 없다.
+    final referenced = <String>{};
+    const batchSize = 500;
+    int lastMaxId = 0;
+    while (true) {
+      final rows = await db.query(
+        AppConstants.tableCards,
+        columns: ['id', ..._pathColumns],
+        where: 'id > ?',
+        whereArgs: [lastMaxId],
+        orderBy: 'id ASC',
+        limit: batchSize,
+      );
+      if (rows.isEmpty) break;
+      lastMaxId = rows.last['id'] as int;
+      for (final row in rows) {
+        for (final col in _pathColumns) {
+          final path = row[col] as String?;
+          if (path != null && path.isNotEmpty) referenced.add(p.basename(path));
+        }
+      }
+      if (rows.length < batchSize) break;
+    }
+
+    // 2) images/ 스캔 → 어느 카드도 참조하지 않는 파일 삭제.
+    final docDir = await getApplicationDocumentsDirectory();
+    final mediaDir = Directory(p.join(docDir.path, AppConstants.imageDir));
+    if (!await mediaDir.exists()) return 0;
+
+    int deleted = 0;
+    await for (final entity in mediaDir.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final base = p.basename(entity.path);
+      if (base.startsWith('.')) continue; // .nomedia 등 숨김/시스템 파일 보호
+      if (referenced.contains(base)) continue; // 참조됨 → 보존
+      try {
+        await entity.delete();
+        deleted++;
+      } catch (_) {
+        // 잠금·권한 등 — 다음 시작 때 재시도
+      }
+    }
+    return deleted;
+  }
+
   Future<int> cleanupBrokenImagePaths() async {
     final db = await database;
 

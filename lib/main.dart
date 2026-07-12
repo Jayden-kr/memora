@@ -25,8 +25,9 @@ void main() async {
   // 이전 실행에서 남은 stale 상태 정리 (앱 강제 종료 시 foreground 알림 잔류 방지)
   ImportExportController.instance.cleanupStaleState();
 
-  // 파일이 삭제/누락된 카드의 깨진 이미지·음성 경로를 blank 처리 (앱 시작 시 1회)
-  _cleanupBrokenImagePathsOnce();
+  // 앱 시작 시 1회 (fire-and-forget): ①파일 없는 카드의 깨진 경로 blank 처리 +
+  //   ②어느 카드도 참조하지 않는 고아 미디어 파일 정리("흔적 0").
+  _startupMediaCleanupOnce();
 
   // 저장된 테마 모드 로드
   try {
@@ -117,6 +118,33 @@ void main() async {
       _handleSettingsNavigation(settingsTarget);
     }
   });
+}
+
+/// 앱 시작 시 미디어 정리 2단계를 순서대로 수행 (fire-and-forget).
+/// ①깨진 경로 정리(참조는 있는데 파일 없음) → ②고아 파일 정리(파일은 있는데 참조 없음).
+Future<void> _startupMediaCleanupOnce() async {
+  await _cleanupBrokenImagePathsOnce();
+  await _cleanupOrphanMediaFilesOnce();
+}
+
+/// 앱 시작 시 1회, 어느 카드도 참조하지 않는 images/ 고아 미디어 파일 정리.
+/// import 진행 중이면 건너뜀 — import가 복사한 파일을 카드 insert 전에 지우지 않도록
+/// (_cleanupBrokenImagePathsOnce와 동일 가드).
+Future<void> _cleanupOrphanMediaFilesOnce() async {
+  try {
+    final settings = await DatabaseHelper.instance.getAllSettings();
+    final importInProgress = settings['import_in_progress'];
+    if (importInProgress != null && importInProgress.isNotEmpty) {
+      debugPrint('[MAIN] import 진행 중, cleanupOrphanMediaFiles 건너뜀');
+      return;
+    }
+    final deleted = await DatabaseHelper.instance.cleanupOrphanMediaFiles();
+    if (deleted > 0) {
+      debugPrint('[MAIN] cleanupOrphanMediaFiles: $deleted개 고아 파일 삭제됨');
+    }
+  } catch (e) {
+    debugPrint('[MAIN] cleanupOrphanMediaFiles 실패: $e');
+  }
 }
 
 /// 앱 시작 시 1회, 깨진 이미지/음성 경로 정리 (fire-and-forget).
