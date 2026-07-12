@@ -1,0 +1,16 @@
+<ko-KR>
+카드 편집 화면 개선 + 저장공간 정리
+
+- 편집 중 키보드가 입력칸을 가리지 않도록 자동 스크롤
+- 카드 편집 화면 디자인 리뉴얼
+- 카드 이동 시 대상 폴더가 없으면 새 폴더를 바로 만들어 옮기기
+- 삭제 후 남는 미디어 파일 자동 정리로 저장공간 깔끔하게
+</ko-KR>
+<en-US>
+Card editor improvements + storage cleanup
+
+- Editor now auto-scrolls so the keyboard no longer hides the text field
+- Redesigned card editor
+- Create a new destination folder on the spot when moving cards
+- Automatically cleans up leftover media files after deletion to save space
+</en-US>
