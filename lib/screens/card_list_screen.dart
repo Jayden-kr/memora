@@ -600,23 +600,116 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     }
   }
 
+  /// 이동 대상 폴더 선택 다이얼로그 (+ 새 폴더 생성 옵션). 취소 시 null.
+  /// [folders]는 소스 폴더가 이미 제외된 후보 목록.
+  Future<Folder?> _pickTargetFolder({
+    required List<Folder> folders,
+    required String title,
+  }) {
+    final t = AppLocalizations.of(context);
+    return showDialog<Folder>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(title),
+        children: [
+          ...folders.map((f) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, f),
+                child: Text('${f.name} (${f.cardCount})'),
+              )),
+          if (folders.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+              child: Text(
+                t.cardMoveNoOtherFolders,
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+            ),
+          // 이동할 폴더가 없거나, 새 폴더로 옮기고 싶을 때 그 자리에서 생성.
+          SimpleDialogOption(
+            onPressed: () async {
+              final created = await _promptCreateFolderForMove();
+              if (created != null && ctx.mounted) {
+                Navigator.pop(ctx, created);
+              }
+            },
+            child: Row(
+              children: [
+                const Icon(Icons.create_new_folder_outlined, size: 20),
+                const SizedBox(width: 12),
+                Text(t.cardMoveCreateFolderOption),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 이름 입력 → 폴더 생성 → 그 Folder 반환 (홈 화면 생성과 동일 정책).
+  /// 취소/빈이름/중복/실패 시 null.
+  Future<Folder?> _promptCreateFolderForMove() async {
+    final t = AppLocalizations.of(context);
+    final controller = TextEditingController();
+    String name = '';
+    try {
+      final input = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(t.homeNewFolderTitle),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(hintText: t.homeFolderNameHint),
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(t.commonCancel),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+              child: Text(t.commonCreate),
+            ),
+          ],
+        ),
+      );
+      if (input == null || input.trim().isEmpty || !mounted) return null;
+      name = input.trim();
+
+      // 같은 이름이 이미 있으면 새로 만들지 않고 안내 (중복 폴더 생성 방지).
+      final existing = await DatabaseHelper.instance.getFolderByName(name);
+      if (existing != null) {
+        if (!mounted) return null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.homeFolderExists(name))),
+        );
+        return null;
+      }
+      final maxSeq = await DatabaseHelper.instance.getMaxFolderSequence();
+      final newId = await DatabaseHelper.instance
+          .insertFolder(Folder(name: name, sequence: maxSeq + 1));
+      if (!mounted) return null;
+      return await DatabaseHelper.instance.getFolderById(newId);
+    } catch (e) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.homeFolderCreateFail(name))),
+      );
+      return null;
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Future<void> _moveCard(CardModel card) async {
     final t = AppLocalizations.of(context);
     final folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     final sourceFolderId = card.folderId;
-    final target = await showDialog<Folder>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text(t.cardPickFolderTitle),
-        children: folders
-            .where((f) => f.id != sourceFolderId)
-            .map((f) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, f),
-                  child: Text('${f.name} (${f.cardCount})'),
-                ))
-            .toList(),
-      ),
+    final target = await _pickTargetFolder(
+      folders: folders.where((f) => f.id != sourceFolderId).toList(),
+      title: t.cardPickFolderTitle,
     );
     if (target == null || !mounted) return;
 
@@ -872,15 +965,9 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     if (!widget.allCards) {
       folders = folders.where((f) => f.id != widget.folder.id).toList();
     }
-    final target = await showDialog<Folder>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text(t.cardMoveTargetTitle),
-        children: folders.map((f) => SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, f),
-              child: Text('${f.name} (${f.cardCount})'),
-            )).toList(),
-      ),
+    final target = await _pickTargetFolder(
+      folders: folders,
+      title: t.cardMoveTargetTitle,
     );
     if (target == null || !mounted) return;
 

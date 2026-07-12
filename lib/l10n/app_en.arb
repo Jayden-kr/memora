@@ -297,6 +297,8 @@
   "cardDuplicateFail": "Failed to duplicate card.",
   "cardPickFolderTitle": "Pick folder",
   "cardMoveTargetTitle": "Pick destination folder",
+  "cardMoveCreateFolderOption": "New folder",
+  "cardMoveNoOtherFolders": "No other folders yet.",
   "cardSkippedDuplicate": "Card was a duplicate; not moved.",
   "cardDupSingleMessage": "A card with the same question already exists in the destination folder",
   "cardDupMultiMessage": "{dup} of {total} cards already exist\nin the destination folder with the same question",

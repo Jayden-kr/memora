@@ -486,6 +486,8 @@
   "cardDuplicateFail": "카드 복제에 실패했습니다.",
   "cardPickFolderTitle": "폴더 선택",
   "cardMoveTargetTitle": "이동할 폴더 선택",
+  "cardMoveCreateFolderOption": "새 폴더 만들기",
+  "cardMoveNoOtherFolders": "이동할 다른 폴더가 없어요.",
   "cardSkippedDuplicate": "중복된 카드라 이동하지 않았습니다.",
   "cardDupSingleMessage": "대상 폴더에 같은 질문의 카드가 이미 있어요",
   "cardDupMultiMessage": "{total}개 중 {dup}개가 대상 폴더에\n같은 질문으로 이미 있어요",
