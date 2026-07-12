@@ -33,13 +33,19 @@ class CardEditScreen extends StatefulWidget {
   State<CardEditScreen> createState() => _CardEditScreenState();
 }
 
-class _CardEditScreenState extends State<CardEditScreen> {
+class _CardEditScreenState extends State<CardEditScreen>
+    with WidgetsBindingObserver {
   final _questionController = TextEditingController();
   final _answerController = TextEditingController();
   final _nativeQuestionKey = GlobalKey<NativeTextFieldState>();
   final _nativeAnswerKey = GlobalKey<NativeTextFieldState>();
   final _audioFieldKey = GlobalKey<CardAudioFieldState>();
   final _picker = ImagePicker();
+  final _scrollController = ScrollController();
+
+  // 현재 포커스된 네이티브 필드를 감싼 위젯의 key. 키보드가 올라오거나
+  // 필드를 바꿀 때 이 필드를 키보드 위로 스크롤하는 데 사용한다.
+  GlobalKey? _focusedFieldKey;
 
   bool _finished = false;
   bool _saving = false;
@@ -61,6 +67,7 @@ class _CardEditScreenState extends State<CardEditScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     CardEditScreen.isOpen = true;
     _currentFolderId = widget.folderId;
     if (_isEditing) {
@@ -105,10 +112,45 @@ class _CardEditScreenState extends State<CardEditScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     CardEditScreen.isOpen = false;
+    _scrollController.dispose();
     _questionController.dispose();
     _answerController.dispose();
     super.dispose();
+  }
+
+  /// 키보드(하단 inset) 변화 시 호출 — 포커스된 네이티브 필드가 있으면
+  /// 다음 프레임(뷰포트가 줄어든 뒤)에 키보드 위로 스크롤한다.
+  @override
+  void didChangeMetrics() {
+    if (_focusedFieldKey == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _ensureFocusedVisible());
+  }
+
+  void _onFieldFocus(GlobalKey key, bool focused) {
+    if (focused) {
+      _focusedFieldKey = key;
+      // 필드 전환처럼 키보드가 이미 떠 있어 didChangeMetrics가 안 오는
+      // 경우를 위해 포커스 시점에도 한 번 스크롤한다.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _ensureFocusedVisible());
+    } else if (_focusedFieldKey == key) {
+      _focusedFieldKey = null;
+    }
+  }
+
+  void _ensureFocusedVisible() {
+    final ctx = _focusedFieldKey?.currentContext;
+    if (ctx == null || !mounted) return;
+    // keepVisibleAtEnd: 필드 하단을 키보드 바로 위(뷰포트 하단)로 — 필요할 때만
+    // 최소 스크롤. resizeToAvoidBottomInset(기본 true)이 뷰포트를 이미 키보드
+    // 위까지로 줄여두므로 여기서 "보이게" = "키보드 위".
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+      alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+    );
   }
 
   Future<void> _loadFolders() async {
@@ -599,79 +641,146 @@ class _CardEditScreenState extends State<CardEditScreen> {
         ],
       ),
       body: SingleChildScrollView(
+        controller: _scrollController,
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 폴더 선택 드롭다운
-            if (_folders.isNotEmpty)
-              DropdownButtonFormField<int>(
-                initialValue: _folders.any((f) => f.id == _currentFolderId)
-                    ? _currentFolderId
-                    : null,
-                decoration: InputDecoration(
-                  labelText: t.cardEditFolderLabel,
-                  border: const OutlineInputBorder(),
+            // 폴더 선택
+            if (_folders.isNotEmpty) ...[
+              _sectionCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _sectionHeader(Icons.folder_outlined, t.cardEditFolderLabel),
+                    DropdownButtonFormField<int>(
+                      initialValue: _folders.any((f) => f.id == _currentFolderId)
+                          ? _currentFolderId
+                          : null,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(vertical: 4),
+                      ),
+                      items: _folders.map((f) {
+                        return DropdownMenuItem(
+                          value: f.id,
+                          child: Text(f.name),
+                        );
+                      }).toList(),
+                      onChanged: (v) {
+                        if (v != null) setState(() => _currentFolderId = v);
+                      },
+                    ),
+                  ],
                 ),
-                items: _folders.map((f) {
-                  return DropdownMenuItem(
-                    value: f.id,
-                    child: Text(f.name),
-                  );
-                }).toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _currentFolderId = v);
-                },
               ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ],
 
             // 카드 음성 (카드당 1개)
-            CardAudioField(
-              key: _audioFieldKey,
-              initialPath: _voicePath,
-              initialDurationMs: _voiceLenMs,
-              onChanged: (path, durationMs) {
-                setState(() {
-                  _voicePath = path;
-                  _voiceLenMs = durationMs;
-                });
-              },
+            _sectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sectionHeader(Icons.graphic_eq, t.cardAudioSection),
+                  CardAudioField(
+                    key: _audioFieldKey,
+                    initialPath: _voicePath,
+                    initialDurationMs: _voiceLenMs,
+                    onChanged: (path, durationMs) {
+                      setState(() {
+                        _voicePath = path;
+                        _voiceLenMs = durationMs;
+                      });
+                    },
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
             // 앞면
-            Text(t.cardEditFront,
-                style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 8),
-            NativeTextField(
-              key: _nativeQuestionKey,
-              initialText: _questionController.text,
-              hint: t.cardEditFrontHint,
-              minLines: 3,
-              onChanged: (v) => _questionController.text = v,
+            _sectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sectionHeader(Icons.flip_to_front, t.cardEditFront),
+                  NativeTextField(
+                    key: _nativeQuestionKey,
+                    initialText: _questionController.text,
+                    hint: t.cardEditFrontHint,
+                    minLines: 3,
+                    onChanged: (v) => _questionController.text = v,
+                    onFocusChanged: (f) => _onFieldFocus(_nativeQuestionKey, f),
+                  ),
+                  const SizedBox(height: 12),
+                  _imageRow(_questionImages, _questionImageRatios),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            _imageRow(_questionImages, _questionImageRatios),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
             // 뒷면
-            Text(t.cardEditBack,
-                style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 8),
-            NativeTextField(
-              key: _nativeAnswerKey,
-              initialText: _answerController.text,
-              hint: t.cardEditBackHint,
-              minLines: 5,
-              onChanged: (v) => _answerController.text = v,
+            _sectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sectionHeader(Icons.flip_to_back, t.cardEditBack),
+                  NativeTextField(
+                    key: _nativeAnswerKey,
+                    initialText: _answerController.text,
+                    hint: t.cardEditBackHint,
+                    minLines: 5,
+                    onChanged: (v) => _answerController.text = v,
+                    onFocusChanged: (f) => _onFieldFocus(_nativeAnswerKey, f),
+                  ),
+                  const SizedBox(height: 12),
+                  _imageRow(_answerImages, _answerImageRatios),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            _imageRow(_answerImages, _answerImageRatios),
             const SizedBox(height: 24),
           ],
         ),
       ),
     ),
+    );
+  }
+
+  /// 채움 카드 컨테이너 — 편집 화면의 각 섹션(폴더/음성/앞면/뒷면)을 감싼다.
+  Widget _sectionCard({required Widget child}) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: child,
+    );
+  }
+
+  /// 섹션 헤더 — accent 아이콘 + 굵은 제목.
+  Widget _sectionHeader(IconData icon, String title) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: cs.primary),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: Theme.of(context)
+                .textTheme
+                .titleSmall
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 

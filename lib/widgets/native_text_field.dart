@@ -10,6 +10,10 @@ class NativeTextField extends StatefulWidget {
   final double fontSize;
   final int minLines;
 
+  /// 네이티브 EditText의 포커스 획득/상실 보고. Flutter는 플랫폼 뷰 포커스를
+  /// 모르므로, 상위(편집 화면)가 이 콜백으로 키보드 위 자동 스크롤을 수행한다.
+  final ValueChanged<bool>? onFocusChanged;
+
   const NativeTextField({
     super.key,
     this.initialText = '',
@@ -17,6 +21,7 @@ class NativeTextField extends StatefulWidget {
     this.onChanged,
     this.fontSize = 16,
     this.minLines = 3,
+    this.onFocusChanged,
   });
 
   @override
@@ -26,6 +31,8 @@ class NativeTextField extends StatefulWidget {
 class NativeTextFieldState extends State<NativeTextField> {
   MethodChannel? _channel;
   String _currentText = '';
+  /// 네이티브가 보고한 포커스 상태 (포커스 시 강조 테두리 표시에 사용).
+  bool _focused = false;
   /// Native EditText가 측정한 dp 높이로 교체됨.
   /// 초기값은 native가 응답하기 전 첫 frame 동안만 사용되는 추정치.
   double _height = 80;
@@ -88,8 +95,14 @@ class NativeTextFieldState extends State<NativeTextField> {
     return Container(
       height: _height,
       decoration: BoxDecoration(
-        border: Border.all(color: colorScheme.outline),
-        borderRadius: BorderRadius.circular(4),
+        color: colorScheme.surfaceContainerHighest,
+        // 테두리 두께는 항상 2로 고정하고 색만 바꿔 포커스 시 레이아웃
+        // 흔들림(리플로우) 없이 강조 링만 나타나게 한다.
+        border: Border.all(
+          color: _focused ? colorScheme.primary : Colors.transparent,
+          width: 2,
+        ),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: AndroidView(
         viewType: 'native-edit-text',
@@ -115,6 +128,11 @@ class NativeTextFieldState extends State<NativeTextField> {
               case 'onTextChanged':
                 _currentText = call.arguments as String? ?? '';
                 widget.onChanged?.call(_currentText);
+              case 'onFocusChanged':
+                final focused = call.arguments as bool? ?? false;
+                if (!mounted) return;
+                if (focused != _focused) setState(() => _focused = focused);
+                widget.onFocusChanged?.call(focused);
               case 'onHeightChanged':
                 final dp = (call.arguments as num?)?.toDouble();
                 if (dp == null || !mounted) return;

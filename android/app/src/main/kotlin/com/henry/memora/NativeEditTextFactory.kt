@@ -106,6 +106,17 @@ class NativeEditTextView(
         // 첫 layout 직후 초기 height 보고
         editText.post(heightReportRunnable)
 
+        // 포커스 변경을 Dart에 보고 — Flutter는 네이티브 뷰 포커스를 모르므로
+        // (일반 TextField와 달리) 키보드 등장 시 자동 스크롤이 일어나지 않는다.
+        // Dart 쪽에서 이 이벤트로 포커스된 필드를 키보드 위로 스크롤한다.
+        editText.setOnFocusChangeListener { _, hasFocus ->
+            try {
+                channel.invokeMethod("onFocusChanged", hasFocus)
+            } catch (_: Throwable) {
+                // dispose 직후 등 — 무시
+            }
+        }
+
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "setText" -> {
@@ -185,6 +196,7 @@ class NativeEditTextView(
 
     override fun dispose() {
         channel.setMethodCallHandler(null)
+        editText.onFocusChangeListener = null
         editText.removeCallbacks(heightReportRunnable)
         editText.removeTextChangedListener(textWatcher)
     }

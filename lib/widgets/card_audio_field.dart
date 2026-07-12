@@ -467,21 +467,7 @@ class CardAudioFieldState extends State<CardAudioField> {
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.graphic_eq,
-                size: 18, color: Theme.of(context).textTheme.titleSmall?.color),
-            const SizedBox(width: 6),
-            Text(t.cardAudioSection,
-                style: Theme.of(context).textTheme.titleSmall),
-          ],
-        ),
-        const SizedBox(height: 8),
-        content,
-      ],
-    );
+    // 섹션 헤더("음성")는 편집 화면의 _sectionHeader가 제공하므로 여기선 내용만.
+    return content;
   }
 }
