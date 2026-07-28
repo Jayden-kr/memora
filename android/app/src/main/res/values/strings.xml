@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  네이티브(알림/채널/PDF)에서 쓰는 사용자 노출 문자열.
+  기본 = 영어. 한국어는 values-ko/strings.xml.
+  로케일은 시스템이 아니라 앱 설정 언어를 따른다 — AppLang.wrap() 참고.
+-->
+<resources>
+    <!-- 잠금화면 Foreground Service -->
+    <string name="lock_channel_name">Lock screen study</string>
+    <string name="lock_channel_desc">Shows flashcards on the lock screen</string>
+    <string name="lock_notif_text">Lock screen study active</string>
+
+    <!-- 부팅 후 잠금화면 복원 안내 -->
+    <string name="restore_channel_name">Lock screen restore</string>
+    <string name="restore_channel_desc">Notice for restoring the lock screen service after a reboot</string>
+    <string name="restore_notif_title">Memora lock screen</string>
+    <string name="restore_notif_text">Open the app to restore lock screen cards.</string>
+
+    <!-- Import/Export 진행 알림 -->
+    <string name="ie_channel_name">Import/Export progress</string>
+    <string name="ie_channel_desc">Shows import/export progress</string>
+    <string name="ie_processing">Processing...</string>
+    <string name="ie_preparing">Preparing...</string>
+    <string name="ie_done">Done</string>
+    <string name="ie_exporting">Exporting</string>
+    <string name="ie_saving_pdf">Saving PDF...</string>
+    <string name="pdf_card_count">%1$d cards</string>
+
+    <!-- 푸시 알림 -->
+    <string name="push_review_channel_name">Review notification</string>
+    <string name="push_review_channel_desc">Random card notification at scheduled time</string>
+    <string name="push_review_default_body">Time to review your cards!</string>
+    <string name="push_service_channel_name">Push notification service</string>
+    <string name="push_service_channel_desc">Background service for interval notifications</string>
+    <string name="push_service_text">%1$s, notifications every %2$d min</string>
+</resources>

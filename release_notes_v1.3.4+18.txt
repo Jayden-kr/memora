@@ -1,0 +1,16 @@
+<ko-KR>
+언어 설정이 알림까지 완전히 적용됩니다
+
+- 앱 언어를 영어로 바꿔도 한국어로 나오던 알림 문구를 수정했습니다
+- 잠금화면 상주 알림, 푸시 알림, 가져오기/내보내기 진행 알림, PDF 내보내기까지 모두 선택한 언어를 따릅니다
+- 설정에서 언어를 바꾸면 이미 떠 있는 알림도 즉시 새 언어로 바뀝니다
+- 시스템 언어로 두면 휴대폰 언어를 바꿀 때 알림도 함께 따라갑니다
+</ko-KR>
+<en-US>
+Your language setting now applies to notifications too
+
+- Fixed notifications that stayed in Korean after switching the app to English
+- The lock screen notification, push reminders, import/export progress, and PDF export all follow the language you pick
+- Changing the language in Settings updates notifications that are already showing, right away
+- Leave it on System and notifications follow your phone's language
+</en-US>

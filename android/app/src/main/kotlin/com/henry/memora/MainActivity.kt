@@ -23,6 +23,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.henry.memora/lockscreen"
     private val IMPORT_EXPORT_CHANNEL = "com.henry.memora/import_export"
+    private val APP_LANG_CHANNEL = "com.henry.memora/app_lang"
     private val TAG = "AmkiWang"
     // 고유값 사용: record 플러그인이 1001을 RECORD_AUDIO에 하드코딩해 충돌하므로 피한다.
     private val REQUEST_CODE_WRITE_STORAGE = 20259
@@ -56,6 +57,21 @@ class MainActivity : FlutterActivity() {
             if (cId > 0 && fId > 0) Pair(fId, cId) else null
         } else null
 
+        // 앱 언어 미러링. Flutter(LocaleService)가 언어를 정하거나 바꿀 때마다 호출한다.
+        // 네이티브 알림/채널/PDF는 시스템 언어가 아니라 이 값을 따른다.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_LANG_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setLanguage" -> {
+                        // lang=null → 시스템 언어 따라가기
+                        AppLang.save(this, call.argument<String>("lang"))
+                        applyLanguageToRunningServices(AppLang.current(this))
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // Import/Export Foreground Service MethodChannel
         val ieChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, IMPORT_EXPORT_CHANNEL)
         importExportChannel = ieChannel
@@ -63,10 +79,14 @@ class MainActivity : FlutterActivity() {
                 try {
                     when (call.method) {
                         "startService" -> {
-                            val title = call.argument<String>("title") ?: "처리 중..."
+                            val res = AppLang.wrap(this)
+                            val title = call.argument<String>("title")
+                                ?: res.getString(R.string.ie_processing)
                             val type = call.argument<String>("type") ?: "import"
                             // 알림을 즉시 표시 (foreground service 시작 전)
-                            ImportExportService.updateProgress(this, title, "준비 중...", 0, 0, type)
+                            ImportExportService.updateProgress(
+                                this, title, res.getString(R.string.ie_preparing), 0, 0, type
+                            )
                             val intent = Intent(this, ImportExportService::class.java)
                             intent.putExtra("title", title)
                             intent.putExtra("type", type)
@@ -87,7 +107,8 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         }
                         "complete" -> {
-                            val title = call.argument<String>("title") ?: "완료"
+                            val title = call.argument<String>("title")
+                                ?: AppLang.wrap(this).getString(R.string.ie_done)
                             val message = call.argument<String>("message") ?: ""
                             val type = call.argument<String>("type") ?: "import"
                             // Stop foreground service
@@ -478,6 +499,46 @@ class MainActivity : FlutterActivity() {
             }
             retryRef = retryRunnable
             mainHandler.postDelayed(retryRunnable, 300)
+        }
+    }
+
+    /**
+     * 앱 언어가 바뀌었을 때, 이미 떠 있는 상주 알림들을 새 언어로 즉시 다시 만들게 한다.
+     * 저장(AppLang.save)만으로는 이미 표시 중인 알림 문구가 안 바뀌기 때문.
+     *
+     * 잠금화면은 메인 프로세스라 여기서 실행 여부를 정확히 알 수 있어 미리 거른다.
+     * 푸시는 :push 별도 프로세스여서 이 프로세스의 prefs 캐시가 뒤처져 있을 수 있으므로,
+     * 판단을 서비스 쪽에 맡긴다 — 꺼져 있으면 서비스가 스스로 즉시 종료한다.
+     */
+    private fun applyLanguageToRunningServices(code: String) {
+        try {
+            // 서비스가 안 돌고 있어도 채널 이름은 남아 있으므로 여기서 갱신해 둔다.
+            ImportExportService.refreshChannelLanguage(this)
+            LockScreenService.refreshChannelLanguage(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "알림 채널 언어 갱신 실패: ${e.message}")
+        }
+
+        try {
+            val lockRunning = getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
+                .getBoolean("service_running", false)
+            if (lockRunning) {
+                startService(Intent(this, LockScreenService::class.java).apply {
+                    action = AppLang.ACTION_SET_LANG
+                    putExtra(AppLang.EXTRA_LANG, code)
+                })
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "잠금화면 서비스 언어 통지 실패: ${e.message}")
+        }
+
+        try {
+            startService(Intent(this, PushNotificationService::class.java).apply {
+                action = AppLang.ACTION_SET_LANG
+                putExtra(AppLang.EXTRA_LANG, code)
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "푸시 서비스 언어 통지 실패: ${e.message}")
         }
     }
 

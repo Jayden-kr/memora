@@ -23,6 +23,31 @@ class LockScreenService : Service() {
         const val CHANNEL_ID = "lock_screen_channel"
         const val NOTIFICATION_ID = 1
         const val TAG = "LockScreenService"
+
+        /**
+         * 앱 언어 변경 시 채널 이름/설명을 새 언어로 갱신한다.
+         *
+         * 알림 채널은 앱을 지웠다 깔아도 남기 때문에, 서비스가 한동안 안 돌면 예전 언어로
+         * 만들어진 이름이 시스템 알림 설정에 그대로 박혀 있게 된다. 같은 ID로 다시 만드는
+         * 것은 비파괴적이라(이름/설명만 갱신, 사용자가 바꾼 중요도는 유지) 안전하다.
+         * 채널이 아직 없으면 만들지 않는다 — 잠금화면을 쓴 적 없는 사용자에게 채널을
+         * 새로 만들어줄 이유가 없고, 어차피 서비스가 시작될 때 새 언어로 생성된다.
+         */
+        fun refreshChannelLanguage(context: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+            val nm = context.getSystemService(NotificationManager::class.java) ?: return
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) return
+            val res = AppLang.wrap(context)
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID, res.getString(R.string.lock_channel_name),
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = res.getString(R.string.lock_channel_desc)
+                    setShowBadge(false)
+                }
+            )
+        }
     }
 
     private var screenReceiver: ScreenReceiver? = null
@@ -139,6 +164,21 @@ class LockScreenService : Service() {
                     }
                     return START_STICKY
                 }
+                AppLang.ACTION_SET_LANG -> {
+                    // 앱 언어가 바뀌었다 → 채널명·상주 알림을 새 언어로 즉시 다시 만든다.
+                    // 서비스가 실제로 돌고 있을 때만 의미가 있다. 이 인텐트가 서비스를 새로
+                    // 만든 경우(잠금화면 OFF 상태)라면 알림을 띄우지 말고 그냥 종료한다.
+                    val running = getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
+                        .getBoolean("service_running", false)
+                    if (!running) {
+                        stopSelf()
+                        return START_NOT_STICKY
+                    }
+                    createNotificationChannel()
+                    getSystemService(NotificationManager::class.java)
+                        ?.notify(NOTIFICATION_ID, createNotification())
+                    return START_STICKY
+                }
                 "STOP_SERVICE" -> {
                     setServiceRunning(false)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -198,11 +238,13 @@ class LockScreenService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // 같은 ID로 다시 만들면 이름/설명이 갱신된다 → 언어 변경 시 채널명도 따라간다.
+            val res = AppLang.wrap(this)
             val channel = NotificationChannel(
-                CHANNEL_ID, "잠금화면 학습",
+                CHANNEL_ID, res.getString(R.string.lock_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "잠금화면 카드 표시 서비스"
+                description = res.getString(R.string.lock_channel_desc)
                 setShowBadge(false)
             }
             val nm = getSystemService(NotificationManager::class.java) ?: return
@@ -242,7 +284,7 @@ class LockScreenService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")
-            .setContentText("잠금화면 학습 활성화")
+            .setContentText(AppLang.wrap(this).getString(R.string.lock_notif_text))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setDeleteIntent(deletePendingIntent)

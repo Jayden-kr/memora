@@ -44,6 +44,8 @@ class PdfGenerator(private val context: Context) {
         onProgress: (current: Int, total: Int, message: String) -> Unit,
     ) {
         loadFonts()
+        // PDF 본문·진행 알림 문구도 앱 설정 언어를 따른다(시스템 언어 아님).
+        val res = AppLang.wrap(context)
         val db = openDb() ?: throw Exception("DB not found")
         try {
             val name = folderName(db, folderId) ?: "Folder"
@@ -70,7 +72,7 @@ class PdfGenerator(private val context: Context) {
                 // Header
                 y = txt(cv, name, M, y, 22f, fontB)
                 y += 2f
-                y = txt(cv, "카드 ${n}장", M, y, 11f, fontR, Color.GRAY)
+                y = txt(cv, res.getString(R.string.pdf_card_count, n), M, y, 11f, fontR, Color.GRAY)
                 y += 4f
                 ln(cv, M, y, PW - M, y)
                 y += 12f
@@ -91,7 +93,7 @@ class PdfGenerator(private val context: Context) {
                         // 전체 진행률 계산: (완료 폴더 + 현재 폴더 진행률) / 전체 폴더 수
                         val overallPercent = ((folderIndex + (i + 1).toFloat() / n) / totalFolders * 100).toInt()
                         ImportExportService.updateProgress(
-                            context, "Export 진행 중",
+                            context, res.getString(R.string.ie_exporting),
                             "$name (${i + 1}/$n) — ${folderIndex + 1}/$totalFolders",
                             overallPercent, 100, "export"
                         )
@@ -100,9 +102,10 @@ class PdfGenerator(private val context: Context) {
 
                 pg?.let { doc.finishPage(it) }
 
-                onProgress(n, n, "PDF 저장 중...")
+                val savingPdf = res.getString(R.string.ie_saving_pdf)
+                onProgress(n, n, savingPdf)
                 val savePercent = ((folderIndex + 1).toFloat() / totalFolders * 100).toInt()
-                ImportExportService.updateProgress(context, "Export 진행 중", "$name — PDF 저장 중...", savePercent, 100, "export")
+                ImportExportService.updateProgress(context, res.getString(R.string.ie_exporting), "$name — $savingPdf", savePercent, 100, "export")
                 FileOutputStream(outputPath).use { doc.writeTo(it) }
                 Log.d(TAG, "PDF saved: $outputPath ($pn pages, $n cards)")
             } catch (e: Exception) {

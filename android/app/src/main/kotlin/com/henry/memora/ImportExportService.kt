@@ -18,16 +18,40 @@ class ImportExportService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val manager = context.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
                 if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                    val res = AppLang.wrap(context)
                     val channel = NotificationChannel(
-                        CHANNEL_ID, "Import/Export 진행",
+                        CHANNEL_ID, res.getString(R.string.ie_channel_name),
                         NotificationManager.IMPORTANCE_LOW
                     ).apply {
-                        description = "Import/Export 진행 상태를 표시합니다"
+                        description = res.getString(R.string.ie_channel_desc)
                         setShowBadge(false)
                     }
                     manager.createNotificationChannel(channel)
                 }
             }
+        }
+
+        /**
+         * 앱 언어가 바뀌었을 때 채널 이름/설명을 새 언어로 갱신한다.
+         * 같은 ID로 다시 만드는 것은 비파괴적이다 — 이름/설명만 바뀌고 사용자가 조정한
+         * 중요도·소리 설정은 유지된다. 채널이 아직 없으면 아무것도 하지 않는다
+         * (다음 import/export 때 어차피 새 언어로 생성됨).
+         */
+        fun refreshChannelLanguage(context: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+            val appContext = context.applicationContext
+            val manager = appContext.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            if (manager.getNotificationChannel(CHANNEL_ID) == null) return
+            val res = AppLang.wrap(appContext)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID, res.getString(R.string.ie_channel_name),
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = res.getString(R.string.ie_channel_desc)
+                    setShowBadge(false)
+                }
+            )
         }
 
         fun updateProgress(context: Context, title: String, message: String, progress: Int, max: Int, type: String = "import") {
@@ -156,7 +180,8 @@ class ImportExportService : Service() {
             }
         }
 
-        val title = intent?.getStringExtra("title") ?: "처리 중..."
+        val res = AppLang.wrap(this)
+        val title = intent?.getStringExtra("title") ?: res.getString(R.string.ie_processing)
         val type = intent?.getStringExtra("type") ?: "import"
         val pi = PendingIntent.getActivity(
             this, 0,
@@ -173,7 +198,7 @@ class ImportExportService : Service() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
-            .setContentText("준비 중...")
+            .setContentText(res.getString(R.string.ie_preparing))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pi)
             .setOngoing(true)
@@ -196,12 +221,13 @@ class ImportExportService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val res = AppLang.wrap(this)
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Import/Export 진행",
+                res.getString(R.string.ie_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Import/Export 진행 상태를 표시합니다"
+                description = res.getString(R.string.ie_channel_desc)
                 setShowBadge(false)
             }
             val manager = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return

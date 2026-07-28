@@ -25,6 +25,7 @@ class PushNotificationService : Service() {
         // 카드 알림 ID/requestCode 베이스. cardId를 더해 카드별로 stable한 PendingIntent를 만든다.
         // 100000 베이스로 다른 알림 ID(0,1,3,2001,2002,9001,99999)와 충돌 방지.
         const val CARD_NOTIF_BASE = 100000
+        const val REVIEW_CHANNEL_ID = "review_notification_channel"
         const val ACTION_STOP = "STOP"
         const val ACTION_TICK = "TICK"
         const val REQUEST_CODE_TICK = 10000
@@ -45,7 +46,9 @@ class PushNotificationService : Service() {
         // createNotificationChannel()이 intent 파싱(onStartCommand)보다 먼저 실행되므로,
         // lang 필드가 기본값(ko)인 채로 채널이 생성되지 않도록 마지막 저장값을 미리 로드한다.
         // main-branch/TICK에서 실제 intent 값으로 다시 갱신됨.
-        lang = getSharedPreferences("push_notif_prefs", MODE_PRIVATE).getString("lang", "ko") ?: "ko"
+        lang = AppLang.normalize(
+            getSharedPreferences("push_notif_prefs", MODE_PRIVATE).getString("lang", null)
+        )
         createNotificationChannel()
         Log.d(TAG, "onCreate")
     }
@@ -59,6 +62,34 @@ class PushNotificationService : Service() {
             } else {
                 startForeground(SERVICE_NOTIF_ID, notification)
             }
+            return START_STICKY
+        }
+
+        if (intent?.action == AppLang.ACTION_SET_LANG) {
+            // 앱 언어 변경 통지. push_notif_prefs는 :push 프로세스만 쓰기 때문에(메인이 쓰면
+            // :push가 기록한 스케줄을 되돌릴 위험) 메인이 직접 쓰지 않고 여기로 넘겨준다.
+            val running = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                .getBoolean("running", false)
+            lang = AppLang.normalize(intent.getStringExtra(AppLang.EXTRA_LANG))
+            getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                .edit().putString("lang", lang).commit()
+            // 채널 이름은 서비스가 꺼져 있어도 시스템 설정에 남으므로 먼저 갱신한다.
+            // (이미 있는 채널만 — 안 쓰던 사용자에게 채널을 새로 만들지 않는다)
+            val nm = getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                nm?.getNotificationChannel(CHANNEL_ID) != null
+            ) {
+                createNotificationChannel()
+            }
+            ensureReviewChannel(nm, force = true)
+            if (!running) {
+                // 알림이 꺼져 있는데 이 인텐트로 프로세스가 깨어난 경우 — 저장만 하고 종료.
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            // 프로세스가 새로 떴을 수 있으므로 시간/간격을 복원한 뒤 알림을 다시 만든다.
+            loadSettingsFromPrefs()
+            nm?.notify(SERVICE_NOTIF_ID, createServiceNotification())
             return START_STICKY
         }
 
@@ -170,7 +201,7 @@ class PushNotificationService : Service() {
         }
         soundEnabled = intent?.getBooleanExtra("soundEnabled", prefs.getBoolean("soundEnabled", true))
             ?: prefs.getBoolean("soundEnabled", true)
-        lang = intent?.getStringExtra("lang") ?: prefs.getString("lang", "ko") ?: "ko"
+        lang = AppLang.normalize(intent?.getStringExtra("lang") ?: prefs.getString("lang", null))
 
         // 타이밍 설정 변경 여부 판별 (폴더/알림음은 타이밍과 무관)
         val timingKey = "$intervalMin:$startTotal:$endTotal"
@@ -437,7 +468,7 @@ class PushNotificationService : Service() {
                 return
             }
             if (question.isEmpty()) {
-                question = if (lang == "en") "Time to review your cards!" else "카드를 복습할 시간입니다!"
+                question = AppLang.wrap(this, lang).getString(R.string.push_review_default_body)
             }
 
             // notifId = requestCode = CARD_NOTIF_BASE + cardId
@@ -447,24 +478,7 @@ class PushNotificationService : Service() {
             val payload = "$cardFolderId:$cardId"
 
             val nm = getSystemService(NotificationManager::class.java)
-            // review_notification_channel은 Flutter 플러그인이 생성/관리.
-            // 채널이 없으면 알림이 안 뜨므로 fallback 생성.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (nm?.getNotificationChannel("review_notification_channel") == null) {
-                    val channel = NotificationChannel(
-                        "review_notification_channel",
-                        if (lang == "en") "Review notification" else "복습 알림",
-                        NotificationManager.IMPORTANCE_HIGH
-                    ).apply {
-                        description = if (lang == "en")
-                            "Random card notification at scheduled time"
-                        else
-                            "설정한 시간에 랜덤 카드 알림"
-                        enableVibration(true)
-                    }
-                    nm?.createNotificationChannel(channel)
-                }
-            }
+            ensureReviewChannel(nm)
 
             // Android 13+: POST_NOTIFICATIONS 권한 확인.
             // PendingIntent 생성을 이 체크 이후로 미뤄야 권한 거부 시 기존 PI extras 누수 방지.
@@ -484,7 +498,7 @@ class PushNotificationService : Service() {
             val pi = PendingIntent.getActivity(this, notifId, launchIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-            val builder = NotificationCompat.Builder(this, "review_notification_channel")
+            val builder = NotificationCompat.Builder(this, REVIEW_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentText(question)
                 .setAutoCancel(true)
@@ -521,17 +535,38 @@ class PushNotificationService : Service() {
         return null
     }
 
+    /**
+     * 복습 알림 채널 보장. [REVIEW_CHANNEL_ID]는 원래 Flutter 플러그인이 만들지만,
+     * 없으면 알림이 아예 안 뜨므로 여기서도 fallback으로 만든다.
+     * [force]면 이미 있어도 다시 만들어 이름/설명을 현재 언어로 갱신한다
+     * (같은 ID 재생성은 비파괴적 — 사용자가 조정한 중요도·소리는 유지된다).
+     */
+    private fun ensureReviewChannel(nm: NotificationManager?, force: Boolean = false) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || nm == null) return
+        val exists = nm.getNotificationChannel(REVIEW_CHANNEL_ID) != null
+        if (if (force) !exists else exists) return
+        val res = AppLang.wrap(this, lang)
+        nm.createNotificationChannel(
+            NotificationChannel(
+                REVIEW_CHANNEL_ID,
+                res.getString(R.string.push_review_channel_name),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = res.getString(R.string.push_review_channel_desc)
+                enableVibration(true)
+            }
+        )
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val res = AppLang.wrap(this, lang)
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                if (lang == "en") "Push notification service" else "푸시 알림 서비스",
+                res.getString(R.string.push_service_channel_name),
                 NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = if (lang == "en")
-                    "Background service for interval notifications"
-                else
-                    "간격 반복 알림 백그라운드 서비스"
+                description = res.getString(R.string.push_service_channel_desc)
                 setShowBadge(false)
             }
             val nm = getSystemService(NotificationManager::class.java) ?: return
@@ -562,10 +597,8 @@ class PushNotificationService : Service() {
         )
 
         val rangeText = "${String.format(java.util.Locale.US, "%02d:%02d", startH, startM)}~${String.format(java.util.Locale.US, "%02d:%02d", endH, endM)}"
-        val contentText = if (lang == "en")
-            "$rangeText, notifications every ${intervalMin} min"
-        else
-            "$rangeText, ${intervalMin}분 간격 알림 활성화"
+        val contentText = AppLang.wrap(this, lang)
+            .getString(R.string.push_service_text, rangeText, intervalMin)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")

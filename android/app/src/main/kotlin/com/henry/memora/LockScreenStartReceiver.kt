@@ -74,15 +74,17 @@ class LockScreenStartReceiver : BroadcastReceiver() {
 
     private fun showRestoreNotification(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        // 부팅 직후라 Flutter는 아직 안 떴지만, 언어는 prefs에 남아 있으므로 그대로 따른다.
+        val res = AppLang.wrap(context)
 
         // 알림 채널 생성 (API 26+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "잠금화면 복원",
+                res.getString(R.string.restore_channel_name),
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "부팅 후 잠금화면 서비스 복원 안내"
+                description = res.getString(R.string.restore_channel_desc)
             }
             nm.createNotificationChannel(channel)
         }
@@ -98,8 +100,8 @@ class LockScreenStartReceiver : BroadcastReceiver() {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Memora 잠금화면")
-            .setContentText("잠금화면 카드를 복원하려면 앱을 열어주세요.")
+            .setContentTitle(res.getString(R.string.restore_notif_title))
+            .setContentText(res.getString(R.string.restore_notif_text))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

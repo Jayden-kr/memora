@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 잠금화면 Foreground Service -->
+    <string name="lock_channel_name">잠금화면 학습</string>
+    <string name="lock_channel_desc">잠금화면 카드 표시 서비스</string>
+    <string name="lock_notif_text">잠금화면 학습 활성화</string>
+
+    <!-- 부팅 후 잠금화면 복원 안내 -->
+    <string name="restore_channel_name">잠금화면 복원</string>
+    <string name="restore_channel_desc">부팅 후 잠금화면 서비스 복원 안내</string>
+    <string name="restore_notif_title">Memora 잠금화면</string>
+    <string name="restore_notif_text">잠금화면 카드를 복원하려면 앱을 열어주세요.</string>
+
+    <!-- Import/Export 진행 알림 -->
+    <string name="ie_channel_name">Import/Export 진행</string>
+    <string name="ie_channel_desc">Import/Export 진행 상태를 표시합니다</string>
+    <string name="ie_processing">처리 중...</string>
+    <string name="ie_preparing">준비 중...</string>
+    <string name="ie_done">완료</string>
+    <string name="ie_exporting">Export 진행 중</string>
+    <string name="ie_saving_pdf">PDF 저장 중...</string>
+    <string name="pdf_card_count">카드 %1$d장</string>
+
+    <!-- 푸시 알림 -->
+    <string name="push_review_channel_name">복습 알림</string>
+    <string name="push_review_channel_desc">설정한 시간에 랜덤 카드 알림</string>
+    <string name="push_review_default_body">카드를 복습할 시간입니다!</string>
+    <string name="push_service_channel_name">푸시 알림 서비스</string>
+    <string name="push_service_channel_desc">간격 반복 알림 백그라운드 서비스</string>
+    <string name="push_service_text">%1$s, %2$d분 간격 알림 활성화</string>
+</resources>

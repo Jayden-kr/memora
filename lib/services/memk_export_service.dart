@@ -148,7 +148,9 @@ class MemkExportService {
           phase: 'cards',
           current: processed,
           total: totalCards,
-          message: '카드 정보 준비 중... $processed / $totalCards',
+          message: _isEn
+              ? 'Preparing card info... $processed / $totalCards'
+              : '카드 정보 준비 중... $processed / $totalCards',
         ));
         await Future.delayed(Duration.zero);
       }
