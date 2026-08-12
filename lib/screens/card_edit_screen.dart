@@ -1,6 +1,10 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+// material.dart는 RenderAbstractViewport를 내보내지 않는다 —
+// 커서 줄만 드러내려면 뷰포트에 직접 오프셋을 물어야 해서 필요하다.
+import 'package:flutter/rendering.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -14,6 +18,26 @@ import '../utils/constants.dart';
 import '../widgets/card_audio_field.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/native_text_field.dart';
+
+/// 커서 줄이 뷰포트 안에 들어오게 하는 최소 스크롤 위치를 고른다.
+///
+/// [atTop]/[atBottom]은 그 줄이 각각 뷰포트 위 끝/아래 끝에 딱 걸리는 스크롤
+/// 오프셋이다. 둘 사이의 구간이 "줄이 보이는" 구간이므로, 현재 위치가 그 안에
+/// 있으면 그대로 두고 벗어났으면 가장 가까운 경계로만 움직인다. 스크롤 방향에
+/// 따라 두 값의 대소가 뒤집힐 수 있어 순서를 가정하지 않는다.
+@visibleForTesting
+double resolveCaretScrollTarget({
+  required double pixels,
+  required double atTop,
+  required double atBottom,
+  required double minExtent,
+  required double maxExtent,
+}) {
+  return pixels
+      .clamp(math.min(atTop, atBottom), math.max(atTop, atBottom))
+      .clamp(minExtent, maxExtent)
+      .toDouble();
+}
 
 class CardEditScreen extends StatefulWidget {
   final int folderId;
@@ -46,6 +70,13 @@ class _CardEditScreenState extends State<CardEditScreen>
   // 현재 포커스된 네이티브 필드를 감싼 위젯의 key. 키보드가 올라오거나
   // 필드를 바꿀 때 이 필드를 키보드 위로 스크롤하는 데 사용한다.
   GlobalKey? _focusedFieldKey;
+
+  // 네이티브가 보고한 커서 줄의 세로 범위(포커스된 필드 상단 기준 논리 픽셀).
+  double? _caretTop;
+  double? _caretBottom;
+
+  /// 커서 줄을 드러낼 때 키보드에 딱 붙지 않도록 두는 여유.
+  static const double _caretRevealMargin = 24;
 
   bool _finished = false;
   bool _saving = false;
@@ -130,18 +161,39 @@ class _CardEditScreenState extends State<CardEditScreen>
 
   void _onFieldFocus(GlobalKey key, bool focused) {
     if (focused) {
+      // 다른 필드로 옮겨갔으면 이전 필드의 커서 좌표는 버린다.
+      if (_focusedFieldKey != key) {
+        _caretTop = null;
+        _caretBottom = null;
+      }
       _focusedFieldKey = key;
       // 필드 전환처럼 키보드가 이미 떠 있어 didChangeMetrics가 안 오는
       // 경우를 위해 포커스 시점에도 한 번 스크롤한다.
       WidgetsBinding.instance.addPostFrameCallback((_) => _ensureFocusedVisible());
     } else if (_focusedFieldKey == key) {
       _focusedFieldKey = null;
+      _caretTop = null;
+      _caretBottom = null;
     }
+  }
+
+  /// 네이티브가 커서 줄 위치를 알려줄 때마다 호출. 글을 계속 쳐서 커서가
+  /// 키보드 아래로 내려가는 경우를 잡는다 — 텍스트가 늘어나는 것만으로는
+  /// 포커스도 키보드 inset도 변하지 않아 didChangeMetrics가 오지 않는다.
+  void _onCaretChanged(GlobalKey key, double top, double bottom) {
+    if (_focusedFieldKey != key) return;
+    _caretTop = top;
+    _caretBottom = bottom;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _ensureFocusedVisible());
+    // 커서만 옮긴 경우(줄 이동 등)엔 setState가 없어 프레임이 예약되지 않는다.
+    // 그러면 위 콜백이 다음 프레임까지 묶여 있으므로 직접 프레임을 깨운다.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _ensureFocusedVisible() {
     final ctx = _focusedFieldKey?.currentContext;
     if (ctx == null || !mounted) return;
+    if (_revealCaretLine(ctx)) return;
     // keepVisibleAtEnd: 필드 하단을 키보드 바로 위(뷰포트 하단)로 — 필요할 때만
     // 최소 스크롤. resizeToAvoidBottomInset(기본 true)이 뷰포트를 이미 키보드
     // 위까지로 줄여두므로 여기서 "보이게" = "키보드 위".
@@ -151,6 +203,46 @@ class _CardEditScreenState extends State<CardEditScreen>
       curve: Curves.easeOut,
       alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
     );
+  }
+
+  /// 필드가 뷰포트보다 커서 통째로는 보여줄 수 없을 때, 커서가 놓인 줄만
+  /// 드러나도록 최소한으로 스크롤한다. 처리했으면 true를 돌려주고, 그 경우
+  /// 필드 전체를 기준으로 한 스크롤은 하지 않는다(필드 끝으로 튀는 것 방지).
+  bool _revealCaretLine(BuildContext ctx) {
+    final top = _caretTop;
+    final bottom = _caretBottom;
+    if (top == null || bottom == null || !_scrollController.hasClients) {
+      return false;
+    }
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return false;
+    final position = _scrollController.position;
+    // 필드가 뷰포트에 다 들어가면 필드 전체를 보여주는 쪽이 자연스럽다.
+    if (box.size.height <= position.viewportDimension) return false;
+    final viewport = RenderAbstractViewport.maybeOf(box);
+    if (viewport == null) return false;
+
+    final rect = Rect.fromLTRB(
+      0,
+      top - _caretRevealMargin,
+      box.size.width,
+      bottom + _caretRevealMargin,
+    );
+    // 커서 줄이 뷰포트 위/아래 끝에 걸치는 두 스크롤 위치 사이면 이미 보인다.
+    final target = resolveCaretScrollTarget(
+      pixels: position.pixels,
+      atTop: viewport.getOffsetToReveal(box, 0, rect: rect).offset,
+      atBottom: viewport.getOffsetToReveal(box, 1, rect: rect).offset,
+      minExtent: position.minScrollExtent,
+      maxExtent: position.maxScrollExtent,
+    );
+    if ((target - position.pixels).abs() < 1) return true;
+    position.animateTo(
+      target,
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOut,
+    );
+    return true;
   }
 
   Future<void> _loadFolders() async {
@@ -714,6 +806,8 @@ class _CardEditScreenState extends State<CardEditScreen>
                     minLines: 3,
                     onChanged: (v) => _questionController.text = v,
                     onFocusChanged: (f) => _onFieldFocus(_nativeQuestionKey, f),
+                    onCaretChanged: (t, b) =>
+                        _onCaretChanged(_nativeQuestionKey, t, b),
                   ),
                   const SizedBox(height: 12),
                   _imageRow(_questionImages, _questionImageRatios),
@@ -735,6 +829,8 @@ class _CardEditScreenState extends State<CardEditScreen>
                     minLines: 5,
                     onChanged: (v) => _answerController.text = v,
                     onFocusChanged: (f) => _onFieldFocus(_nativeAnswerKey, f),
+                    onCaretChanged: (t, b) =>
+                        _onCaretChanged(_nativeAnswerKey, t, b),
                   ),
                   const SizedBox(height: 12),
                   _imageRow(_answerImages, _answerImageRatios),

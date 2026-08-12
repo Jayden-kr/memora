@@ -14,6 +14,11 @@ class NativeTextField extends StatefulWidget {
   /// 모르므로, 상위(편집 화면)가 이 콜백으로 키보드 위 자동 스크롤을 수행한다.
   final ValueChanged<bool>? onFocusChanged;
 
+  /// 커서가 놓인 줄의 세로 범위(필드 상단 기준 논리 픽셀). 타이핑으로 커서가
+  /// 키보드 아래로 내려갈 때 상위가 그 줄만 보이도록 스크롤하는 데 쓴다.
+  /// 필드 전체를 기준으로 하면 내용이 길어진 필드에선 엉뚱한 곳으로 튄다.
+  final void Function(double top, double bottom)? onCaretChanged;
+
   const NativeTextField({
     super.key,
     this.initialText = '',
@@ -22,6 +27,7 @@ class NativeTextField extends StatefulWidget {
     this.fontSize = 16,
     this.minLines = 3,
     this.onFocusChanged,
+    this.onCaretChanged,
   });
 
   @override
@@ -29,6 +35,10 @@ class NativeTextField extends StatefulWidget {
 }
 
 class NativeTextFieldState extends State<NativeTextField> {
+  /// 테두리 두께. 네이티브 EditText는 이만큼 안쪽에서 시작하므로, 네이티브가
+  /// 보고한 커서 좌표를 이 위젯 기준으로 옮길 때도 더해준다.
+  static const double _borderWidth = 2;
+
   MethodChannel? _channel;
   String _currentText = '';
   /// 네이티브가 보고한 포커스 상태 (포커스 시 강조 테두리 표시에 사용).
@@ -100,7 +110,7 @@ class NativeTextFieldState extends State<NativeTextField> {
         // 흔들림(리플로우) 없이 강조 링만 나타나게 한다.
         border: Border.all(
           color: _focused ? colorScheme.primary : Colors.transparent,
-          width: 2,
+          width: _borderWidth,
         ),
         borderRadius: BorderRadius.circular(12),
       ),
@@ -148,6 +158,15 @@ class NativeTextFieldState extends State<NativeTextField> {
                 if (!mounted) return;
                 if (focused != _focused) setState(() => _focused = focused);
                 widget.onFocusChanged?.call(focused);
+              case 'onCaretChanged':
+                final args = call.arguments as Map?;
+                if (args == null || !mounted) return;
+                final top = (args['top'] as num?)?.toDouble();
+                final bottom = (args['bottom'] as num?)?.toDouble();
+                if (top == null || bottom == null) return;
+                // 네이티브 기준 → 이 위젯(테두리 포함) 기준으로 변환.
+                widget.onCaretChanged
+                    ?.call(top + _borderWidth, bottom + _borderWidth);
               case 'onHeightChanged':
                 final dp = (call.arguments as num?)?.toDouble();
                 if (dp == null || !mounted) return;

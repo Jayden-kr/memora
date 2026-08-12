@@ -1,0 +1,16 @@
+<ko-KR>
+긴 글을 써도 커서가 키보드에 가리지 않습니다
+
+- 글이 길어지면 지금 치고 있는 줄이 키보드 아래로 숨던 문제를 고쳤습니다
+- 화면은 커서가 있는 줄이 보일 만큼만 움직입니다. 글 중간을 고쳐도 맨 끝으로 튀지 않습니다
+- 커서를 위아래로 옮기거나 키보드에 가린 부분을 눌러도 그 줄이 따라 올라옵니다
+- 텍스트를 길게 눌러 선택하는 중에는 화면이 움직이지 않습니다
+</ko-KR>
+<en-US>
+The cursor no longer hides behind the keyboard
+
+- Fixed the line you are typing on slipping under the keyboard in long cards
+- The page now moves just enough to show the cursor line, and editing mid-text no longer jumps to the end
+- Moving the cursor, or tapping a spot covered by the keyboard, brings that line into view
+- The page stays put while you drag to select text
+</en-US>

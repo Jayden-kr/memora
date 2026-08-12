@@ -36,8 +36,26 @@ class NativeEditTextView(
     private val density: Float = context.resources.displayMetrics.density
     private var lastReportedHeightDp: Double = -1.0
     private var heightPostScheduled: Boolean = false
+    private var lastCaretTopDp: Double = -1.0
+    private var lastCaretBottomDp: Double = -1.0
+    private var caretPostScheduled: Boolean = false
 
-    private val editText: EditText = EditText(context).apply {
+    // editText 초기화 중(setText 등)에도 onSelectionChanged가 불린다. 그 시점엔
+    // channel이 아직 없으므로, init 블록에서 이 플래그를 연 뒤부터만 보고한다.
+    private var ready: Boolean = false
+
+    /**
+     * 커서 위치 변화를 Dart에 알리기 위한 EditText.
+     * EditText에는 selection 리스너가 없어 onSelectionChanged를 오버라이드한다.
+     */
+    private inner class CaretAwareEditText(ctx: Context) : EditText(ctx) {
+        override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+            super.onSelectionChanged(selStart, selEnd)
+            scheduleCaretReport()
+        }
+    }
+
+    private val editText: EditText = CaretAwareEditText(context).apply {
         val initialText = params["text"] as? String ?: ""
         val hint = params["hint"] as? String ?: ""
         val isDark = params["isDark"] as? Boolean ?: false
@@ -92,16 +110,23 @@ class NativeEditTextView(
         heightPostScheduled = false
         reportHeight()
     }
+    private val caretReportRunnable = Runnable {
+        caretPostScheduled = false
+        reportCaret()
+    }
     private val textWatcher = object : TextWatcher {
         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         override fun afterTextChanged(s: Editable?) {
             channel.invokeMethod("onTextChanged", s?.toString() ?: "")
             scheduleHeightReport()
+            // 줄바꿈으로 커서 줄이 밀려도 selection index는 그대로일 수 있다.
+            scheduleCaretReport()
         }
     }
 
     init {
+        ready = true
         editText.addTextChangedListener(textWatcher)
         // 첫 layout 직후 초기 height 보고
         editText.post(heightReportRunnable)
@@ -114,6 +139,12 @@ class NativeEditTextView(
                 channel.invokeMethod("onFocusChanged", hasFocus)
             } catch (_: Throwable) {
                 // dispose 직후 등 — 무시
+            }
+            if (hasFocus) {
+                // 캐시를 비워 포커스 직후 한 번은 반드시 보고되게 한다.
+                lastCaretTopDp = -1.0
+                lastCaretBottomDp = -1.0
+                scheduleCaretReport()
             }
         }
 
@@ -192,12 +223,53 @@ class NativeEditTextView(
         }
     }
 
+    /**
+     * 커서가 놓인 줄의 세로 범위(필드 상단 기준 dp)를 Dart에 알린다.
+     *
+     * 필드 전체가 아니라 '커서 줄'을 기준으로 보내는 이유: 내용이 길어 필드가
+     * 화면보다 커지면 필드 기준 스크롤은 엉뚱한 곳(필드 끝)으로 튄다. 타이핑 중
+     * 실제로 보여야 하는 건 커서가 있는 줄뿐이다.
+     */
+    private fun scheduleCaretReport() {
+        if (!ready || caretPostScheduled) return
+        caretPostScheduled = true
+        // layout이 갱신된 다음 프레임에 측정한다.
+        editText.post(caretReportRunnable)
+    }
+
+    private fun reportCaret() {
+        // 포커스가 없으면 사용자가 편집 중이 아니다 — 화면을 건드리지 않는다.
+        if (!editText.isFocused) return
+        // 범위 선택 중에는 보고하지 않는다. 드래그로 선택을 늘리는 동안 화면이
+        // 따라 스크롤되면 손가락 밑의 글자가 밀려 선택 끝이 다시 움직이고,
+        // 그게 또 스크롤을 부르는 되먹임이 생긴다. 타이핑(커서가 한 점일 때)만
+        // 따라간다.
+        if (editText.selectionStart != editText.selectionEnd) return
+        val layout = editText.layout ?: return
+        val sel = editText.selectionEnd.coerceIn(0, editText.text?.length ?: 0)
+        val line = layout.getLineForOffset(sel)
+        val topDp = (layout.getLineTop(line) + editText.paddingTop).toDouble() / density
+        val bottomDp = (layout.getLineBottom(line) + editText.paddingTop).toDouble() / density
+        // 같은 줄에서 좌우로만 움직인 경우는 스크롤할 이유가 없다.
+        if (kotlin.math.abs(topDp - lastCaretTopDp) < 0.5 &&
+            kotlin.math.abs(bottomDp - lastCaretBottomDp) < 0.5) return
+        lastCaretTopDp = topDp
+        lastCaretBottomDp = bottomDp
+        try {
+            channel.invokeMethod("onCaretChanged", mapOf("top" to topDp, "bottom" to bottomDp))
+        } catch (_: Throwable) {
+            // dispose 직후 등 — 무시
+        }
+    }
+
     override fun getView(): View = editText
 
     override fun dispose() {
+        ready = false
         channel.setMethodCallHandler(null)
         editText.onFocusChangeListener = null
         editText.removeCallbacks(heightReportRunnable)
+        editText.removeCallbacks(caretReportRunnable)
         editText.removeTextChangedListener(textWatcher)
     }
 }
