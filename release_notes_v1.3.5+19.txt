@@ -1,0 +1,14 @@
+<ko-KR>
+카드 편집 화면에서 위아래 스크롤이 됩니다
+
+- 앞면/뒷면 입력칸 위에 손가락을 대고 밀면 화면이 스크롤되지 않던 문제를 고쳤습니다
+- 글이 길어 입력칸이 화면을 가득 채워도 이제 어디서든 밀어서 위아래로 넘길 수 있습니다
+- 탭해서 커서 놓기, 길게 눌러 텍스트 선택하기, 키보드가 올라올 때 입력칸이 따라 올라오는 동작은 그대로입니다
+</ko-KR>
+<en-US>
+The card editor scrolls again
+
+- Fixed the editor not scrolling when you dragged on the Front or Back text box
+- Long cards that fill the screen with text can now be scrolled from anywhere on the page
+- Tap to place the cursor, long press to select text, and the keyboard auto-scroll all work as before
+</en-US>

@@ -106,8 +106,23 @@ class NativeTextFieldState extends State<NativeTextField> {
       ),
       child: AndroidView(
         viewType: 'native-edit-text',
+        // 탭/롱프레스만 네이티브 EditText로 넘기고, 세로 드래그는 부모
+        // 스크롤(편집 화면의 SingleChildScrollView)에 양보한다.
+        //
+        // EagerGestureRecognizer를 쓰면 필드 위에서 시작된 포인터 전부를
+        // 네이티브가 선점해 편집 화면이 스크롤되지 않았다. EditText는 내용
+        // 높이만큼 늘어나(minLines=1, maxLines=MAX_VALUE) 내부 스크롤도 없어서
+        // 드래그가 아무 일도 안 하는 상태였고, 앞/뒷면 필드가 화면 대부분을
+        // 차지하므로 사실상 스크롤 불가였다.
+        //
+        // 이 조합에서 각 제스처의 승자:
+        //  - 탭          → TapGestureRecognizer 승 → 네이티브(포커스/커서 위치)
+        //  - 롱프레스     → LongPressGestureRecognizer 승 → 네이티브(선택/드래그 선택)
+        //  - 세로 드래그  → 부모 Scrollable 승 → 페이지 스크롤(플링·오버스크롤 포함)
         gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-          Factory<EagerGestureRecognizer>(() => EagerGestureRecognizer()),
+          Factory<TapGestureRecognizer>(() => TapGestureRecognizer()),
+          Factory<LongPressGestureRecognizer>(
+              () => LongPressGestureRecognizer()),
         },
         creationParams: {
           'text': widget.initialText,
