@@ -435,6 +435,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   List<Widget> _buildScheduleSection(AppLocalizations t) {
     final hasOverlap =
         LockScreenSchedule.overlappingIndices(_slots).isNotEmpty;
+    // 표시 전용 계산 — 이 화면 안에서 한 번만 구해 모든 타일이 나눠 쓴다(타일마다
+    // 다시 1440분을 순회하지 않도록).
+    final effectiveRanges = LockScreenSchedule.effectiveRanges(_slots);
 
     return [
       if (_slots.isEmpty)
@@ -445,7 +448,8 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         )
       else
         ..._slots.asMap().entries.map(
-              (entry) => _buildSlotTile(t, entry.key, entry.value),
+              (entry) => _buildSlotTile(
+                  t, entry.key, entry.value, effectiveRanges[entry.key]),
             ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -472,30 +476,64 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     ];
   }
 
-  Widget _buildSlotTile(AppLocalizations t, int index, LockScreenSlot slot) {
+  Widget _buildSlotTile(AppLocalizations t, int index, LockScreenSlot slot,
+      List<List<int>> ranges) {
     final folder = _folderForId(slot.folderId);
     final errorColor = Theme.of(context).colorScheme.error;
     final startLabel = _timeOfDayFromMinutes(slot.start).format(context);
     final endLabel = _timeOfDayFromMinutes(slot.end).format(context);
 
-    Widget subtitle;
+    Widget folderLine;
     if (folder == null) {
-      subtitle = Text(t.lockScheduleFolderMissing,
+      folderLine = Text(t.lockScheduleFolderMissing,
           style: TextStyle(color: errorColor));
     } else if (folder.cardCount == 0) {
       // "카드 0개 · 카드 없음"은 같은 말을 두 번 하는 것이라 개수는 생략한다.
-      subtitle = Text(
+      folderLine = Text(
         '${folder.name} · ${t.lockScheduleFolderEmpty}',
         style: TextStyle(color: errorColor),
       );
     } else {
-      subtitle =
+      folderLine =
           Text('${folder.name} · ${t.cardCountSuffix(folder.cardCount)}');
     }
+
+    // 실제 적용 구간이 사용자가 적어 넣은 구간과 같으면(가장 흔한 경우) 아무것도
+    // 덧붙이지 않는다 — 오늘까지의 화면과 완전히 동일하게 유지.
+    Widget? extraLine;
+    if (!LockScreenSchedule.matchesDeclared(slot, ranges)) {
+      if (ranges.isEmpty) {
+        extraLine = Text(
+          t.lockScheduleNeverApplies,
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: errorColor),
+        );
+      } else {
+        final rangesText = ranges
+            .map((r) =>
+                '${_timeOfDayFromMinutes(r[0]).format(context)} – ${_timeOfDayFromMinutes(r[1]).format(context)}')
+            .join(', ');
+        extraLine = Text(
+          t.lockScheduleActualRange(rangesText),
+          style: Theme.of(context).textTheme.bodySmall,
+        );
+      }
+    }
+
+    final subtitle = extraLine == null
+        ? folderLine
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [folderLine, extraLine],
+          );
 
     return ListTile(
       title: Text('$startLabel – $endLabel'),
       subtitle: subtitle,
+      isThreeLine: extraLine != null,
       onTap: () => _onEditSlotTapped(index),
       trailing: IconButton(
         icon: const Icon(Icons.close),

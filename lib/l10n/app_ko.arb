@@ -428,6 +428,13 @@
   "lockScheduleApplyNote": "다음에 화면이 꺼질 때부터 적용됩니다.",
   "lockBaseFolder": "기본 폴더",
   "lockBaseFolderHint": "어느 시간대에도 해당하지 않을 때 보여줄 폴더",
+  "lockScheduleActualRange": "실제 적용 {ranges}",
+  "@lockScheduleActualRange": {
+    "placeholders": {
+      "ranges": { "type": "String" }
+    }
+  },
+  "lockScheduleNeverApplies": "앞 시간대에 가려져 표시되지 않습니다",
 
   "pushTitle": "카드 푸시 알림",
   "pushAlarm": "알림",

@@ -1,4 +1,5 @@
-// LockScreenSchedule(잠금화면 시간대별 폴더 자동 전환)의 decode/encode/overlap 로직 검증.
+// LockScreenSchedule(잠금화면 시간대별 폴더 자동 전환)의
+// decode/encode/overlap/effectiveRanges 로직 검증.
 //
 // 테스트 대상:
 // 1. decode: scheduleCsv → List<LockScreenSlot>, 드롭 규칙이 FolderSchedule.kt
@@ -6,6 +7,8 @@
 // 2. encode: List<LockScreenSlot> → scheduleCsv (decode의 역함수)
 // 3. overlaps/overlappingIndices: 반열림 구간 [start, end) 겹침 판정
 //    (start > end 인 자정 교차 슬롯 포함) — 1440분 전수 브루트포스가 스펙 그 자체
+// 4. effectiveRanges: 각 슬롯이 "첫 매치 승리" 우선순위 규칙 아래 실제로 차지하는
+//    구간 — 여기도 1440분 전수 크로스체크(firstMatchOwner)가 스펙 그 자체
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -336,6 +339,267 @@ void main() {
     });
   });
 
+  group('effectiveRanges — 각 슬롯의 실적용 구간', () {
+    test('겹치지 않으면 모든 슬롯의 실적용 구간이 선언 구간과 같음', () {
+      final slots = [
+        LockScreenSlot(start: 0, end: 480, folderId: 1),
+        LockScreenSlot(start: 540, end: 1080, folderId: 2),
+        LockScreenSlot(start: 1080, end: 1380, folderId: 3), // 앞과 맞닿지만 안 겹침
+      ];
+      final ranges = LockScreenSchedule.effectiveRanges(slots);
+      expect(ranges, hasLength(3));
+      for (var i = 0; i < slots.length; i++) {
+        expect(ranges[i], [
+          [slots[i].start, slots[i].end]
+        ]);
+        expect(
+            LockScreenSchedule.matchesDeclared(slots[i], ranges[i]), isTrue);
+      }
+    });
+
+    test('부분 겹침: 뒤 슬롯은 앞 슬롯에게 뺏기고 남은 만큼만', () {
+      final a = LockScreenSlot(start: 360, end: 720, folderId: 1); // 06:00-12:00
+      final b = LockScreenSlot(start: 660, end: 1080, folderId: 2); // 11:00-18:00
+      final ranges = LockScreenSchedule.effectiveRanges([a, b]);
+      expect(ranges[0], [
+        [360, 720]
+      ]);
+      expect(ranges[1], [
+        [720, 1080]
+      ]);
+      expect(LockScreenSchedule.matchesDeclared(a, ranges[0]), isTrue);
+      expect(LockScreenSchedule.matchesDeclared(b, ranges[1]), isFalse);
+    });
+
+    test('완전히 가려진 슬롯(죽은 슬롯) — 실기기에서 재현된 수치', () {
+      // 영단어 19:31–23:31(1171-1411) + 히브리어 21:36–22:26(1296-1346).
+      // 히브리어는 영단어 구간에 완전히 포함돼 단 1분도 실행되지 않는다.
+      final a = LockScreenSlot(start: 1171, end: 1411, folderId: 1); // 영단어
+      final b = LockScreenSlot(start: 1296, end: 1346, folderId: 2); // 히브리어
+      final ranges = LockScreenSchedule.effectiveRanges([a, b]);
+      expect(ranges[0], [
+        [1171, 1411]
+      ]);
+      expect(ranges[1], isEmpty);
+      expect(LockScreenSchedule.matchesDeclared(a, ranges[0]), isTrue);
+      expect(LockScreenSchedule.matchesDeclared(b, ranges[1]), isFalse);
+    });
+
+    test('시작이 같은 두 슬롯 — 목록 순서상 먼저인 쪽이 전부, 나머지는 남는 부분만', () {
+      final first = LockScreenSlot(start: 600, end: 750, folderId: 1);
+      final second = LockScreenSlot(start: 600, end: 900, folderId: 2);
+      final ranges = LockScreenSchedule.effectiveRanges([first, second]);
+      expect(ranges[0], [
+        [600, 750]
+      ]);
+      expect(ranges[1], [
+        [750, 900]
+      ]);
+    });
+
+    test('자정 랩, 가려지지 않음 — 두 조각이 아니라 하나로 병합되어 보고됨', () {
+      final wrap = LockScreenSlot(start: 1320, end: 120, folderId: 1); // 22:00-02:00
+      final ranges = LockScreenSchedule.effectiveRanges([wrap]);
+      expect(ranges[0], [
+        [1320, 120]
+      ]);
+    });
+
+    test('자정 랩, 앞선 슬롯에게 일부 가려짐', () {
+      final earlier = LockScreenSlot(start: 1300, end: 1400, folderId: 1); // 21:40-23:20
+      final wrap = LockScreenSlot(start: 1320, end: 120, folderId: 2); // 22:00-02:00
+      final ranges = LockScreenSchedule.effectiveRanges([earlier, wrap]);
+      expect(ranges[0], [
+        [1300, 1400]
+      ]);
+      // 22:00-23:20은 earlier가 이미 차지 → wrap은 23:20부터 시작하는 걸로 보고됨.
+      expect(ranges[1], [
+        [1400, 120]
+      ]);
+    });
+
+    test('자정에서 끝나는 슬롯 — 다음날로 안 이어지고 [start, 0]으로 표현됨', () {
+      final slot = LockScreenSlot(start: 1320, end: 0, folderId: 1);
+      final ranges = LockScreenSchedule.effectiveRanges([slot]);
+      expect(ranges[0], [
+        [1320, 0]
+      ]);
+    });
+
+    test('빈 입력은 빈 리스트', () {
+      expect(LockScreenSchedule.effectiveRanges(const []), isEmpty);
+    });
+
+    test('슬롯 하나뿐이면 자기 자신의 구간 그대로', () {
+      final slot = LockScreenSlot(start: 100, end: 200, folderId: 1);
+      final ranges = LockScreenSchedule.effectiveRanges([slot]);
+      expect(ranges, [
+        [
+          [100, 200]
+        ]
+      ]);
+    });
+
+    test(
+        '한 슬롯이 서로 인접하지 않은 2개 구간으로 쪼개질 수 있음 — '
+        '자정랩 슬롯의 가운데를 앞선 일반 슬롯이 파먹는 경우', () {
+      // C(자정랩, 1300-200)는 두 번째 우선순위지만, 첫 번째 우선순위인 G(50-150)가
+      // C의 [0,200) 세그먼트 "가운데"(50-150)를 가로채면 C는 [0,50)과 [150,200)
+      // 두 조각으로 쪼개진다. 이 중 [0,50)은 C의 다른 세그먼트인 [1300,1440)과
+      // 자정에서 물리적으로 맞닿아 있어 [1300,50) 하나로 병합되고, 결과적으로 C는
+      // 서로 인접하지 않은 두 구간 [1300,50)과 [150,200)을 갖는다.
+      final g = LockScreenSlot(start: 50, end: 150, folderId: 1);
+      final c = LockScreenSlot(start: 1300, end: 200, folderId: 2);
+      final ranges = LockScreenSchedule.effectiveRanges([g, c]);
+      expect(ranges[0], [
+        [50, 150]
+      ]);
+      expect(ranges[1], [
+        [150, 200],
+        [1300, 50],
+      ]);
+    });
+
+    group('matchesDeclared', () {
+      test('실적용이 선언과 완전히 같으면 true', () {
+        final slot = LockScreenSlot(start: 100, end: 200, folderId: 1);
+        expect(
+            LockScreenSchedule.matchesDeclared(slot, [
+              [100, 200]
+            ]),
+            isTrue);
+      });
+
+      test('구간이 여러 개면 false (합쳐서 같은 시간을 커버해도)', () {
+        final slot = LockScreenSlot(start: 100, end: 200, folderId: 1);
+        expect(
+            LockScreenSchedule.matchesDeclared(slot, [
+              [100, 150],
+              [150, 200]
+            ]),
+            isFalse);
+      });
+
+      test('구간이 비어 있으면 false', () {
+        final slot = LockScreenSlot(start: 100, end: 200, folderId: 1);
+        expect(LockScreenSchedule.matchesDeclared(slot, const []), isFalse);
+      });
+
+      test('시작/끝이 조금이라도 다르면 false', () {
+        final slot = LockScreenSlot(start: 100, end: 200, folderId: 1);
+        expect(
+            LockScreenSchedule.matchesDeclared(slot, [
+              [100, 199]
+            ]),
+            isFalse);
+      });
+    });
+  });
+
+  group('effectiveRanges — 규칙 자체와 교차검증(1440분 전수)', () {
+    // slots 목록에서 분 m을 "첫 매치 승리" 규칙으로 실제 소유하는 슬롯의 인덱스.
+    // 아무도 커버하지 않으면 null. decode()가 보장하는 정렬을 다시 하지 않고 주어진
+    // 목록 순서를 그대로 쓴다 — effectiveRanges의 스펙과 동일한 전제.
+    int? firstMatchOwner(List<LockScreenSlot> slots, int minute) {
+      for (var i = 0; i < slots.length; i++) {
+        if (_covers(slots[i], minute)) return i;
+      }
+      return null;
+    }
+
+    // 구간 [r[0], r[1]]을 (r[0]<r[1] 또는 자정랩 r[0]>r[1]) 슬롯과 동일한 반열림
+    // 규칙으로 읽어 분 minute이 그 안에 들어가는지 판정. 기존 _covers를 재사용해
+    // 세 번째 포함 판정 로직을 새로 만들지 않는다.
+    bool inRanges(List<List<int>> ranges, int minute) {
+      for (final r in ranges) {
+        final pseudo = LockScreenSlot(start: r[0], end: r[1], folderId: 0);
+        if (_covers(pseudo, minute)) return true;
+      }
+      return false;
+    }
+
+    void crossCheck(String description, List<LockScreenSlot> slots) {
+      test(description, () {
+        final ranges = LockScreenSchedule.effectiveRanges(slots);
+        expect(ranges, hasLength(slots.length));
+        for (var m = 0; m < 1440; m++) {
+          final owner = firstMatchOwner(slots, m);
+          for (var i = 0; i < slots.length; i++) {
+            final covered = inRanges(ranges[i], m);
+            if (i == owner) {
+              expect(covered, isTrue,
+                  reason: '$description: 분 $m 은 규칙상 슬롯 $i(첫 매치) 소유인데 '
+                      'effectiveRanges[$i]엔 없음');
+            } else {
+              expect(covered, isFalse,
+                  reason: '$description: 분 $m 은 슬롯 $owner 소유인데 '
+                      'effectiveRanges[$i]에도 들어있음(중복 소유)');
+            }
+          }
+        }
+      });
+    }
+
+    crossCheck('겹치지 않는 슬롯들', [
+      LockScreenSlot(start: 0, end: 480, folderId: 1),
+      LockScreenSlot(start: 540, end: 1080, folderId: 2),
+      LockScreenSlot(start: 1080, end: 1380, folderId: 3),
+    ]);
+
+    crossCheck('부분 겹침 체인 3개', [
+      LockScreenSlot(start: 0, end: 300, folderId: 1),
+      LockScreenSlot(start: 200, end: 500, folderId: 2),
+      LockScreenSlot(start: 400, end: 700, folderId: 3),
+    ]);
+
+    crossCheck('완전히 가려진 슬롯(죽은 슬롯)', [
+      LockScreenSlot(start: 1171, end: 1411, folderId: 1),
+      LockScreenSlot(start: 1296, end: 1346, folderId: 2),
+    ]);
+
+    crossCheck('자정 랩 + 부분 가려짐', [
+      LockScreenSlot(start: 1300, end: 1400, folderId: 1),
+      LockScreenSlot(start: 1320, end: 120, folderId: 2),
+    ]);
+
+    crossCheck('자정 랩 두 개가 서로 겹침', [
+      LockScreenSlot(start: 1320, end: 120, folderId: 1),
+      LockScreenSlot(start: 1400, end: 100, folderId: 2),
+    ]);
+
+    crossCheck('한 슬롯이 비인접 2구간으로 쪼개지는 경우(자정랩 가운데를 파먹힘)', [
+      LockScreenSlot(start: 50, end: 150, folderId: 1),
+      LockScreenSlot(start: 1300, end: 200, folderId: 2),
+    ]);
+
+    crossCheck('시작이 같은 슬롯들', [
+      LockScreenSlot(start: 600, end: 750, folderId: 1),
+      LockScreenSlot(start: 600, end: 900, folderId: 2),
+      LockScreenSlot(start: 600, end: 620, folderId: 3),
+    ]);
+
+    test('무작위 슬롯 15개 스트레스(시드 고정) — 여러 세트 반복', () {
+      for (final seed in [1, 7, 42]) {
+        final rand = Random(seed);
+        final slots = List.generate(15, (i) {
+          final start = rand.nextInt(1440);
+          var end = rand.nextInt(1440);
+          if (end == start) end = (end + 1) % 1440; // decode와 동일하게 start==end 회피
+          return LockScreenSlot(start: start, end: end, folderId: i);
+        });
+        final ranges = LockScreenSchedule.effectiveRanges(slots);
+        expect(ranges, hasLength(slots.length));
+        for (var m = 0; m < 1440; m++) {
+          final owner = firstMatchOwner(slots, m);
+          for (var i = 0; i < slots.length; i++) {
+            expect(inRanges(ranges[i], m), i == owner,
+                reason: 'seed=$seed 분 $m 슬롯 $i (owner=$owner)');
+          }
+        }
+      }
+    });
+  });
+
   group('음성 대조군 (negative control)', () {
     // 이 그룹은 "테스트가 실제로 회귀를 잡아내는가"를 문서화하기 위한 것으로,
     // 정상 상태에서는 항상 통과한다. 실제 무력화 실험은 이 파일 작성 과정에서
@@ -348,6 +612,37 @@ void main() {
     test('위 드롭 규칙 테스트들이 실제로 무언가를 검증하고 있음을 남겨두는 문서화 테스트', () {
       // start == end 규칙이 살아있는 한 이 슬롯은 항상 드롭되어야 한다.
       expect(LockScreenSchedule.decode('700:700:1'), isEmpty);
+    });
+
+    // effectiveRanges 쪽 무력화 실험: lock_screen_service.dart의
+    // `if (inSlot) { owner[m] = i; break; }`에서 break;를 일시적으로 제거해
+    // "나중 슬롯이 앞선 슬롯이 이미 차지한 분을 도로 뺏는" 회귀를 주입한 뒤
+    // 확인했다. 결과: 겹침이 있는 시나리오를 다루는 테스트 12개가 전부 실패,
+    // 겹침이 없는 시나리오(겹치지 않는 슬롯/자정 랩 단독/빈 입력/matchesDeclared
+    // 등) 10개는 원래대로 통과 — 겹침이 없으면 분마다 후보가 하나뿐이라 break
+    // 유무가 결과에 영향을 주지 않기 때문에, 이 구분 자체가 테스트가 정확히
+    // "우선순위 규칙"을 겨냥하고 있음을 보여준다. 실패한 12개:
+    //   - "부분 겹침: 뒤 슬롯은 앞 슬롯에게 뺏기고 남은 만큼만"
+    //   - "완전히 가려진 슬롯(죽은 슬롯) — 실기기에서 재현된 수치"
+    //   - "시작이 같은 두 슬롯 — 목록 순서상 먼저인 쪽이 전부, 나머지는 남는 부분만"
+    //   - "자정 랩, 앞선 슬롯에게 일부 가려짐"
+    //   - "한 슬롯이 서로 인접하지 않은 2개 구간으로 쪼개질 수 있음 — ..."
+    //   - 교차검증(1440분 전수) 중 "부분 겹침 체인 3개"
+    //   - 교차검증 중 "완전히 가려진 슬롯(죽은 슬롯)"
+    //   - 교차검증 중 "자정 랩 + 부분 가려짐"
+    //   - 교차검증 중 "자정 랩 두 개가 서로 겹침"
+    //   - 교차검증 중 "한 슬롯이 비인접 2구간으로 쪼개지는 경우(자정랩 가운데를 파먹힘)"
+    //   - 교차검증 중 "시작이 같은 슬롯들"
+    //   - 교차검증 중 "무작위 슬롯 15개 스트레스(시드 고정) — 여러 세트 반복"
+    // 확인 후 break;를 원상 복구했다.
+    test('effectiveRanges 우선순위(첫 매치 승리) 검증도 실제로 회귀를 잡아냄을 남겨두는 문서화 테스트',
+        () {
+      // "앞선 슬롯이 이긴다" 규칙이 살아있는 한, 완전히 가려진 슬롯은 항상 빈
+      // 리스트여야 한다.
+      final earlier = LockScreenSlot(start: 1171, end: 1411, folderId: 1);
+      final shadowed = LockScreenSlot(start: 1296, end: 1346, folderId: 2);
+      expect(
+          LockScreenSchedule.effectiveRanges([earlier, shadowed])[1], isEmpty);
     });
   });
 }

@@ -94,6 +94,91 @@ class LockScreenSchedule {
     }
     return result;
   }
+
+  /// 각 슬롯이 실제로 차지하는 구간. 반환값의 i번째 원소가 slots[i]의 실적용 구간 목록이다.
+  /// 앞선 슬롯(= start가 이른 쪽)이 이미 가져간 분은 빠진다 — Kotlin FolderSchedule.resolve의
+  /// "첫 매치 승리"와 같은 결과를 UI 쪽에서 재현한 것.
+  /// 완전히 가려진 슬롯은 빈 리스트가 된다.
+  ///
+  /// 표시 전용 계산이다 — 우선순위(= 목록 순서)는 절대 바꾸지 않는다. 저장을 막지도
+  /// 않는다.
+  static List<List<List<int>>> effectiveRanges(List<LockScreenSlot> slots) {
+    if (slots.isEmpty) return [];
+
+    // 슬롯별 세그먼트를 한 번만 계산해 재사용 (1440분 순회마다 다시 만들지 않는다).
+    final segsPerSlot = slots.map(_segments).toList();
+
+    // owner[m] = 분 m을 차지하는 첫 슬롯의 인덱스(= 목록 순서상 첫 매치). 아무 슬롯도
+    // 커버하지 않으면 -1.
+    final owner = List<int>.filled(1440, -1);
+    for (var m = 0; m < 1440; m++) {
+      for (var i = 0; i < segsPerSlot.length; i++) {
+        var inSlot = false;
+        for (final seg in segsPerSlot[i]) {
+          if (seg[0] <= m && m < seg[1]) {
+            inSlot = true;
+            break;
+          }
+        }
+        if (inSlot) {
+          owner[m] = i;
+          break;
+        }
+      }
+    }
+
+    // owner를 연속 구간(run)으로 묶어 슬롯별로 모은다. 0→1439 순서로 스캔하므로 한
+    // 슬롯의 run들은 자연히 start 오름차순으로 쌓인다 — 아래 자정 랩 병합이 그 순서에
+    // 의존한다.
+    final result = List.generate(slots.length, (_) => <List<int>>[]);
+    var i = 0;
+    while (i < 1440) {
+      final o = owner[i];
+      var j = i + 1;
+      while (j < 1440 && owner[j] == o) {
+        j++;
+      }
+      if (o != -1) {
+        result[o].add([i, j]); // 반열림 [i, j) — j는 자정에서 닫히면 1440일 수 있다.
+      }
+      i = j;
+    }
+
+    // 자정 랩 병합: 같은 슬롯이 1440에서 끝나는 run과 0에서 시작하는 run을 동시에
+    // 가지면(= 자정을 건너 계속 이어짐) 물리적으로 하나의 구간이므로 합친다.
+    // length==1인 경우는 병합 대상이 될 수 없다 — 슬롯 하나가 1440분 전체를 차지할
+    // 수는 없기 때문이다(decode가 start==end를 버리고, 자정교차 슬롯은 start>end라
+    // [end, start) 만큼 항상 빈틈이 남는다).
+    for (final ranges in result) {
+      if (ranges.length >= 2 &&
+          ranges.first[0] == 0 &&
+          ranges.last[1] == 1440) {
+        final wrapStart = ranges.removeLast()[0];
+        final wrapEnd = ranges.removeAt(0)[1];
+        ranges.insert(0, [wrapStart, wrapEnd]);
+      }
+    }
+
+    // end==1440을 0으로 정규화 — 모든 반환값이 슬롯 자신의 start/end처럼 0..1439
+    // 범위 안에서만 읽히고, "자정까지"인 구간은 슬롯이 원래 쓰는 표기(start>end)로
+    // 자연스럽게 표현되게 한다.
+    for (final ranges in result) {
+      for (final r in ranges) {
+        if (r[1] == 1440) r[1] = 0;
+      }
+      // 표시 순서 안정화: start 오름차순.
+      ranges.sort((a, b) => a[0].compareTo(b[0]));
+    }
+
+    return result;
+  }
+
+  /// 실적용 구간이 사용자가 적어 넣은 구간과 완전히 같은가(= 표시할 필요가 없는가).
+  static bool matchesDeclared(LockScreenSlot slot, List<List<int>> ranges) {
+    return ranges.length == 1 &&
+        ranges[0][0] == slot.start &&
+        ranges[0][1] == slot.end;
+  }
 }
 
 class LockScreenService {

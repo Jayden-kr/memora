@@ -266,6 +266,8 @@
   "lockScheduleApplyNote": "Applies from the next time the screen turns off.",
   "lockBaseFolder": "Base folder",
   "lockBaseFolderHint": "Shown when no time slot applies",
+  "lockScheduleActualRange": "Actually applies {ranges}",
+  "lockScheduleNeverApplies": "Hidden by an earlier time slot — never shown",
 
   "pushTitle": "Card push notification",
   "pushAlarm": "Notification",
