@@ -1,0 +1,16 @@
+<ko-KR>
+시간대별로 잠금화면 폴더가 자동으로 바뀝니다
+
+- 09:00~18:00 은 영단어, 18:00~23:00 은 히브리어처럼 시간대를 정해두면 그때그때 알맞은 폴더가 뜹니다
+- 시간대는 원하는 만큼 추가할 수 있고, 22:00~02:00 처럼 자정을 넘는 구간도 됩니다
+- 어느 시간대에도 해당하지 않는 시간에는 기본 폴더가 나옵니다
+- 시간대에 지정한 폴더를 지우거나 그 폴더가 비어 있으면 기본 폴더를 대신 보여줍니다
+</ko-KR>
+<en-US>
+The lock screen folder now changes by time of day
+
+- Set 9am-6pm to English words and 6pm-11pm to Hebrew, and the right folder shows up on its own
+- Add as many time slots as you like, including ones that cross midnight such as 10pm-2am
+- Outside every time slot, your base folder is shown as before
+- If a slot's folder is deleted or empty, the base folder is shown instead
+</en-US>
