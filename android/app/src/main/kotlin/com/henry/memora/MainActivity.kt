@@ -563,7 +563,19 @@ class MainActivity : FlutterActivity() {
             settings["reversed"] as? Boolean ?: false)
         editor.putInt("bg_color",
             (settings["bgColor"] as? Number)?.toInt() ?: 0xFF1A1A2E.toInt())
-        editor.apply()
+
+        // 신규 키는 "인자가 있을 때만 기록" — 없으면 기존 값 보존.
+        // 기존 6개 키의 무조건 기록은 그대로 둔다(회귀 위험 0).
+        // 이유: main.dart의 _restoreLockScreenService()가 앱 실행마다 startService를 태우는데,
+        // 거기서 스케줄을 안 실으면 사용자 설정이 매 실행마다 조용히 지워진다.
+        // as? 안전 캐스트가 "키 없음 / 값이 null / 타입 틀림" 셋을 전부 '보존'으로 접는다.
+        (settings["scheduleEnabled"] as? Boolean)?.let { editor.putBoolean("schedule_enabled", it) }
+        (settings["scheduleCsv"] as? String)?.let { editor.putString("folder_schedule", it) }
+
+        // 서비스 kill 전 데이터 보존 보장 — apply() 대신 commit()
+        // (LockScreenService.setServiceRunning():236, PushNotificationService와 동일 이유).
+        // 사용자 액션이 이미 MethodChannel 왕복을 기다리는 중이라 커밋 비용은 무관하다.
+        editor.commit()
 
         Log.d(TAG, "Settings saved: enabled=${settings["enabled"]}, folders=$folderIdsStr, sort=${settings["sortOrder"]}")
     }
@@ -587,7 +599,9 @@ class MainActivity : FlutterActivity() {
             "finishedFilter" to prefs.getInt("finished_filter", -1),
             "sortOrder" to sortOrder,
             "reversed" to prefs.getBoolean("reversed", false),
-            "bgColor" to prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
+            "bgColor" to prefs.getInt("bg_color", 0xFF1A1A2E.toInt()),
+            "scheduleEnabled" to prefs.getBoolean("schedule_enabled", false),
+            "scheduleCsv" to (prefs.getString("folder_schedule", "") ?: "")
         )
     }
 

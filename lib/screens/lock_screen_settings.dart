@@ -27,6 +27,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   bool _loading = true;
   bool _checkingOverlay = false;
 
+  // 시간대별 폴더 자동 전환
+  bool _scheduleEnabled = false;
+  List<LockScreenSlot> _slots = [];
+
   static const _sortOptions = <String>[
     'sequence',
     'newest',
@@ -102,6 +106,12 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       }
       _reversed = settings['reversed'] as bool? ?? false;
       _bgColor = settings['bgColor'] as int? ?? 0xFF1A1A2E;
+      _scheduleEnabled = settings['scheduleEnabled'] as bool? ?? false;
+      // NOTE: folderIds와 달리, 존재하지 않는 폴더를 가리키는 슬롯을 여기서 걸러
+      // 내지 않는다 — getAllFolders()가 어떤 이유로든 일부만 반환하면 그 필터가
+      // 사용자의 슬롯을 조용히 지워버리기 때문. 문제가 있으면 화면에 빨갛게
+      // 보여줘서(_buildSlotTile) 사용자가 직접 고치게 한다.
+      _slots = LockScreenSchedule.decode(settings['scheduleCsv'] as String?);
       _loading = false;
     });
   }
@@ -152,6 +162,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _applySettings() async {
+    final scheduleCsv = LockScreenSchedule.encode(_slots);
     if (_enabled) {
       await LockScreenService.startService(
         enabled: true,
@@ -160,6 +171,8 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         sortOrder: _sortOrder,
         reversed: _reversed,
         bgColor: _bgColor,
+        scheduleEnabled: _scheduleEnabled,
+        scheduleCsv: scheduleCsv,
       );
     } else {
       // 설정만 저장하고 서비스 중지
@@ -170,6 +183,8 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         sortOrder: _sortOrder,
         reversed: _reversed,
         bgColor: _bgColor,
+        scheduleEnabled: _scheduleEnabled,
+        scheduleCsv: scheduleCsv,
       );
       await LockScreenService.stopService();
     }
@@ -223,6 +238,272 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     });
   }
 
+  // ─── 시간대별 폴더 자동 전환 ───
+
+  Folder? _folderForId(int id) {
+    for (final folder in _folders) {
+      if (folder.id == id) return folder;
+    }
+    return null;
+  }
+
+  TimeOfDay _timeOfDayFromMinutes(int minutes) =>
+      TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60);
+
+  Future<void> _onAddSlotTapped() async {
+    if (_slots.length >= LockScreenSchedule.maxSlots) {
+      final t = AppLocalizations.of(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.lockScheduleMaxReached)),
+      );
+      return;
+    }
+    final result = await _showSlotDialog();
+    if (!mounted) return;
+    if (result == null) return;
+    setState(() {
+      _slots.add(result);
+      _slots.sort((a, b) => a.start.compareTo(b.start));
+    });
+    _onSettingChanged();
+  }
+
+  Future<void> _onEditSlotTapped(int index) async {
+    if (index < 0 || index >= _slots.length) return;
+    final result = await _showSlotDialog(initial: _slots[index]);
+    if (!mounted) return;
+    if (result == null) return;
+    setState(() {
+      if (index < _slots.length) {
+        _slots[index] = result;
+      } else {
+        // 다이얼로그가 열려 있던 사이 목록이 바뀐 극단적인 경우의 방어 코드
+        _slots.add(result);
+      }
+      _slots.sort((a, b) => a.start.compareTo(b.start));
+    });
+    _onSettingChanged();
+  }
+
+  void _onDeleteSlotTapped(int index) {
+    setState(() => _slots.removeAt(index));
+    _onSettingChanged();
+  }
+
+  /// 시간대 추가/편집 다이얼로그. 저장 버튼을 눌렀을 때만 검증(시작==종료, 폴더
+  /// 미선택)하고 실패하면 다이얼로그를 닫지 않는다. 겹침은 여기서 막지 않음 —
+  /// 자정 교차 슬롯을 편집하는 도중엔 일시적으로 겹치는 상태가 정상이라 목록
+  /// 화면의 경고 문구로만 처리한다.
+  ///
+  /// 검증 실패는 SnackBar가 아니라 다이얼로그 안에 직접 표시한다. SnackBar는
+  /// 다이얼로그의 모달 배리어 뒤(= 어둡게 깔린 Scaffold 위)에 그려져서 정작
+  /// 사용자가 봐야 할 순간에 잘 안 보인다.
+  Future<LockScreenSlot?> _showSlotDialog({LockScreenSlot? initial}) {
+    final t = AppLocalizations.of(context);
+    TimeOfDay start = initial != null
+        ? _timeOfDayFromMinutes(initial.start)
+        : const TimeOfDay(hour: 9, minute: 0);
+    TimeOfDay end = initial != null
+        ? _timeOfDayFromMinutes(initial.end)
+        : const TimeOfDay(hour: 18, minute: 0);
+    // 삭제된 폴더를 가리키던 슬롯을 편집하는 경우 드롭다운 목록에 그 값이 없으므로
+    // 미선택 상태로 시작 — 사용자가 새로 골라야 저장할 수 있다.
+    int? folderId = initial?.folderId;
+    if (folderId != null && !_folders.any((f) => f.id == folderId)) {
+      folderId = null;
+    }
+    String? errorText;
+
+    return showDialog<LockScreenSlot>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            return AlertDialog(
+              title: Text(initial == null
+                  ? t.lockScheduleAddTitle
+                  : t.lockScheduleEditTitle),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    title: Text(t.lockScheduleStart),
+                    trailing: TextButton(
+                      onPressed: () async {
+                        final picked = await showTimePicker(
+                          context: dialogCtx,
+                          initialTime: start,
+                        );
+                        if (picked != null) {
+                          setDialogState(() {
+                            start = picked;
+                            errorText = null;
+                          });
+                        }
+                      },
+                      child: Text(start.format(dialogCtx)),
+                    ),
+                  ),
+                  ListTile(
+                    title: Text(t.lockScheduleEnd),
+                    trailing: TextButton(
+                      onPressed: () async {
+                        final picked = await showTimePicker(
+                          context: dialogCtx,
+                          initialTime: end,
+                        );
+                        if (picked != null) {
+                          setDialogState(() {
+                            end = picked;
+                            errorText = null;
+                          });
+                        }
+                      },
+                      child: Text(end.format(dialogCtx)),
+                    ),
+                  ),
+                  DropdownButtonFormField<int>(
+                    initialValue: folderId,
+                    decoration:
+                        InputDecoration(labelText: t.lockScheduleFolder),
+                    items: _folders
+                        .where((f) => f.id != null)
+                        .map((f) => DropdownMenuItem(
+                              value: f.id,
+                              child: Text(f.name),
+                            ))
+                        .toList(),
+                    onChanged: (v) => setDialogState(() {
+                      folderId = v;
+                      errorText = null;
+                    }),
+                  ),
+                  if (errorText != null) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        errorText!,
+                        style: TextStyle(
+                          color: Theme.of(dialogCtx).colorScheme.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: Text(t.commonCancel),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final startMin = start.hour * 60 + start.minute;
+                    final endMin = end.hour * 60 + end.minute;
+                    if (startMin == endMin) {
+                      setDialogState(
+                          () => errorText = t.lockScheduleSameTimeError);
+                      return;
+                    }
+                    final pickedFolderId = folderId;
+                    if (pickedFolderId == null) {
+                      setDialogState(
+                          () => errorText = t.lockScheduleNoFolderError);
+                      return;
+                    }
+                    Navigator.pop(
+                      dialogCtx,
+                      LockScreenSlot(
+                        start: startMin,
+                        end: endMin,
+                        folderId: pickedFolderId,
+                      ),
+                    );
+                  },
+                  child: Text(t.commonSave),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 스케줄이 켜져 있을 때만 보여줄 슬롯 목록 + 추가 버튼 + 안내 문구.
+  List<Widget> _buildScheduleSection(AppLocalizations t) {
+    final hasOverlap =
+        LockScreenSchedule.overlappingIndices(_slots).isNotEmpty;
+
+    return [
+      if (_slots.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(t.lockScheduleEmpty,
+              style: Theme.of(context).textTheme.bodySmall),
+        )
+      else
+        ..._slots.asMap().entries.map(
+              (entry) => _buildSlotTile(t, entry.key, entry.value),
+            ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _folders.isEmpty ? null : _onAddSlotTapped,
+            icon: const Icon(Icons.add),
+            label: Text(t.lockScheduleAdd),
+          ),
+        ),
+      ),
+      if (hasOverlap)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text(t.lockScheduleOverlapHint,
+              style: Theme.of(context).textTheme.bodySmall),
+        ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: Text(t.lockScheduleApplyNote,
+            style: Theme.of(context).textTheme.bodySmall),
+      ),
+    ];
+  }
+
+  Widget _buildSlotTile(AppLocalizations t, int index, LockScreenSlot slot) {
+    final folder = _folderForId(slot.folderId);
+    final errorColor = Theme.of(context).colorScheme.error;
+    final startLabel = _timeOfDayFromMinutes(slot.start).format(context);
+    final endLabel = _timeOfDayFromMinutes(slot.end).format(context);
+
+    Widget subtitle;
+    if (folder == null) {
+      subtitle = Text(t.lockScheduleFolderMissing,
+          style: TextStyle(color: errorColor));
+    } else if (folder.cardCount == 0) {
+      // "카드 0개 · 카드 없음"은 같은 말을 두 번 하는 것이라 개수는 생략한다.
+      subtitle = Text(
+        '${folder.name} · ${t.lockScheduleFolderEmpty}',
+        style: TextStyle(color: errorColor),
+      );
+    } else {
+      subtitle =
+          Text('${folder.name} · ${t.cardCountSuffix(folder.cardCount)}');
+    }
+
+    return ListTile(
+      title: Text('$startLabel – $endLabel'),
+      subtitle: subtitle,
+      onTap: () => _onEditSlotTapped(index),
+      trailing: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: () => _onDeleteSlotTapped(index),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = AppLocalizations.of(context);
@@ -251,11 +532,25 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           ),
           const Divider(),
 
-          // 폴더 선택 (단일 선택)
+          // 폴더 선택 (단일 선택) — 스케줄이 켜지면 "폴더 선택" 대신 "기본 폴더"로 표기
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(t.lockSelectFolder,
-                style: Theme.of(context).textTheme.titleSmall),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _scheduleEnabled ? t.lockBaseFolder : t.lockSelectFolder,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                if (_scheduleEnabled) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    t.lockBaseFolderHint,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+            ),
           ),
           RadioGroup<int>(
             groupValue: _selectedFolderIds.length == 1
@@ -278,6 +573,20 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                   )).toList(),
             ),
           ),
+
+          const Divider(),
+
+          // 시간대별 폴더 자동 전환
+          SwitchListTile(
+            title: Text(t.lockScheduleEnable),
+            subtitle: Text(t.lockScheduleEnableSubtitle),
+            value: _scheduleEnabled,
+            onChanged: (v) {
+              setState(() => _scheduleEnabled = v);
+              _onSettingChanged();
+            },
+          ),
+          if (_scheduleEnabled) ..._buildScheduleSection(t),
           const Divider(),
 
           // 카드 순서

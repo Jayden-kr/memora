@@ -89,10 +89,17 @@ class LockScreenService : Service() {
 
     // 설정
     private var folderIds: List<Int> = emptyList()
+    // 기본(수동 선택) 폴더 = 라디오 선택값 = 스케줄 미매치/OFF 시 폴백
+    private var baseFolderIds: List<Int> = emptyList()
+    private var scheduleEnabled: Boolean = false
+    private var schedule: List<FolderSchedule.Slot> = emptyList()
     private var finishedFilter: Int = -1
     private var sortOrder: String = "sequence"
     private var reversed: Boolean = false
     private var bgColor: Int = 0xFF1A1A2E.toInt()
+    // 현재 cards가 어느 폴더 조합으로 로드됐는지. null="한 번도 로드 안 됨" — 기본 폴더가
+    // 빈 리스트인 사용자와 구분되게 일부러 non-null 기본값을 쓰지 않는다.
+    @Volatile private var loadedFolderIds: List<Int>? = null
 
     // Coral Orange 테마 색상
     private val coralPrimary = Color.parseColor("#FF6B6B")
@@ -300,6 +307,10 @@ class LockScreenService : Service() {
         screenReceiver = ScreenReceiver()
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
+            // 타임존 캐시 무효화 트리거 — ScreenReceiver.onReceive에서만 처리(SHOW_OVERLAY는
+            // ACTION_SCREEN_OFF만 발동시킨다, 동작 변경 없음)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_TIME_CHANGED)
         }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -325,7 +336,7 @@ class LockScreenService : Service() {
 
     private fun loadSettings() {
         val prefs = getSharedPreferences("lock_screen_prefs", MODE_PRIVATE)
-        folderIds = prefs.getString("folder_ids", "")
+        baseFolderIds = prefs.getString("folder_ids", "")
             ?.split(",")
             ?.filter { it.isNotEmpty() }
             ?.mapNotNull { it.toIntOrNull() }
@@ -347,7 +358,32 @@ class LockScreenService : Service() {
         if (prefs.contains("random_seed")) {
             prefs.edit().remove("random_seed").apply()
         }
+
+        scheduleEnabled = prefs.getBoolean("schedule_enabled", false)
+        schedule = if (scheduleEnabled) FolderSchedule.parse(prefs.getString("folder_schedule", null))
+                   else emptyList()          // OFF면 파싱조차 안 한다 — "켜졌는데 슬롯 0개"의 모호함 제거
+        val now = nowMinutes()
+        folderIds = FolderSchedule.resolve(now, schedule, baseFolderIds)
+        // 검증용 로그: 온디바이스 테스트가 "설정이 뭘 말하는지"뿐 아니라 실제로 몇 시로
+        // 계산했는지, 매치된 슬롯이 있었는지까지 볼 수 있어야 한다.
+        val matchedSlot = schedule.firstOrNull { FolderSchedule.slotContains(it.start, it.end, now) }
+        Log.d(TAG, "Schedule: now=%02d:%02d slots=%d -> folders=%s base=%s%s".format(
+            now / 60, now % 60, schedule.size, folderIds, baseFolderIds,
+            if (matchedSlot != null) " matched=[${matchedSlot.start}-${matchedSlot.end})->${matchedSlot.folderId}" else ""
+        ))
+
         Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, sort=$sortOrder, bg=$bgColor")
+    }
+
+    /**
+     * 자정 기준 경과 분(0~1439). minSdk 24라 java.time 대신 Calendar 사용
+     * (PushNotificationService.kt:412-414와 동일 패턴). 매번 로컬 wall-clock을 새로
+     * 읽으므로 타임존을 옮겨도 별도 마이그레이션이 필요 없다 — 단 이건 우리가 미래
+     * 시각을 미리 계산해 두지 않을 때만(=AlarmManager 미사용) 성립한다.
+     */
+    private fun nowMinutes(): Int {
+        val cal = java.util.Calendar.getInstance()
+        return cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
     }
 
     /**
@@ -370,7 +406,29 @@ class LockScreenService : Service() {
         return null
     }
 
+    /**
+     * folderIds로 카드를 로드하고, 결과가 비었으면 base 폴더로 1회 폴백한다.
+     * (요청 폴더가 base와 이미 같으면 폴백해봐야 결과가 같으므로 스킵 — 무한루프 불가.)
+     *
+     * ⚠️ 폴백하더라도 [folderIds] 자체는 건드리지 않고, [loadedFolderIds]에는 "실제로
+     * 쿼리한 폴더"가 아니라 **요청한(= 시간대가 해석한) 폴더**를 기록한다. 이유:
+     * loadedFolderIds는 "이 덱을 다시 읽어야 하나"를 판정하는 열쇠인데 여기에 폴백
+     * 결과(base)를 적으면, 다음 글랜스마다 loadSettings()가 시간대 폴더를 다시 해석해
+     * "달라졌다"고 오판한다. 그러면 빈 폴더가 걸린 시간대 내내 매 글랜스가 재로드로
+     * 이어지고 currentIndex가 0으로 리셋돼 사용자가 1번 카드에 갇힌다.
+     */
     private fun loadCardsFromDb() {
+        val requested = folderIds
+        queryCardsInto(requested)
+        if (cards.isEmpty() && requested != baseFolderIds && baseFolderIds.isNotEmpty()) {
+            // 시간대 폴더가 비었거나 삭제됐다 → 기본 폴더로 1회 폴백.
+            Log.w(TAG, "Scheduled folder $requested has no cards -> falling back to base $baseFolderIds")
+            queryCardsInto(baseFolderIds)
+        }
+        loadedFolderIds = requested
+    }
+
+    private fun queryCardsInto(ids: List<Int>) {
         val dbFile = findDbFile()
         if (dbFile == null) {
             cards = emptyList()
@@ -385,10 +443,10 @@ class LockScreenService : Service() {
             val whereParts = mutableListOf<String>()
             val whereArgs = mutableListOf<String>()
 
-            if (folderIds.isNotEmpty()) {
-                val placeholders = folderIds.joinToString(",") { "?" }
+            if (ids.isNotEmpty()) {
+                val placeholders = ids.joinToString(",") { "?" }
                 whereParts.add("folder_id IN ($placeholders)")
-                whereArgs.addAll(folderIds.map { it.toString() })
+                whereArgs.addAll(ids.map { it.toString() })
             }
             if (finishedFilter >= 0) {
                 whereParts.add("finished = ?")
@@ -513,6 +571,46 @@ class LockScreenService : Service() {
         // → 오버레이를 재생성하지 않고 "다음 카드"로 진행시킨다. 화면이 꺼진 동안
         //   갱신하므로 다시 켜면 새 카드가 보인다.
         if (overlayView != null) {
+            if (loadedFolderIds != folderIds) {
+                // 시간대가 바뀌어 보여줄 폴더가 달라졌다 → 오버레이는 유지한 채 덱만 갈아끼운다.
+                // DB 접근은 반드시 bgHandler에서 — 여기는 mainHandler.post 콜백 안이라, SQLite를
+                // 직접 열면 ANR이다(아래 "DB 쿼리를 백그라운드 스레드에서 실행" 주석과 같은 경고).
+                ensureBgThread()
+                val handler = bgHandler
+                if (handler != null) {
+                    handler.post {
+                        if (!isServiceActive) return@post
+                        // 새 덱이 비면 이전 덱을 되돌린다. queryCardsInto는 실패(DB 열기 오류
+                        // 등)에도 cards를 비우므로, 그냥 두면 살아있는 오버레이가 빈 덱을 들고
+                        // 정지 화면이 된다 — updateCardDisplay도 advanceCard도 빈 리스트에서
+                        // 조기 반환하고, loadedFolderIds는 이미 갱신돼 재시도조차 안 온다.
+                        val previous = cards
+                        loadCardsFromDb()
+                        if (cards.isEmpty() && previous.isNotEmpty()) {
+                            cards = previous
+                            loadedFolderIds = null   // 다음 글랜스에 다시 시도
+                            Log.w(TAG, "Folder switch produced no cards -> keeping previous deck, will retry")
+                            return@post
+                        }
+                        mainHandler.post {
+                            if (!isServiceActive || overlayView == null) return@post
+                            if (cards.isEmpty()) return@post
+                            synchronized(this) { currentIndex = 0 }
+                            try {
+                                updateCardDisplay()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to update after folder switch", e)
+                            }
+                        }
+                    }
+                    return
+                }
+                // bgHandler가 없으면(서비스 종료 중) 재로드는 포기하고 기존 동작으로 강등
+            }
+            // 폴더가 안 바뀐 일반적인 글랜스 — 재로드하면 random 정렬의 셔플이 매번 다시
+            // 돌아 advanceCard()의 반복 방지 로직을 우회해버린다(바로 위 "이미 오버레이가
+            // 떠 있는 경우" 주석에 적힌, 예전에 이미 한 번 잡은 회귀와 같은 종류). 그래서
+            // 폴더가 같을 땐 절대 재쿼리하지 않는다.
             mainHandler.post {
                 if (!isServiceActive || overlayView == null) return@post
                 if (cards.isEmpty()) return@post
@@ -859,7 +957,7 @@ class LockScreenService : Service() {
         }
 
         val card = localCards[currentIndex]
-        Log.d(TAG, "Display card: index=$currentIndex/${localCards.size} id=${card.id} sort=$sortOrder")
+        Log.d(TAG, "Display card: index=$currentIndex/${localCards.size} id=${card.id} sort=$sortOrder folder=${card.folderId}")
         releaseVoice() // 카드 전환 시 이전 음성 정지
 
         // reversed 모드: 질문/답 순서 바꿈
