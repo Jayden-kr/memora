@@ -35,6 +35,8 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 홈 화면/설정 앱 목록에 뜨는 이름. release 는 지금까지와 똑같이 "Memora".
+        manifestPlaceholders["appLabel"] = "Memora"
     }
 
     signingConfigs {
@@ -52,6 +54,10 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // ⚠️ 패키지만 나눠서는 부족하다. 라벨이 같으면 홈 화면에 "Memora"가 두 개
+            // 뜨고, 사용자가 실데이터가 든 운영본을 debug 로 착각해 지울 수 있다
+            // (자매 프로젝트 Moneta 에서 실제로 일어난 사고).
+            manifestPlaceholders["appLabel"] = "Memora DBG"
         }
         release {
             signingConfig = if (keystorePropertiesFile.exists()) {
