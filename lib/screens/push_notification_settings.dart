@@ -8,6 +8,7 @@ import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/notification_service.dart';
+import '../services/push_schedule.dart';
 
 class PushNotificationSettingsScreen extends StatefulWidget {
   const PushNotificationSettingsScreen({super.key});
@@ -27,6 +28,10 @@ class _PushNotificationSettingsScreenState
   bool _saving = false;
   // 기본값 true — 실제 체크가 끝나기 전까지 경고 카드가 잠깐 보였다 사라지는 깜빡임 방지.
   bool _exactAlarmPermitted = true;
+
+  // 시간대별 폴더·주기 자동 전환
+  bool _scheduleEnabled = false;
+  List<PushSlot> _slots = [];
 
   TimeOfDay _intervalStartTime = const TimeOfDay(hour: 9, minute: 0);
   TimeOfDay _intervalEndTime = const TimeOfDay(hour: 22, minute: 0);
@@ -90,6 +95,15 @@ class _PushNotificationSettingsScreenState
     if (!mounted) return;
 
     _enabled = (settings[_settingNotificationEnabled] ?? '').toLowerCase() == 'true';
+
+    _scheduleEnabled =
+        (settings[PushSchedule.settingEnabledKey] ?? '').toLowerCase() ==
+            'true';
+    // NOTE: LockScreenSettingsScreen과 동일 규율 — 존재하지 않는 폴더를 가리키는
+    // 슬롯을 여기서 걸러내지 않는다. getNonBundleFolders()가 부분 실패로 일부만
+    // 반환하면 그 필터가 사용자의 슬롯을 조용히 지워버리기 때문. 문제가 있으면
+    // 화면에 빨갛게 보여줘서(_buildPushSlotTile) 사용자가 직접 고치게 한다.
+    _slots = PushSchedule.decode(settings[PushSchedule.settingCsvKey]);
 
     Map<String, dynamic>? intervalAlarm;
     for (final alarm in alarms) {
@@ -233,6 +247,11 @@ class _PushNotificationSettingsScreenState
   Future<void> _applyGlobalSettings() async {
     // NOTE: context나 setState를 쓰지 않으므로 mounted 가드 불필요 — dispose()가
     // 대기 중인 debounce를 flush할 때도(#20) 안전하게 끝까지 실행되어야 한다.
+    //
+    // 시간대별 스케줄(스위치/슬롯 추가·편집·삭제) 저장도 이 함수가 함께 맡는다 —
+    // 이미 있는 "기타 설정 변경 → 500ms 디바운스 → dispose 시 flush" 파이프라인을
+    // 그대로 재사용하는 것으로, 별도 디바운스 타이머를 하나 더 만들면 두 타이머가
+    // 서로 다른 시점에 rescheduleAll()을 중복 호출할 수 있어 이 쪽이 더 안전하다.
     try {
       final allAlarms = await DatabaseHelper.instance.getAllPushAlarms();
       for (final alarm in allAlarms) {
@@ -241,6 +260,13 @@ class _PushNotificationSettingsScreenState
           'sound_enabled': _soundEnabled ? 1 : 0,
         });
       }
+      // 슬롯이 0개면 무조건 강제로 끈다 — "켜졌는데 슬롯 0개"인 모호한 상태를
+      // 만들지 않는다(잠금화면과 동일 규율).
+      final effectiveScheduleEnabled = _scheduleEnabled && _slots.isNotEmpty;
+      await DatabaseHelper.instance.upsertSetting(
+          PushSchedule.settingEnabledKey, effectiveScheduleEnabled.toString());
+      await DatabaseHelper.instance
+          .upsertSetting(PushSchedule.settingCsvKey, PushSchedule.encode(_slots));
       await NotificationService.rescheduleAll();
     } catch (e) {
       debugPrint('[PUSH_SETTINGS] global settings apply failed: $e');
@@ -261,6 +287,382 @@ class _PushNotificationSettingsScreenState
         ? endTotal - startTotal
         : (1440 - startTotal) + endTotal;
     return (span ~/ intervalMin) + 1;
+  }
+
+  // ─── 시간대별 폴더·주기 자동 전환 ───
+
+  Folder? _folderForId(int id) {
+    for (final folder in _folders) {
+      if (folder.id == id) return folder;
+    }
+    return null;
+  }
+
+  TimeOfDay _timeOfDayFromMinutes(int minutes) =>
+      TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60);
+
+  /// 실적용 구간이 사용자가 적어 넣은 구간과 완전히 같은가(= 표시할 필요가 없는가).
+  /// LockScreenSchedule.matchesDeclared와 동일한 트리비얼한 판정 — PushSlot용으로
+  /// 그대로 재구현(값 비교 3줄뿐이라 어댑터로 감쌀 만큼의 복잡도가 아님).
+  bool _matchesDeclaredRange(PushSlot slot, List<List<int>> ranges) {
+    return ranges.length == 1 &&
+        ranges[0][0] == slot.start &&
+        ranges[0][1] == slot.end;
+  }
+
+  Future<void> _onAddPushSlotTapped() async {
+    if (_slots.length >= PushSchedule.maxSlots) {
+      final t = AppLocalizations.of(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.pushScheduleMaxReached)),
+      );
+      return;
+    }
+    final result = await _showPushSlotDialog();
+    if (!mounted) return;
+    if (result == null) return;
+    setState(() {
+      _slots.add(result);
+      _slots.sort((a, b) => a.start.compareTo(b.start));
+    });
+    _updateGlobalSettings();
+  }
+
+  Future<void> _onEditPushSlotTapped(int index) async {
+    if (index < 0 || index >= _slots.length) return;
+    final result = await _showPushSlotDialog(initial: _slots[index]);
+    if (!mounted) return;
+    if (result == null) return;
+    setState(() {
+      if (index < _slots.length) {
+        _slots[index] = result;
+      } else {
+        // 다이얼로그가 열려 있던 사이 목록이 바뀐 극단적인 경우의 방어 코드
+        _slots.add(result);
+      }
+      _slots.sort((a, b) => a.start.compareTo(b.start));
+    });
+    _updateGlobalSettings();
+  }
+
+  void _onDeletePushSlotTapped(int index) {
+    setState(() => _slots.removeAt(index));
+    _updateGlobalSettings();
+  }
+
+  /// 시간대 추가/편집 다이얼로그. 필드 순서(시작→종료→폴더)는 잠금화면
+  /// (lock_screen_settings.dart _showSlotDialog)과 동일하게 맞추고, 간격 필드만
+  /// 맨 뒤에 추가한다. 검증 실패는 SnackBar가 아니라 다이얼로그 안에 직접
+  /// 표시한다 — 모달 배리어 뒤에 그려져 잘 안 보이는 문제 회피.
+  Future<PushSlot?> _showPushSlotDialog({PushSlot? initial}) {
+    final t = AppLocalizations.of(context);
+    TimeOfDay start = initial != null
+        ? _timeOfDayFromMinutes(initial.start)
+        : const TimeOfDay(hour: 9, minute: 0);
+    TimeOfDay end = initial != null
+        ? _timeOfDayFromMinutes(initial.end)
+        : const TimeOfDay(hour: 18, minute: 0);
+    // 삭제된 폴더를 가리키던 슬롯을 편집하는 경우 드롭다운 목록에 그 값이 없으므로
+    // 미선택 상태로 시작 — 사용자가 새로 골라야 저장할 수 있다.
+    int? folderId = initial?.folderId;
+    if (folderId != null && !_folders.any((f) => f.id == folderId)) {
+      folderId = null;
+    }
+    final intervalController = TextEditingController(
+      text: (initial != null && initial.intervalMin != PushSchedule.inherit)
+          ? initial.intervalMin.toString()
+          : '',
+    );
+    String? errorText;
+
+    return showDialog<PushSlot>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            return AlertDialog(
+              title: Text(initial == null
+                  ? t.pushScheduleAddTitle
+                  : t.pushScheduleEditTitle),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ListTile(
+                      title: Text(t.pushScheduleStart),
+                      trailing: TextButton(
+                        onPressed: () async {
+                          final picked = await showTimePicker(
+                            context: dialogCtx,
+                            initialTime: start,
+                          );
+                          if (picked != null) {
+                            setDialogState(() {
+                              start = picked;
+                              errorText = null;
+                            });
+                          }
+                        },
+                        child: Text(start.format(dialogCtx)),
+                      ),
+                    ),
+                    ListTile(
+                      title: Text(t.pushScheduleEnd),
+                      trailing: TextButton(
+                        onPressed: () async {
+                          final picked = await showTimePicker(
+                            context: dialogCtx,
+                            initialTime: end,
+                          );
+                          if (picked != null) {
+                            setDialogState(() {
+                              end = picked;
+                              errorText = null;
+                            });
+                          }
+                        },
+                        child: Text(end.format(dialogCtx)),
+                      ),
+                    ),
+                    DropdownButtonFormField<int>(
+                      initialValue: folderId,
+                      decoration: InputDecoration(labelText: t.pushFolder),
+                      items: _folders
+                          .where((f) => f.id != null)
+                          .map((f) => DropdownMenuItem(
+                                value: f.id,
+                                child: Text(f.name),
+                              ))
+                          .toList(),
+                      onChanged: (v) => setDialogState(() {
+                        folderId = v;
+                        errorText = null;
+                      }),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: intervalController,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: InputDecoration(
+                        labelText: t.pushScheduleInterval,
+                        suffixText: t.pushIntervalMinutes,
+                        border: const OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setDialogState(() => errorText = null),
+                    ),
+                    const SizedBox(height: 4),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        t.pushScheduleIntervalInherit(
+                            _intervalMinController.text),
+                        style: Theme.of(dialogCtx).textTheme.bodySmall,
+                      ),
+                    ),
+                    if (errorText != null) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          errorText!,
+                          style: TextStyle(
+                            color: Theme.of(dialogCtx).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: Text(t.commonCancel),
+                ),
+                TextButton(
+                  onPressed: () {
+                    final startMin = start.hour * 60 + start.minute;
+                    final endMin = end.hour * 60 + end.minute;
+                    if (startMin == endMin) {
+                      setDialogState(
+                          () => errorText = t.pushScheduleSameTimeError);
+                      return;
+                    }
+                    final pickedFolderId = folderId;
+                    if (pickedFolderId == null) {
+                      setDialogState(
+                          () => errorText = t.pushScheduleNoFolderError);
+                      return;
+                    }
+                    final intervalText = intervalController.text.trim();
+                    var intervalMin = PushSchedule.inherit;
+                    if (intervalText.isNotEmpty) {
+                      final parsed = int.tryParse(intervalText);
+                      if (parsed == null || parsed < 5 || parsed > 1440) {
+                        setDialogState(
+                            () => errorText = t.pushScheduleIntervalError);
+                        return;
+                      }
+                      intervalMin = parsed;
+                    }
+                    Navigator.pop(
+                      dialogCtx,
+                      PushSlot(
+                        start: startMin,
+                        end: endMin,
+                        folderId: pickedFolderId,
+                        intervalMin: intervalMin,
+                      ),
+                    );
+                  },
+                  child: Text(t.commonSave),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() => intervalController.dispose());
+  }
+
+  /// 스케줄이 켜져 있을 때만 보여줄 슬롯 목록 + 추가 버튼 + 안내 문구.
+  List<Widget> _buildPushScheduleSection(AppLocalizations t) {
+    final hasOverlap = PushSchedule.overlappingIndices(_slots).isNotEmpty;
+    // 표시 전용 계산 — 이 화면 안에서 한 번만 구해 모든 타일이 나눠 쓴다.
+    final effectiveRanges = PushSchedule.effectiveRanges(_slots);
+    final startTotal =
+        _intervalStartTime.hour * 60 + _intervalStartTime.minute;
+    final endTotal = _intervalEndTime.hour * 60 + _intervalEndTime.minute;
+    final outsideWindow =
+        PushSchedule.outsideWindowIndices(_slots, startTotal, endTotal);
+
+    return [
+      if (_slots.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(t.pushScheduleEmpty,
+              style: Theme.of(context).textTheme.bodySmall),
+        )
+      else
+        ..._slots.asMap().entries.map(
+              (entry) => _buildPushSlotTile(
+                t,
+                entry.key,
+                entry.value,
+                effectiveRanges[entry.key],
+                outsideWindow.contains(entry.key),
+              ),
+            ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _folders.isEmpty ? null : _onAddPushSlotTapped,
+            icon: const Icon(Icons.add),
+            label: Text(t.pushScheduleAdd),
+          ),
+        ),
+      ),
+      if (hasOverlap)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text(t.pushScheduleOverlapHint,
+              style: Theme.of(context).textTheme.bodySmall),
+        ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        child: Text(t.pushScheduleApplyNote,
+            style: Theme.of(context).textTheme.bodySmall),
+      ),
+    ];
+  }
+
+  Widget _buildPushSlotTile(AppLocalizations t, int index, PushSlot slot,
+      List<List<int>> ranges, bool isOutsideWindow) {
+    final folder = _folderForId(slot.folderId);
+    final errorColor = Theme.of(context).colorScheme.error;
+    final startLabel = _timeOfDayFromMinutes(slot.start).format(context);
+    final endLabel = _timeOfDayFromMinutes(slot.end).format(context);
+
+    Widget folderLine;
+    if (folder == null) {
+      folderLine = Text(t.pushScheduleFolderMissing,
+          style: TextStyle(color: errorColor));
+    } else if (folder.cardCount == 0) {
+      // "카드 0개 · 카드 없음"은 같은 말을 두 번 하는 것이라 개수는 생략한다.
+      folderLine = Text(
+        '${folder.name} · ${t.pushScheduleFolderEmpty}',
+        style: TextStyle(color: errorColor),
+      );
+    } else {
+      folderLine =
+          Text('${folder.name} · ${t.cardCountSuffix(folder.cardCount)}');
+    }
+
+    Widget? intervalLine;
+    if (slot.intervalMin != PushSchedule.inherit) {
+      intervalLine = Text(
+        '${t.pushIntervalLabel}: ${slot.intervalMin}${t.pushIntervalMinutes}',
+        style: Theme.of(context).textTheme.bodySmall,
+      );
+    }
+
+    // 우선순위: 마스터 활성시간창 밖(=아예 발화 안 됨)이 겹침으로 인한 부분
+    // 가려짐보다 더 근본적인 이유이므로 그 경고를 우선 보여준다.
+    Widget? warnLine;
+    if (isOutsideWindow) {
+      final rangeText =
+          '${_formatTime(_intervalStartTime)}~${_formatTime(_intervalEndTime)}';
+      warnLine = Text(
+        t.pushScheduleOutsideWindow(rangeText),
+        style:
+            Theme.of(context).textTheme.bodySmall?.copyWith(color: errorColor),
+      );
+    } else if (!_matchesDeclaredRange(slot, ranges)) {
+      if (ranges.isEmpty) {
+        warnLine = Text(
+          t.pushScheduleNeverApplies,
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: errorColor),
+        );
+      } else {
+        final rangesText = ranges
+            .map((r) =>
+                '${_timeOfDayFromMinutes(r[0]).format(context)} – ${_timeOfDayFromMinutes(r[1]).format(context)}')
+            .join(', ');
+        warnLine = Text(
+          t.pushScheduleActualRange(rangesText),
+          style: Theme.of(context).textTheme.bodySmall,
+        );
+      }
+    }
+
+    final lines = <Widget>[folderLine];
+    if (intervalLine != null) lines.add(intervalLine);
+    if (warnLine != null) lines.add(warnLine);
+
+    final subtitle = lines.length == 1
+        ? lines.first
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: lines,
+          );
+
+    return ListTile(
+      title: Text('$startLabel – $endLabel'),
+      subtitle: subtitle,
+      isThreeLine: lines.length > 1,
+      onTap: () => _onEditPushSlotTapped(index),
+      trailing: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: () => _onDeletePushSlotTapped(index),
+      ),
+    );
   }
 
   // ─── Build ───
@@ -361,6 +763,19 @@ class _PushNotificationSettingsScreenState
 
                 ..._buildIntervalModeUI(t),
 
+                const Divider(),
+
+                // 시간대별 폴더·주기 자동 전환
+                SwitchListTile(
+                  title: Text(t.pushScheduleEnable),
+                  subtitle: Text(t.pushScheduleEnableSubtitle),
+                  value: _scheduleEnabled,
+                  onChanged: (v) {
+                    setState(() => _scheduleEnabled = v);
+                    _updateGlobalSettings();
+                  },
+                ),
+                if (_scheduleEnabled) ..._buildPushScheduleSection(t),
                 const Divider(),
 
                 Padding(
