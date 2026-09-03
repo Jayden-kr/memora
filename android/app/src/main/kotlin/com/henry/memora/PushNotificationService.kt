@@ -38,6 +38,10 @@ class PushNotificationService : Service() {
     private var folderId: Int? = null
     private var soundEnabled = true
     private var lang = "ko"
+    // 시간대별 폴더·주기 자동 전환(PushSchedule.kt). OFF면 slots는 항상 emptyList —
+    // "켜졌는데 슬롯 0개"라는 모호함을 만들지 않는다(LockScreenService와 동일 규율).
+    private var scheduleEnabled = false
+    private var slots: List<PushSchedule.Slot> = emptyList()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -167,9 +171,23 @@ class PushNotificationService : Service() {
 
             saveRunning(true)
 
+            // 현재 시각을 한 번만 계산 → 활성 슬롯(폴더+간격 오버라이드) 판정 → 그 간격으로
+            // 다음 알람 예약. 슬롯 전환은 "지연 수용" 설계다: 폴더는 이번 TICK에서 바로
+            // 반영되지만(fireIfInRange가 이 slot 그대로 발화), 간격은 "다음" 예약부터만
+            // 반영된다 — 드리프트 방지 while 루프가 몇 TICK 안에 새 간격으로 자연히
+            // 수렴하므로 경계 전용 정확 알람은 의도적으로 추가하지 않는다.
+            val now = nowMinutes()
+            val slot = activeSlotNow(now)
+            Log.d(TAG, "Schedule: now=%02d:%02d slots=%d matched=%s effInterval=%d effFolder=%s".format(
+                now / 60, now % 60, slots.size,
+                slot?.let { "[${it.start}-${it.end})->folder=${it.folderId},interval=${it.intervalMin}" } ?: "none",
+                effectiveIntervalMin(slot),
+                effectiveFolderId(slot)?.toString() ?: "all"
+            ))
+
             // 다음 알람을 먼저 예약 (프로세스가 fireIfInRange 도중 죽어도 체인 유지)
             // 핵심: 예정시각(savedNextFireTime) 기준으로 다음 계산 → 드리프트 누적 방지
-            val intervalMs = intervalMin * 60 * 1000L
+            val intervalMs = effectiveIntervalMin(slot) * 60 * 1000L
             val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
             var nextFireTime = savedFireTime + intervalMs
             // 만약 nextFireTime이 이미 과거면 → 다음 슬롯까지 건너뛰기
@@ -180,7 +198,7 @@ class PushNotificationService : Service() {
             scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
 
             // 예약 완료 후 발화 (프로세스 사망 시 이번 알림만 유실, 체인은 유지)
-            fireIfInRange()
+            fireIfInRange(now, slot)
 
             return START_STICKY
         }
@@ -203,8 +221,32 @@ class PushNotificationService : Service() {
             ?: prefs.getBoolean("soundEnabled", true)
         lang = AppLang.normalize(intent?.getStringExtra("lang") ?: prefs.getString("lang", null))
 
-        // 타이밍 설정 변경 여부 판별 (폴더/알림음은 타이밍과 무관)
-        val timingKey = "$intervalMin:$startTotal:$endTotal"
+        // 시간대별 스케줄. folderId와 같은 hasExtra 패턴 — "전달 안 함=보존" vs
+        // "명시적으로 넘김(켜짐/꺼짐, CSV)"을 구분한다. MainActivity가 scheduleEnabled/
+        // scheduleCsv를 ?.let으로 조건부 전달하므로(신규 키 보존 규율), 여기서도 값이
+        // 없으면 prefs의 기존 값을 그대로 쓴다.
+        scheduleEnabled = if (intent != null && intent.hasExtra("scheduleEnabled")) {
+            intent.getBooleanExtra("scheduleEnabled", false)
+        } else {
+            prefs.getBoolean("scheduleEnabled", false)
+        }
+        val scheduleCsvRaw = if (intent != null && intent.hasExtra("scheduleCsv")) {
+            intent.getStringExtra("scheduleCsv") ?: ""
+        } else {
+            prefs.getString("scheduleCsv", "") ?: ""
+        }
+        // OFF면 파싱조차 하지 않는다 — "켜졌는데 슬롯 0개"의 모호함 제거(LockScreenService와 동일 규율).
+        slots = if (scheduleEnabled) PushSchedule.parse(scheduleCsvRaw) else emptyList()
+        // prefs에는 정규화된 CSV를 저장 — 공백/순서 차이가 timingKey를 불필요하게 리셋하지
+        // 않게 하고, scheduleEnabled가 꺼져 있어도 유효한 슬롯 데이터를 보존해 다시 켜면
+        // 그대로 복원되게 한다.
+        val canonicalCsv = PushSchedule.encode(PushSchedule.parse(scheduleCsvRaw))
+
+        // 타이밍 설정 변경 여부 판별 (폴더/알림음은 타이밍과 무관).
+        // ⚠️ scheduleEnabled/스케줄 CSV를 반드시 포함해야 한다 — 안 그러면 슬롯만
+        // 편집해서 저장해도 "타이밍 변경 없음"으로 오판돼 실행 중이던 타이머가 새
+        // 스케줄을 영영 반영하지 못한다.
+        val timingKey = "$intervalMin:$startTotal:$endTotal:${if (scheduleEnabled) 1 else 0}:$canonicalCsv"
         val savedTimingKey = prefs.getString("timingKey", "") ?: ""
         val wasRunning = prefs.getBoolean("running", false)
 
@@ -215,6 +257,8 @@ class PushNotificationService : Service() {
             .putInt("endTotal", endTotal)
             .putInt("folderId", folderId ?: -1)
             .putBoolean("soundEnabled", soundEnabled)
+            .putBoolean("scheduleEnabled", scheduleEnabled)
+            .putString("scheduleCsv", canonicalCsv)
             .putString("timingKey", timingKey)
             .putString("lang", lang)
             .commit()  // apply() 대신 commit() — 서비스 kill 전 데이터 보존 보장
@@ -407,58 +451,107 @@ class PushNotificationService : Service() {
         folderId = prefs.getInt("folderId", -1).let { if (it == -1) null else it }
         soundEnabled = prefs.getBoolean("soundEnabled", true)
         lang = prefs.getString("lang", "ko") ?: "ko"
+        scheduleEnabled = prefs.getBoolean("scheduleEnabled", false)
+        slots = if (scheduleEnabled) PushSchedule.parse(prefs.getString("scheduleCsv", null)) else emptyList()
     }
 
-    private fun fireIfInRange() {
+    /** 자정 기준 경과 분(0~1439). minSdk 24라 java.time 대신 Calendar 사용. */
+    private fun nowMinutes(): Int {
         val cal = java.util.Calendar.getInstance()
-        val nowTotal = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        return cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+    }
 
-        // 시간 범위 체크 (overnight 지원: start > end인 경우 자정 넘김)
-        val inRange = if (startTotal <= endTotal) {
-            nowTotal in startTotal..endTotal
+    /**
+     * 마스터 활성시간창(양끝 포함, overnight 지원) 판정. fireIfInRange()가 원래 인라인으로
+     * 하던 계산을 순수 추출만 한 것 — 의미(양끝 포함)는 절대 바꾸지 않는다. 반열림으로
+     * "통일"하지 말 것: PushSchedule.Slot 쪽 판정(FolderSchedule.slotContains)은
+     * 하루를 여러 슬롯으로 분할하므로 반열림이 맞고, 여긴 "쏠지 말지"를 정하는 단일
+     * 범위라 경계 포함이 자연스럽다 — 둘 다 각자 맥락에서 옳다.
+     */
+    private fun inMasterWindow(now: Int): Boolean {
+        return if (startTotal <= endTotal) {
+            now in startTotal..endTotal
         } else {
-            // overnight: 22:00~06:00 → nowTotal >= 22:00 OR nowTotal <= 06:00
-            nowTotal >= startTotal || nowTotal <= endTotal
+            now >= startTotal || now <= endTotal
         }
-        if (!inRange) {
+    }
+
+    /**
+     * 마스터 창 밖이면 슬롯 자체가 무시된다(슬롯이 있어도 즉시 null 반환) — 스케줄
+     * 기능이 없던 오늘 코드와 완전히 동일한 동작을 보장하는 지점.
+     */
+    private fun activeSlotNow(now: Int): PushSchedule.Slot? {
+        if (!inMasterWindow(now)) return null
+        return PushSchedule.activeSlot(now, slots)
+    }
+
+    private fun effectiveIntervalMin(slot: PushSchedule.Slot?): Int {
+        if (slot == null || slot.intervalMin == PushSchedule.INHERIT) return intervalMin
+        return slot.intervalMin
+    }
+
+    private fun effectiveFolderId(slot: PushSchedule.Slot?): Int? {
+        return slot?.folderId ?: folderId
+    }
+
+    private fun fireIfInRange(nowTotal: Int, slot: PushSchedule.Slot?) {
+        if (!inMasterWindow(nowTotal)) {
             Log.d(TAG, "시간 범위 밖 ($nowTotal not in [$startTotal, $endTotal]), 스킵")
             return
         }
 
         Log.d(TAG, "알림 발사! ($nowTotal)")
+        val targetFolderId = effectiveFolderId(slot)
         // DB I/O를 백그라운드 스레드에서 실행 (ANR 방지)
         Thread {
             try {
-                showCardNotification()
+                showCardNotification(targetFolderId)
             } catch (e: Exception) {
                 Log.e(TAG, "showCardNotification 실패", e)
             }
         }.start()
     }
 
-    private fun showCardNotification() {
+    /**
+     * cards 테이블에서 [folderIdFilter](null이면 전체)로 필터링한 랜덤 카드 1건을 조회.
+     * 반환: Triple(cardId, cardFolderId, question) — cardId<=0이면 조회 실패(0건).
+     */
+    private fun queryRandomCard(db: SQLiteDatabase, folderIdFilter: Int?): Triple<Int, Int, String> {
+        val where = if (folderIdFilter != null) "folder_id = ?" else null
+        val args = if (folderIdFilter != null) arrayOf(folderIdFilter.toString()) else null
+        val cursor = db.query("cards", arrayOf("id", "folder_id", "question"),
+            where, args, null, null, "RANDOM()", "1")
+        cursor.use {
+            if (it.moveToFirst()) {
+                val q = it.getString(it.getColumnIndexOrThrow("question"))
+                val cardId = it.getInt(it.getColumnIndexOrThrow("id"))
+                val cardFolderId = it.getInt(it.getColumnIndexOrThrow("folder_id"))
+                return Triple(cardId, cardFolderId, if (!q.isNullOrEmpty()) q else "")
+            }
+        }
+        return Triple(-1, -1, "")
+    }
+
+    private fun showCardNotification(targetFolderId: Int?) {
         val dbFile = findDbFile() ?: return
         var db: SQLiteDatabase? = null
         try {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
             try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용 (별도 :push 프로세스)
 
-            // 랜덤 카드 조회
-            val where = if (folderId != null) "folder_id = ?" else null
-            val args = if (folderId != null) arrayOf(folderId.toString()) else null
-            val cursor = db.query("cards", arrayOf("id", "folder_id", "question"),
-                where, args, null, null, "RANDOM()", "1")
+            // 랜덤 카드 조회 (시간대 슬롯이 지정한 폴더 우선)
+            var (cardId, cardFolderId, question) = queryRandomCard(db, targetFolderId)
 
-            var question = ""
-            var cardId = -1
-            var cardFolderId = -1
-            cursor.use {
-                if (it.moveToFirst()) {
-                    val q = it.getString(it.getColumnIndexOrThrow("question"))
-                    cardId = it.getInt(it.getColumnIndexOrThrow("id"))
-                    cardFolderId = it.getInt(it.getColumnIndexOrThrow("folder_id"))
-                    if (!q.isNullOrEmpty()) question = q
-                }
+            // 카드 0건 폴백: 슬롯이 가리키는 폴더가 삭제되었거나 카드가 비어 있으면
+            // 전역 폴더로 1회 재조회 — 슬롯 폴더가 무효해졌다고 알림 자체가 조용히
+            // 끊기지 않게 한다. targetFolderId == folderId(슬롯이 없거나 전역과 같은
+            // 폴더)면 재조회해도 결과가 같으므로 스킵.
+            if (cardId <= 0 && targetFolderId != folderId) {
+                Log.w(TAG, "슬롯 폴더($targetFolderId) 카드 없음, 전역 폴더($folderId)로 재조회")
+                val fallback = queryRandomCard(db, folderId)
+                cardId = fallback.first
+                cardFolderId = fallback.second
+                question = fallback.third
             }
 
             // 카드 조회 실패 시 알림 자체를 건너뜀.
@@ -597,8 +690,10 @@ class PushNotificationService : Service() {
         )
 
         val rangeText = "${String.format(java.util.Locale.US, "%02d:%02d", startH, startM)}~${String.format(java.util.Locale.US, "%02d:%02d", endH, endM)}"
+        // 상주 알림에 보여줄 간격은 "지금" 시각 기준 실효 간격 — 시간대 슬롯이 간격을
+        // 오버라이드하고 있다면 전역 intervalMin이 아니라 그 값을 보여줘야 한다.
         val contentText = AppLang.wrap(this, lang)
-            .getString(R.string.push_service_text, rangeText, intervalMin)
+            .getString(R.string.push_service_text, rangeText, effectiveIntervalMin(activeSlotNow(nowMinutes())))
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")

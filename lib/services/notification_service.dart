@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../database/database_helper.dart';
 import 'locale_service.dart';
+import 'push_schedule.dart';
 
 class NotificationNavEvent {
   final int folderId;
@@ -262,6 +263,21 @@ class NotificationService {
       return;
     }
 
+    // 시간대별 폴더·주기 스케줄. 저장된 원본이 지저분해도(공백/순서/잘못된 항목)
+    // decode→encode로 정규화한 뒤 네이티브에 넘긴다 — 네이티브 쪽 timingKey도
+    // 이 정규화된 CSV를 기준으로 만들어지므로 여기서 정규화가 어긋나면 편집할
+    // 때마다 불필요하게 타이머가 리셋된다.
+    final scheduleSlots =
+        PushSchedule.decode(settings[PushSchedule.settingCsvKey]);
+    final scheduleCsv = PushSchedule.encode(scheduleSlots);
+    final scheduleEnabledSetting =
+        (settings[PushSchedule.settingEnabledKey] ?? '').toLowerCase() ==
+            'true';
+    // 슬롯이 0개면 무조건 강제로 끈다 — "켜졌는데 슬롯 0개"인 모호한 상태를
+    // 네이티브에 전달하지 않는다(네이티브도 동일하게 scheduleEnabled&&slots.isEmpty
+    // 조합을 만들지 않도록 방어하지만, 여기서도 명시적으로 정리해 둔다).
+    final scheduleEnabled = scheduleEnabledSetting && scheduleSlots.isNotEmpty;
+
     // 활성화 + 알람 있음 → interval 알람 찾아서 서비스 (재)시작
     // NOTE: onStartCommand가 내부에서 handler.removeCallbacks 후 재스케줄하므로
     //       별도 stopService 없이 바로 startService하면 됨 (STOP 인텐트 레이스 방지)
@@ -325,6 +341,8 @@ class NotificationService {
           intervalMin: intervalMin,
           folderId: folderId,
           soundEnabled: soundEnabled,
+          scheduleEnabled: scheduleEnabled,
+          scheduleCsv: scheduleCsv,
         );
       }
     }
@@ -345,6 +363,8 @@ class NotificationService {
     required int intervalMin,
     int? folderId,
     bool soundEnabled = true,
+    bool scheduleEnabled = false,
+    String scheduleCsv = '',
   }) async {
     final startTotal = startHour * 60 + startMinute;
     final endTotal = endHour * 60 + endMinute;
@@ -364,6 +384,11 @@ class NotificationService {
         'folderId': folderId ?? -1,
         'soundEnabled': soundEnabled,
         'lang': LocaleService.currentLanguageCode(),
+        // 이 채널의 유일한 startService 호출자가 rescheduleAll(이 함수) 하나뿐이므로
+        // 여기선 항상 채워 넣는다 — MainActivity/PushNotificationService는 그래도
+        // hasExtra로 "없으면 보존"을 지켜, 향후 다른 호출 경로가 생겨도 안전하다.
+        'scheduleEnabled': scheduleEnabled,
+        'scheduleCsv': scheduleCsv,
       });
       debugPrint('[NOTIF] 서비스 시작: '
           '${startHour.toString().padLeft(2, "0")}:${startMinute.toString().padLeft(2, "0")}'
@@ -394,6 +419,44 @@ class NotificationService {
       await stopIntervalService();
     } catch (e) {
       debugPrint('[NOTIF] cancelAllNotifications 오류: $e');
+    }
+  }
+
+  /// 삭제된 폴더 ID 목록을 푸시 알림 시간대 스케줄(push_schedule) 슬롯에서 제거.
+  ///
+  /// home_screen의 폴더 삭제 사후 정리에서 `needsPushReschedule` 플래그와 무관하게
+  /// 항상 호출돼야 한다 — 그 플래그는 push_alarms.folder_id(전역 기본 폴더)만
+  /// 추적해서, 기본 폴더는 안 건드리고 시간대 슬롯에만 걸린 삭제(예: 슬롯 하나가
+  /// 가리키던 폴더만 지운 경우)를 놓친다.
+  static Future<void> removeFoldersFromPushSchedule(
+      List<int> folderIdsToRemove) async {
+    if (folderIdsToRemove.isEmpty) return;
+    try {
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      final slots = PushSchedule.decode(settings[PushSchedule.settingCsvKey]);
+      if (slots.isEmpty) return;
+
+      final removeSet = folderIdsToRemove.toSet();
+      final prunedSlots =
+          slots.where((s) => !removeSet.contains(s.folderId)).toList();
+      if (prunedSlots.length == slots.length) {
+        return; // 변경 없음 — 이 삭제와 무관
+      }
+
+      await DatabaseHelper.instance.upsertSetting(
+          PushSchedule.settingCsvKey, PushSchedule.encode(prunedSlots));
+
+      // 슬롯이 있었는데 이번 pruning으로 전부 사라진 경우에만 스케줄을 끈다 —
+      // 슬롯 0개인데 스케줄 ON인 상태는 혼란스러운 무동작(no-op)이기 때문. 그 외
+      // (슬롯이 하나라도 남는 경우)엔 사용자가 설정한 enabled 값을 그대로 둔다.
+      if (prunedSlots.isEmpty) {
+        await DatabaseHelper.instance
+            .upsertSetting(PushSchedule.settingEnabledKey, 'false');
+      }
+
+      await rescheduleAll();
+    } catch (e) {
+      debugPrint('[NOTIF] removeFoldersFromPushSchedule 실패: $e');
     }
   }
 }

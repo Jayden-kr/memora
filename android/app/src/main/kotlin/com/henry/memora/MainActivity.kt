@@ -230,6 +230,12 @@ class MainActivity : FlutterActivity() {
                                 putExtra("folderId", (args["folderId"] as? Number)?.toInt() ?: -1)
                                 putExtra("soundEnabled", args["soundEnabled"] as? Boolean ?: true)
                                 putExtra("lang", (args["lang"] as? String) ?: "ko")
+                                // 신규 키는 "인자가 있을 때만" 기록 — 없으면 서비스가 prefs의 기존
+                                // 값을 그대로 쓴다(LockScreenService.saveSettings와 동일 규율).
+                                // 무조건 기본값을 넣으면, 이 두 키를 안 싣는 startService 호출
+                                // 경로가 향후 생겼을 때 사용자의 시간대 슬롯이 조용히 지워진다.
+                                (args["scheduleEnabled"] as? Boolean)?.let { putExtra("scheduleEnabled", it) }
+                                (args["scheduleCsv"] as? String)?.let { putExtra("scheduleCsv", it) }
                             }
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)
