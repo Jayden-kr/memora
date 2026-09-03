@@ -234,188 +234,38 @@ class _PushNotificationSettingsScreenState
     }
   }
 
-  /// 시간대 추가/편집 다이얼로그. 필드 순서(시작→종료→폴더→간격)는 기존과 동일하게
-  /// 유지한다. v1.3.9 변경점: ①폴더 드롭다운 맨 위에 "전체 폴더"(-1)가 있고 항상
-  /// 유효한 선택지다(미선택 상태 없음) ②간격 필드는 비우면 30분으로 자동 채워진다
-  /// (에러 아님) ③검증 실패는 SnackBar가 아니라 다이얼로그 안에 직접 표시한다.
+  /// 시간대 추가/편집 다이얼로그. 실제 UI는 [_PushRuleDialog](아래)가 그린다 —
+  /// 이 화면은 그 위젯에 초기값과 폴더 목록만 넘겨준다.
+  ///
+  /// ⚠️ 예전엔 이 메서드 스코프에 클로저 변수로 `TextEditingController`를 만들고
+  /// `showDialog(...).whenComplete(() => controller.dispose())`로 정리했었다.
+  /// 그게 '_dependents.isEmpty' 크래시의 진짜 원인이었다 — routes.dart의
+  /// `TransitionRoute.didPop()`은 퇴장(reverse) 애니메이션을 *시작*만 시키고,
+  /// `showDialog`가 반환하는 popped Future는 그 애니메이션이 끝나기 전에 곧바로
+  /// complete된다. 그래서 `.whenComplete()`의 dispose()가 다이얼로그가 화면에서
+  /// 실제로 사라지기 수백 ms 전에, 아직 마운트된 채로 애니메이션 프레임을 그리고
+  /// 있는 트리에 대해 실행돼버렸다. 그 틈에(실기기 재현: 시스템 뒤로가기로 키보드를
+  /// 내리면 인셋 변경 애니메이션이 별도로 진행 중이라 트리 전체가 리빌드된다) Material
+  /// `TextField`가 `decoration`이 있으면 매 리빌드마다 새
+  /// `Listenable.merge([focusNode, controller])`를 만들어 addListener를 거는데
+  /// (material/text_field.dart:1753-1754), 그 컨트롤러가 이미 dispose된 상태라
+  /// `ChangeNotifier.debugAssertNotDisposed`가 터진다("A TextEditingController was
+  /// used after being disposed"). 이 예외가 리빌드 도중 발생해 프레임워크의
+  /// InheritedElement dependents 장부가 어긋나고, 잠시 뒤 다이얼로그가 실제로
+  /// unmount될 때 'framework.dart:6268 _dependents.isEmpty' 단언이 깨진다.
+  /// (직전 시도였던 `FocusScope.unfocus()`가 안 통한 이유: 문제는 포커스 잔류가
+  /// 아니라 controller dispose 타이밍이었으므로 focus를 먼저 풀어도 경합이 그대로
+  /// 남아 있었다.)
+  ///
+  /// 고침: controller를 진짜 `State`(=[_PushRuleDialogState])가 소유하게 만들어
+  /// dispose()가 Future 콜백이 아니라 Element가 실제로 unmount될 때(=퇴장
+  /// 애니메이션이 끝난 뒤)만 불리도록 한다 — 그러면 이 경합 자체가 성립하지 않는다.
   Future<PushRule?> _showPushRuleDialog({PushRule? initial}) {
-    final t = AppLocalizations.of(context);
-    TimeOfDay start = initial != null
-        ? _timeOfDayFromMinutes(initial.start)
-        : const TimeOfDay(hour: 9, minute: 0);
-    TimeOfDay end = initial != null
-        ? _timeOfDayFromMinutes(initial.end)
-        : const TimeOfDay(hour: 18, minute: 0);
-    // 삭제된 폴더를 가리키던 규칙을 편집하는 경우 드롭다운 목록에 그 값이 없으므로
-    // 전체 폴더로 되돌린다 — allFolders(-1)는 항상 유효한 선택지라 잠금화면 화면과
-    // 달리 "미선택" 상태가 필요 없다.
-    int folderId = initial?.folderId ?? PushSchedule.allFolders;
-    if (folderId != PushSchedule.allFolders &&
-        !_folders.any((f) => f.id == folderId)) {
-      folderId = PushSchedule.allFolders;
-    }
-    final intervalController = TextEditingController(
-      text: initial != null ? initial.intervalMin.toString() : '',
-    );
-    String? errorText;
-
     return showDialog<PushRule>(
       context: context,
-      builder: (dialogCtx) {
-        return StatefulBuilder(
-          builder: (dialogCtx, setDialogState) {
-            return AlertDialog(
-              title: Text(initial == null
-                  ? t.pushScheduleAddTitle
-                  : t.pushScheduleEditTitle),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ListTile(
-                      title: Text(t.pushScheduleStart),
-                      trailing: TextButton(
-                        onPressed: () async {
-                          final picked = await showTimePicker(
-                            context: dialogCtx,
-                            initialTime: start,
-                          );
-                          if (picked != null) {
-                            setDialogState(() {
-                              start = picked;
-                              errorText = null;
-                            });
-                          }
-                        },
-                        child: Text(start.format(dialogCtx)),
-                      ),
-                    ),
-                    ListTile(
-                      title: Text(t.pushScheduleEnd),
-                      trailing: TextButton(
-                        onPressed: () async {
-                          final picked = await showTimePicker(
-                            context: dialogCtx,
-                            initialTime: end,
-                          );
-                          if (picked != null) {
-                            setDialogState(() {
-                              end = picked;
-                              errorText = null;
-                            });
-                          }
-                        },
-                        child: Text(end.format(dialogCtx)),
-                      ),
-                    ),
-                    DropdownButtonFormField<int>(
-                      initialValue: folderId,
-                      decoration: InputDecoration(labelText: t.pushFolder),
-                      items: [
-                        DropdownMenuItem(
-                          value: PushSchedule.allFolders,
-                          child: Text(t.pushAllFolders),
-                        ),
-                        ..._folders
-                            .where((f) => f.id != null)
-                            .map((f) => DropdownMenuItem(
-                                  value: f.id,
-                                  child: Text(f.name),
-                                )),
-                      ],
-                      onChanged: (v) => setDialogState(() {
-                        folderId = v ?? PushSchedule.allFolders;
-                        errorText = null;
-                      }),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: intervalController,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      decoration: InputDecoration(
-                        labelText: t.pushScheduleInterval,
-                        suffixText: t.pushIntervalMinutes,
-                        border: const OutlineInputBorder(),
-                      ),
-                      onChanged: (_) => setDialogState(() => errorText = null),
-                    ),
-                    const SizedBox(height: 4),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        t.pushScheduleIntervalDefault,
-                        style: Theme.of(dialogCtx).textTheme.bodySmall,
-                      ),
-                    ),
-                    if (errorText != null) ...[
-                      const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          errorText!,
-                          style: TextStyle(
-                            color: Theme.of(dialogCtx).colorScheme.error,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    // 다이얼로그를 닫기 전에 포커스를 명시적으로 해제한다 — 인터벌
-                    // TextField에 포커스가 남은 채로(특히 시스템 BACK으로 키보드만
-                    // 내린 직후) pop하면, 아직 정리되지 않은 포커스 트리 의존성 때문에
-                    // 드물게 '_dependents.isEmpty' 프레임워크 크래시가 발생한다(실기기
-                    // 재현 확인). unfocus를 pop보다 먼저 완료시켜 그 경합을 없앤다.
-                    FocusScope.of(dialogCtx).unfocus();
-                    Navigator.pop(dialogCtx);
-                  },
-                  child: Text(t.commonCancel),
-                ),
-                TextButton(
-                  onPressed: () {
-                    final startMin = start.hour * 60 + start.minute;
-                    final endMin = end.hour * 60 + end.minute;
-                    if (startMin == endMin) {
-                      setDialogState(
-                          () => errorText = t.pushScheduleSameTimeError);
-                      return;
-                    }
-                    var intervalMin = PushSchedule.defaultIntervalMin;
-                    final intervalText = intervalController.text.trim();
-                    if (intervalText.isNotEmpty) {
-                      final parsed = int.tryParse(intervalText);
-                      if (parsed == null || parsed < 5 || parsed > 1440) {
-                        setDialogState(
-                            () => errorText = t.pushScheduleIntervalError);
-                        return;
-                      }
-                      intervalMin = parsed;
-                    }
-                    // 위 Cancel 버튼과 동일한 이유로 pop 전에 포커스를 해제한다.
-                    FocusScope.of(dialogCtx).unfocus();
-                    Navigator.pop(
-                      dialogCtx,
-                      PushRule(
-                        start: startMin,
-                        end: endMin,
-                        folderId: folderId,
-                        intervalMin: intervalMin,
-                      ),
-                    );
-                  },
-                  child: Text(t.commonSave),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    ).whenComplete(() => intervalController.dispose());
+      builder: (dialogCtx) =>
+          _PushRuleDialog(initial: initial, folders: _folders),
+    );
   }
 
   /// "알림 시간대" 섹션: 규칙 목록 + 추가 버튼 + 겹침/gap 안내.
@@ -754,6 +604,212 @@ class _PushNotificationSettingsScreenState
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 시간대 추가/편집 다이얼로그 본체. [_showPushRuleDialog]가 `showDialog`의
+/// `builder`로 이 위젯을 넘긴다. 필드 순서(시작→종료→폴더→간격)는 기존과 동일하게
+/// 유지한다. v1.3.9 동작: ①폴더 드롭다운 맨 위에 "전체 폴더"(-1)가 있고 항상 유효한
+/// 선택지다(미선택 상태 없음) ②간격 필드는 비우면 30분으로 자동 채워진다(에러 아님)
+/// ③검증 실패는 SnackBar가 아니라 다이얼로그 안에 직접 표시한다.
+///
+/// StatefulWidget으로 만든 이유(중요): [TextEditingController]는 반드시
+/// `State.dispose()`에서만 정리해야 한다 — Future 콜백(`.whenComplete()`나
+/// `finally`)에 묶으면 Navigator.pop()이 반환하는 popped Future가 퇴장 애니메이션
+/// 완료보다 먼저 끝나버려서, 아직 화면에 남아 리빌드 중인 TextField가 이미 dispose된
+/// controller를 참조하는 경합이 생긴다(자세한 경위는 [_PushNotificationSettingsScreenState._showPushRuleDialog]
+/// 문서 참고 — 여기서 고친 크래시의 근본원인).
+class _PushRuleDialog extends StatefulWidget {
+  const _PushRuleDialog({required this.initial, required this.folders});
+
+  final PushRule? initial;
+  final List<Folder> folders;
+
+  @override
+  State<_PushRuleDialog> createState() => _PushRuleDialogState();
+}
+
+class _PushRuleDialogState extends State<_PushRuleDialog> {
+  late TimeOfDay _start;
+  late TimeOfDay _end;
+  late int _folderId;
+  late final TextEditingController _intervalController;
+  String? _errorText;
+
+  static TimeOfDay _timeOfDayFromMinutes(int minutes) =>
+      TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60);
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    _start = initial != null
+        ? _timeOfDayFromMinutes(initial.start)
+        : const TimeOfDay(hour: 9, minute: 0);
+    _end = initial != null
+        ? _timeOfDayFromMinutes(initial.end)
+        : const TimeOfDay(hour: 18, minute: 0);
+    // 삭제된 폴더를 가리키던 규칙을 편집하는 경우 드롭다운 목록에 그 값이 없으므로
+    // 전체 폴더로 되돌린다 — allFolders(-1)는 항상 유효한 선택지라 잠금화면 화면과
+    // 달리 "미선택" 상태가 필요 없다.
+    _folderId = initial?.folderId ?? PushSchedule.allFolders;
+    if (_folderId != PushSchedule.allFolders &&
+        !widget.folders.any((f) => f.id == _folderId)) {
+      _folderId = PushSchedule.allFolders;
+    }
+    _intervalController = TextEditingController(
+      text: initial != null ? initial.intervalMin.toString() : '',
+    );
+  }
+
+  @override
+  void dispose() {
+    // 여기서만 dispose한다 — Element가 실제로 unmount될 때(=다이얼로그 퇴장
+    // 애니메이션이 끝난 뒤)만 프레임워크가 이 메서드를 부르므로, 아직 마운트돼 리빌드
+    // 중인 TextField가 dispose된 controller를 참조할 여지가 구조적으로 없다.
+    _intervalController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(widget.initial == null
+          ? t.pushScheduleAddTitle
+          : t.pushScheduleEditTitle),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(t.pushScheduleStart),
+              trailing: TextButton(
+                onPressed: () async {
+                  final picked = await showTimePicker(
+                    context: context,
+                    initialTime: _start,
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      _start = picked;
+                      _errorText = null;
+                    });
+                  }
+                },
+                child: Text(_start.format(context)),
+              ),
+            ),
+            ListTile(
+              title: Text(t.pushScheduleEnd),
+              trailing: TextButton(
+                onPressed: () async {
+                  final picked = await showTimePicker(
+                    context: context,
+                    initialTime: _end,
+                  );
+                  if (picked != null) {
+                    setState(() {
+                      _end = picked;
+                      _errorText = null;
+                    });
+                  }
+                },
+                child: Text(_end.format(context)),
+              ),
+            ),
+            DropdownButtonFormField<int>(
+              initialValue: _folderId,
+              decoration: InputDecoration(labelText: t.pushFolder),
+              items: [
+                DropdownMenuItem(
+                  value: PushSchedule.allFolders,
+                  child: Text(t.pushAllFolders),
+                ),
+                ...widget.folders
+                    .where((f) => f.id != null)
+                    .map((f) => DropdownMenuItem(
+                          value: f.id,
+                          child: Text(f.name),
+                        )),
+              ],
+              onChanged: (v) => setState(() {
+                _folderId = v ?? PushSchedule.allFolders;
+                _errorText = null;
+              }),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _intervalController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                labelText: t.pushScheduleInterval,
+                suffixText: t.pushIntervalMinutes,
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() => _errorText = null),
+            ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                t.pushScheduleIntervalDefault,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            if (_errorText != null) ...[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _errorText!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(t.commonCancel),
+        ),
+        TextButton(
+          onPressed: () {
+            final startMin = _start.hour * 60 + _start.minute;
+            final endMin = _end.hour * 60 + _end.minute;
+            if (startMin == endMin) {
+              setState(() => _errorText = t.pushScheduleSameTimeError);
+              return;
+            }
+            var intervalMin = PushSchedule.defaultIntervalMin;
+            final intervalText = _intervalController.text.trim();
+            if (intervalText.isNotEmpty) {
+              final parsed = int.tryParse(intervalText);
+              if (parsed == null || parsed < 5 || parsed > 1440) {
+                setState(() => _errorText = t.pushScheduleIntervalError);
+                return;
+              }
+              intervalMin = parsed;
+            }
+            Navigator.pop(
+              context,
+              PushRule(
+                start: startMin,
+                end: endMin,
+                folderId: _folderId,
+                intervalMin: intervalMin,
+              ),
+            );
+          },
+          child: Text(t.commonSave),
+        ),
+      ],
     );
   }
 }
