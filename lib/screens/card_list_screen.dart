@@ -647,31 +647,23 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   /// 이름 입력 → 폴더 생성 → 그 Folder 반환 (홈 화면 생성과 동일 정책).
   /// 취소/빈이름/중복/실패 시 null.
+  ///
+  /// ⚠️ 예전엔 여기 스코프에 클로저 변수로 `TextEditingController`를 만들고
+  /// `try { showDialog(...) } finally { controller.dispose(); }`로 정리했었다 —
+  /// push_notification_settings.dart의 `_PushRuleDialog` 문서에 적힌 것과 동일한
+  /// '_dependents.isEmpty' 크래시 위험 패턴. 지금은 controller를
+  /// [_FolderNameDialog]의 State가 소유해 dispose()가 Element unmount 시점에만
+  /// 불리도록 고쳤다.
   Future<Folder?> _promptCreateFolderForMove() async {
     final t = AppLocalizations.of(context);
-    final controller = TextEditingController();
     String name = '';
     try {
       final input = await showDialog<String>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: Text(t.homeNewFolderTitle),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: InputDecoration(hintText: t.homeFolderNameHint),
-            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(t.commonCancel),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: Text(t.commonCreate),
-            ),
-          ],
+        builder: (_) => _FolderNameDialog(
+          title: t.homeNewFolderTitle,
+          hint: t.homeFolderNameHint,
+          confirmLabel: t.commonCreate,
         ),
       );
       if (input == null || input.trim().isEmpty || !mounted) return null;
@@ -697,8 +689,6 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         SnackBar(content: Text(t.homeFolderCreateFail(name))),
       );
       return null;
-    } finally {
-      controller.dispose();
     }
   }
 
@@ -1513,6 +1503,67 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 폴더 이름 입력 다이얼로그. [_CardListScreenState._promptCreateFolderForMove]가
+/// 사용한다.
+///
+/// StatefulWidget으로 만든 이유(중요): [TextEditingController]는 반드시
+/// `State.dispose()`에서만 정리해야 한다 — Future 콜백(`.whenComplete()`나
+/// `finally`)에 묶으면 Navigator.pop()이 반환하는 popped Future가 퇴장 애니메이션
+/// 완료보다 먼저 끝나버려서, 아직 화면에 남아 리빌드 중인 TextField가 이미 dispose된
+/// controller를 참조하는 경합이 생긴다(자세한 경위는
+/// push_notification_settings.dart의 `_PushRuleDialog` 문서 참고).
+class _FolderNameDialog extends StatefulWidget {
+  const _FolderNameDialog({
+    required this.title,
+    required this.hint,
+    required this.confirmLabel,
+  });
+
+  final String title;
+  final String hint;
+  final String confirmLabel;
+
+  @override
+  State<_FolderNameDialog> createState() => _FolderNameDialogState();
+}
+
+class _FolderNameDialogState extends State<_FolderNameDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    // 여기서만 dispose한다 — Element가 실제로 unmount될 때(=다이얼로그 퇴장 애니메이션이
+    // 끝난 뒤)만 프레임워크가 이 메서드를 부르므로, 아직 마운트돼 리빌드 중인 TextField가
+    // dispose된 controller를 참조할 여지가 구조적으로 없다.
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(hintText: widget.hint),
+        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(t.commonCancel),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: Text(widget.confirmLabel),
+        ),
+      ],
     );
   }
 }
