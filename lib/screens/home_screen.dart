@@ -594,6 +594,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     try {
       // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
       await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
+      // needsPushReschedule 플래그와 무관하게 항상 호출 — 그 플래그는
+      // push_alarms.folder_id(전역 기본 폴더)만 추적해서, 푸시 시간대 슬롯에만
+      // 걸린 삭제(기본 폴더는 안 건드리고 슬롯 하나가 가리키던 폴더만 지운 경우)를
+      // 놓친다.
+      await NotificationService.removeFoldersFromPushSchedule(regularIds);
       if (needsPushReschedule) {
         await NotificationService.rescheduleAll();
       }
