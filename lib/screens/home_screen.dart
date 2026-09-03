@@ -244,30 +244,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
+  /// ⚠️ 예전엔 여기 스코프에 클로저 변수로 `TextEditingController`를 만들고
+  /// `try { showDialog(...) } finally { controller.dispose(); }`로 정리했었다 —
+  /// push_notification_settings.dart의 `_PushRuleDialog` 문서에 적힌 것과 동일한
+  /// '_dependents.isEmpty' 크래시 위험 패턴(Navigator.pop()의 popped Future가 퇴장
+  /// 애니메이션 완료보다 먼저 끝나, 아직 리빌드 중인 TextField가 dispose된 controller를
+  /// 참조). 지금은 controller를 [_FolderNameDialog]의 State가 소유해 dispose()가
+  /// Element unmount 시점에만 불리도록 고쳤다.
   Future<void> _createFolder() async {
     final t = AppLocalizations.of(context);
-    final controller = TextEditingController();
-    try {
     final name = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.homeNewFolderTitle),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(hintText: t.homeFolderNameHint),
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: Text(t.commonCreate),
-          ),
-        ],
+      builder: (_) => _FolderNameDialog(
+        title: t.homeNewFolderTitle,
+        hint: t.homeFolderNameHint,
+        confirmLabel: t.commonCreate,
       ),
     );
     if (name == null || name.isEmpty) return;
@@ -293,9 +284,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return;
     }
     await _loadFolders();
-    } finally {
-      controller.dispose();
-    }
   }
 
   Future<void> _navigateToBundleFolder({Folder? existing}) async {
@@ -310,30 +298,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
 
 
+  /// 같은 크래시 클래스에 대한 고침 — [_createFolder] 위 주석 참고.
   Future<void> _renameFolder(Folder folder) async {
     final t = AppLocalizations.of(context);
-    final controller = TextEditingController(text: folder.name);
-    try {
     final newName = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.homeRenameFolderTitle),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(hintText: t.homeNewNameHint),
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: Text(t.commonChange),
-          ),
-        ],
+      builder: (_) => _FolderNameDialog(
+        title: t.homeRenameFolderTitle,
+        hint: t.homeNewNameHint,
+        confirmLabel: t.commonChange,
+        initialName: folder.name,
       ),
     );
     if (newName == null || newName.isEmpty || newName == folder.name) return;
@@ -350,9 +324,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     await DatabaseHelper.instance.updateFolder(folder.copyWith(name: newName));
     if (!mounted) return;
     await _loadFolders();
-    } finally {
-      controller.dispose();
-    }
   }
 
   Future<void> _navigateToImport(String filePath) async {
@@ -974,6 +945,75 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 폴더 이름 입력 다이얼로그(생성/이름변경 공용) — [initialName]이 있으면 이름변경,
+/// 없으면 생성 흐름으로 [_HomeScreenState._createFolder]/[_renameFolder]가 사용한다.
+///
+/// StatefulWidget으로 만든 이유(중요): [TextEditingController]는 반드시
+/// `State.dispose()`에서만 정리해야 한다 — Future 콜백(`.whenComplete()`나
+/// `finally`)에 묶으면 Navigator.pop()이 반환하는 popped Future가 퇴장 애니메이션
+/// 완료보다 먼저 끝나버려서, 아직 화면에 남아 리빌드 중인 TextField가 이미 dispose된
+/// controller를 참조하는 경합이 생긴다(자세한 경위는
+/// push_notification_settings.dart의 `_PushRuleDialog` 문서 참고).
+class _FolderNameDialog extends StatefulWidget {
+  const _FolderNameDialog({
+    required this.title,
+    required this.hint,
+    required this.confirmLabel,
+    this.initialName,
+  });
+
+  final String title;
+  final String hint;
+  final String confirmLabel;
+  final String? initialName;
+
+  @override
+  State<_FolderNameDialog> createState() => _FolderNameDialogState();
+}
+
+class _FolderNameDialogState extends State<_FolderNameDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialName ?? '');
+  }
+
+  @override
+  void dispose() {
+    // 여기서만 dispose한다 — Element가 실제로 unmount될 때(=다이얼로그 퇴장 애니메이션이
+    // 끝난 뒤)만 프레임워크가 이 메서드를 부르므로, 아직 마운트돼 리빌드 중인 TextField가
+    // dispose된 controller를 참조할 여지가 구조적으로 없다.
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(hintText: widget.hint),
+        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(t.commonCancel),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: Text(widget.confirmLabel),
+        ),
+      ],
     );
   }
 }
