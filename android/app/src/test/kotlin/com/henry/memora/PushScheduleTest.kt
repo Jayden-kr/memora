@@ -16,103 +16,116 @@ class PushScheduleTest {
 
     @Test
     fun `parse drops start equal end`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("540:540:3:10"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("540:540:3:10"))
     }
 
     @Test
     fun `parse drops start below range`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("-1:600:3:10"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("-1:600:3:10"))
     }
 
     @Test
     fun `parse drops end at or above 1440`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("600:1440:3:10"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("600:1440:3:10"))
     }
 
     @Test
-    fun `parse drops negative folderId`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("540:600:-1:10"))
+    fun `parse drops folderId below negative one`() {
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("540:600:-2:10"))
+    }
+
+    @Test
+    fun `parse accepts folderId of negative one as all-folders sentinel`() {
+        val result = PushSchedule.parse("540:600:-1:10")
+        assertEquals(listOf(PushSchedule.Rule(540, 600, PushSchedule.ALL_FOLDERS, 10)), result)
+        assertEquals(-1, PushSchedule.ALL_FOLDERS)
     }
 
     @Test
     fun `parse drops non-numeric start end or folderId`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("abc:600:3:10"))
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("540:xyz:3:10"))
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("540:600:xyz:10"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("abc:600:3:10"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("540:xyz:3:10"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("540:600:xyz:10"))
     }
 
     @Test
     fun `parse drops tokens with two parts`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("540:600"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("540:600"))
     }
 
     @Test
     fun `parse drops tokens with five parts`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("540:600:3:10:99"))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("540:600:3:10:99"))
     }
 
     @Test
     fun `parse ignores trailing comma`() {
         assertEquals(
-            listOf(PushSchedule.Slot(540, 600, 3, 10)),
+            listOf(PushSchedule.Rule(540, 600, 3, 10)),
             PushSchedule.parse("540:600:3:10,")
         )
     }
 
     @Test
     fun `parse of blank string is empty list`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse(""))
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse("   "))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse(""))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse("   "))
     }
 
     @Test
     fun `parse of null is empty list`() {
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse(null))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse(null))
     }
 
     @Test
     fun `parse accepts whitespace around numbers`() {
         assertEquals(
-            listOf(PushSchedule.Slot(540, 600, 3, 10)),
+            listOf(PushSchedule.Rule(540, 600, 3, 10)),
             PushSchedule.parse(" 540 : 600 : 3 : 10 ")
         )
     }
 
     // ─────────────────────────────────────────────────────────
-    // 3필드 관대 수용 + 잘못된 interval 강등(드롭 아님)
+    // 3필드 관대 수용 + 잘못된 interval 강등(드롭 아님, DEFAULT_INTERVAL_MIN=30)
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `three-field token omitting interval is accepted with INHERIT`() {
+    fun `three-field token omitting interval is accepted with DEFAULT_INTERVAL_MIN`() {
         assertEquals(
-            listOf(PushSchedule.Slot(540, 600, 3, PushSchedule.INHERIT)),
+            listOf(PushSchedule.Rule(540, 600, 3, PushSchedule.DEFAULT_INTERVAL_MIN)),
             PushSchedule.parse("540:600:3")
         )
-        assertEquals(0, PushSchedule.INHERIT)
+        assertEquals(30, PushSchedule.DEFAULT_INTERVAL_MIN)
     }
 
     @Test
-    fun `interval below 5 degrades to INHERIT instead of dropping the whole slot`() {
+    fun `interval of zero degrades to DEFAULT_INTERVAL_MIN instead of dropping the whole rule`() {
+        val result = PushSchedule.parse("540:600:3:0")
+        assertEquals(listOf(PushSchedule.Rule(540, 600, 3, PushSchedule.DEFAULT_INTERVAL_MIN)), result)
+    }
+
+    @Test
+    fun `interval below 5 degrades to DEFAULT_INTERVAL_MIN instead of dropping the whole rule`() {
         val result = PushSchedule.parse("540:600:3:4")
-        assertEquals(listOf(PushSchedule.Slot(540, 600, 3, PushSchedule.INHERIT)), result)
+        assertEquals(listOf(PushSchedule.Rule(540, 600, 3, PushSchedule.DEFAULT_INTERVAL_MIN)), result)
     }
 
     @Test
-    fun `interval above 1440 degrades to INHERIT instead of dropping the whole slot`() {
+    fun `interval above 1440 degrades to DEFAULT_INTERVAL_MIN instead of dropping the whole rule`() {
         val result = PushSchedule.parse("540:600:3:1441")
-        assertEquals(listOf(PushSchedule.Slot(540, 600, 3, PushSchedule.INHERIT)), result)
+        assertEquals(listOf(PushSchedule.Rule(540, 600, 3, PushSchedule.DEFAULT_INTERVAL_MIN)), result)
     }
 
     @Test
-    fun `negative interval degrades to INHERIT instead of dropping the whole slot`() {
+    fun `negative interval degrades to DEFAULT_INTERVAL_MIN instead of dropping the whole rule`() {
         val result = PushSchedule.parse("540:600:3:-5")
-        assertEquals(listOf(PushSchedule.Slot(540, 600, 3, PushSchedule.INHERIT)), result)
+        assertEquals(listOf(PushSchedule.Rule(540, 600, 3, PushSchedule.DEFAULT_INTERVAL_MIN)), result)
     }
 
     @Test
-    fun `non-numeric interval degrades to INHERIT instead of dropping the whole slot`() {
+    fun `non-numeric interval degrades to DEFAULT_INTERVAL_MIN instead of dropping the whole rule`() {
         val result = PushSchedule.parse("540:600:3:abc")
-        assertEquals(listOf(PushSchedule.Slot(540, 600, 3, PushSchedule.INHERIT)), result)
+        assertEquals(listOf(PushSchedule.Rule(540, 600, 3, PushSchedule.DEFAULT_INTERVAL_MIN)), result)
     }
 
     @Test
@@ -122,20 +135,35 @@ class PushScheduleTest {
     }
 
     // ─────────────────────────────────────────────────────────
-    // MAX_SLOTS = 5 초과 컷
+    // MAX_RULES = 12 초과 컷
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `parse caps at MAX_SLOTS keeping earliest starts`() {
-        assertEquals(5, PushSchedule.MAX_SLOTS)
-        // 10개(0,100,...,900 시작)를 만들어 상한(5) 초과분이 잘리는지, 남는 게
-        // "가장 이른 시작 5개"인지 확인한다.
-        val tokens = (0 until 10).map { i -> "${i * 100}:${i * 100 + 10}:$i:10" }
+    fun `parse caps at MAX_RULES keeping earliest starts`() {
+        assertEquals(12, PushSchedule.MAX_RULES)
+        // 20개(0,100,...,1900 시작... 실제로는 1439 이내로 clamp)를 만들어 상한(12)
+        // 초과분이 잘리는지, 남는 게 "가장 이른 시작 12개"인지 확인한다.
+        val tokens = (0 until 20).map { i -> "${i * 60}:${i * 60 + 10}:$i:10" }
         val csv = tokens.joinToString(",")
         val result = PushSchedule.parse(csv)
-        assertEquals(PushSchedule.MAX_SLOTS, result.size)
-        assertEquals((0 until 5).map { it * 100 }, result.map { it.start })
-        assertEquals((0 until 5).toList(), result.map { it.folderId })
+        assertEquals(PushSchedule.MAX_RULES, result.size)
+        assertEquals((0 until 12).map { it * 60 }, result.map { it.start })
+        assertEquals((0 until 12).toList(), result.map { it.folderId })
+    }
+
+    @Test
+    fun `12 rules covering the whole day round-trip without loss (worst-case CSV byte length sanity)`() {
+        // 최악 케이스: 큰 자릿수(folderId 99999, interval 1440)를 12개 채워 넣어도
+        // 손실 없이 라운드트립되는지 — SharedPreferences/TEXT 컬럼 한계와 무관함을
+        // 확인하는 목적(바이트 길이 자체는 이 테스트가 검증하지 않지만, 파싱 손실
+        // 여부는 검증한다).
+        val tokens = (0 until 12).map { i -> "${i * 100}:${i * 100 + 90}:99999:1440" }
+        val csv = tokens.joinToString(",")
+        val once = PushSchedule.parse(csv)
+        assertEquals(12, once.size)
+        val encoded = PushSchedule.encode(once)
+        val twice = PushSchedule.parse(encoded)
+        assertEquals(once, twice)
     }
 
     // ─────────────────────────────────────────────────────────
@@ -152,7 +180,7 @@ class PushScheduleTest {
             "999999:1:2:10",
             "1:999999:2:10",
             "5:5:1:10",
-            "5:6:-1:10",
+            "5:6:-2:10",
             ",,,",
             "1:2:a:10",
             "a:b:c:d",
@@ -186,50 +214,50 @@ class PushScheduleTest {
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `encode then parse round-trips a representative slot list`() {
+    fun `encode then parse round-trips a representative rule list`() {
         val original = listOf(
-            PushSchedule.Slot(0, 60, 1, PushSchedule.INHERIT),
-            PushSchedule.Slot(540, 1080, 3, 15),
-            PushSchedule.Slot(1320, 120, 9, 60)
+            PushSchedule.Rule(0, 60, 1, 30),
+            PushSchedule.Rule(540, 1080, 3, 15),
+            PushSchedule.Rule(1320, 120, PushSchedule.ALL_FOLDERS, 60)
         )
         val csv = PushSchedule.encode(original)
-        assertEquals("0:60:1:0,540:1080:3:15,1320:120:9:60", csv)
+        assertEquals("0:60:1:30,540:1080:3:15,1320:120:-1:60", csv)
         val roundTripped = PushSchedule.parse(csv)
         assertEquals(original, roundTripped)
     }
 
     @Test
-    fun `encode always writes four fields even for INHERIT`() {
-        assertEquals("540:600:3:0", PushSchedule.encode(listOf(PushSchedule.Slot(540, 600, 3, 0))))
+    fun `encode always writes four fields`() {
+        assertEquals("540:600:3:30", PushSchedule.encode(listOf(PushSchedule.Rule(540, 600, 3, 30))))
     }
 
     @Test
     fun `encode of empty list is empty string and parses back to empty list`() {
         assertEquals("", PushSchedule.encode(emptyList()))
-        assertEquals(emptyList<PushSchedule.Slot>(), PushSchedule.parse(PushSchedule.encode(emptyList())))
+        assertEquals(emptyList<PushSchedule.Rule>(), PushSchedule.parse(PushSchedule.encode(emptyList())))
     }
 
     @Test
     fun `encode parse round trip is idempotent under repeated application`() {
-        val randomSlots = (0 until 5).map {
-            PushSchedule.Slot(it * 200, it * 200 + 100, it, if (it % 2 == 0) PushSchedule.INHERIT else 20)
+        val randomRules = (0 until 5).map {
+            PushSchedule.Rule(it * 200, it * 200 + 100, it, if (it % 2 == 0) 20 else 45)
         }
-        val once = PushSchedule.parse(PushSchedule.encode(randomSlots))
+        val once = PushSchedule.parse(PushSchedule.encode(randomRules))
         val twice = PushSchedule.parse(PushSchedule.encode(once))
         assertEquals(once, twice)
     }
 
     // ─────────────────────────────────────────────────────────
-    // activeSlot — 1440분 전수 스윕
+    // activeRule — 1440분 전수 스윕
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `activeSlot exhaustive sweep over adjacent chain covering whole day`() {
-        val slots = listOf(
-            PushSchedule.Slot(0, 360, 1, 10),
-            PushSchedule.Slot(360, 720, 2, 20),
-            PushSchedule.Slot(720, 1080, 3, 30),
-            PushSchedule.Slot(1080, 0, 4, 40) // 18:00~24:00, wrap 표현
+    fun `activeRule exhaustive sweep over adjacent chain covering whole day`() {
+        val rules = listOf(
+            PushSchedule.Rule(0, 360, 1, 10),
+            PushSchedule.Rule(360, 720, 2, 20),
+            PushSchedule.Rule(720, 1080, 3, 30),
+            PushSchedule.Rule(1080, 0, 4, 40) // 18:00~24:00, wrap 표현
         )
         for (minute in 0..1439) {
             val expected = when (minute) {
@@ -238,107 +266,65 @@ class PushScheduleTest {
                 in 720..1079 -> 3
                 else -> 4
             }
-            val slot = PushSchedule.activeSlot(minute, slots)
-            assertNotNull("minute=$minute", slot)
-            assertEquals("minute=$minute", expected, slot!!.folderId)
+            val rule = PushSchedule.activeRule(minute, rules)
+            assertNotNull("minute=$minute", rule)
+            assertEquals("minute=$minute", expected, rule!!.folderId)
         }
     }
 
     @Test
-    fun `activeSlot adjacent boundary minute belongs only to the later slot`() {
-        val slots = listOf(
-            PushSchedule.Slot(540, 1080, 3, 10),
-            PushSchedule.Slot(1080, 1380, 7, 20)
+    fun `activeRule adjacent boundary minute belongs only to the later rule`() {
+        val rules = listOf(
+            PushSchedule.Rule(540, 1080, 3, 10),
+            PushSchedule.Rule(1080, 1380, 7, 20)
         )
-        assertEquals(7, PushSchedule.activeSlot(1080, slots)!!.folderId)
-        assertEquals(3, PushSchedule.activeSlot(1079, slots)!!.folderId)
+        assertEquals(7, PushSchedule.activeRule(1080, rules)!!.folderId)
+        assertEquals(3, PushSchedule.activeRule(1079, rules)!!.folderId)
     }
 
     @Test
-    fun `activeSlot midnight wrap slot matches across the boundary`() {
-        val slots = listOf(PushSchedule.Slot(1320, 120, 9, 10))
-        assertEquals(9, PushSchedule.activeSlot(1320, slots)!!.folderId)
-        assertEquals(9, PushSchedule.activeSlot(1439, slots)!!.folderId)
-        assertEquals(9, PushSchedule.activeSlot(0, slots)!!.folderId)
-        assertEquals(9, PushSchedule.activeSlot(119, slots)!!.folderId)
-        assertNull(PushSchedule.activeSlot(120, slots))
-        assertNull(PushSchedule.activeSlot(700, slots))
+    fun `activeRule midnight wrap rule matches across the boundary`() {
+        val rules = listOf(PushSchedule.Rule(1320, 120, 9, 10))
+        assertEquals(9, PushSchedule.activeRule(1320, rules)!!.folderId)
+        assertEquals(9, PushSchedule.activeRule(1439, rules)!!.folderId)
+        assertEquals(9, PushSchedule.activeRule(0, rules)!!.folderId)
+        assertEquals(9, PushSchedule.activeRule(119, rules)!!.folderId)
+        assertNull(PushSchedule.activeRule(120, rules))
+        assertNull(PushSchedule.activeRule(700, rules))
     }
 
     @Test
-    fun `activeSlot overlapping slots resolve to the earlier start (documented tie-break)`() {
-        val slots = PushSchedule.parse("540:1080:3:10,600:700:4:20")
-        assertEquals(3, PushSchedule.activeSlot(650, slots)!!.folderId)
+    fun `activeRule overlapping rules resolve to the earlier start (documented tie-break)`() {
+        val rules = PushSchedule.parse("540:1080:3:10,600:700:4:20")
+        assertEquals(3, PushSchedule.activeRule(650, rules)!!.folderId)
     }
 
     // ─────────────────────────────────────────────────────────
-    // 대조 프로퍼티: activeSlot 매칭이 FolderSchedule.slotContains와 100% 일치
+    // 대조 프로퍼티: activeRule 매칭이 FolderSchedule.slotContains와 100% 일치
     // 위임이 끊기면(=누군가 slotContains를 복제/변형하면) 즉시 감지된다.
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `activeSlot matching is a perfect cross-check against FolderSchedule slotContains`() {
+    fun `activeRule matching is a perfect cross-check against FolderSchedule slotContains`() {
         val rand = Random(1234)
         repeat(20) {
-            val slots = (0 until 5).map {
-                PushSchedule.Slot(
+            val rules = (0 until 5).map {
+                PushSchedule.Rule(
                     rand.nextInt(1440),
                     rand.nextInt(1440),
                     it,
-                    PushSchedule.INHERIT
+                    30
                 )
             }.filter { it.start != it.end } // parse가 이미 걸러내는 값과 동일하게 방어
             for (minute in 0..1439) {
-                val expectedIndex = slots.indexOfFirst {
+                val expectedIndex = rules.indexOfFirst {
                     FolderSchedule.slotContains(it.start, it.end, minute)
                 }
-                val expected = if (expectedIndex >= 0) slots[expectedIndex] else null
-                val actual = PushSchedule.activeSlot(minute, slots)
-                assertEquals("minute=$minute slots=$slots", expected, actual)
+                val expected = if (expectedIndex >= 0) rules[expectedIndex] else null
+                val actual = PushSchedule.activeRule(minute, rules)
+                assertEquals("minute=$minute rules=$rules", expected, actual)
             }
         }
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // resolveFolderId / resolveIntervalMin
-    // ─────────────────────────────────────────────────────────
-
-    @Test
-    fun `resolveFolderId returns matched slot folderId when matched`() {
-        val slots = listOf(PushSchedule.Slot(540, 600, 7, 10))
-        assertEquals(7, PushSchedule.resolveFolderId(550, slots, 99))
-    }
-
-    @Test
-    fun `resolveFolderId returns base folderId unchanged when no match`() {
-        val slots = listOf(PushSchedule.Slot(540, 600, 7, 10))
-        assertEquals(99, PushSchedule.resolveFolderId(100, slots, 99))
-        assertNull(PushSchedule.resolveFolderId(100, slots, null))
-    }
-
-    @Test
-    fun `resolveIntervalMin returns matched slot interval when matched and not INHERIT`() {
-        val slots = listOf(PushSchedule.Slot(540, 600, 7, 15))
-        assertEquals(15, PushSchedule.resolveIntervalMin(550, slots, 30))
-    }
-
-    @Test
-    fun `resolveIntervalMin falls back to base when matched slot is INHERIT`() {
-        val slots = listOf(PushSchedule.Slot(540, 600, 7, PushSchedule.INHERIT))
-        assertEquals(30, PushSchedule.resolveIntervalMin(550, slots, 30))
-    }
-
-    @Test
-    fun `resolveIntervalMin returns base unchanged when no match`() {
-        val slots = listOf(PushSchedule.Slot(540, 600, 7, 15))
-        assertEquals(30, PushSchedule.resolveIntervalMin(100, slots, 30))
-    }
-
-    @Test
-    fun `resolveFolderId and resolveIntervalMin agree on overlap tie-break`() {
-        val slots = PushSchedule.parse("540:1080:3:15,600:700:4:20")
-        assertEquals(3, PushSchedule.resolveFolderId(650, slots, -1))
-        assertEquals(15, PushSchedule.resolveIntervalMin(650, slots, 30))
     }
 
     // ─────────────────────────────────────────────────────────
@@ -346,10 +332,83 @@ class PushScheduleTest {
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `midnight wrap slot matches both boundary minutes 1439 and 0`() {
-        val slots = listOf(PushSchedule.Slot(1439, 1, 5, 10))
-        assertEquals(5, PushSchedule.activeSlot(1439, slots)!!.folderId)
-        assertEquals(5, PushSchedule.activeSlot(0, slots)!!.folderId)
-        assertNull(PushSchedule.activeSlot(1, slots))
+    fun `midnight wrap rule matches both boundary minutes 1439 and 0`() {
+        val rules = listOf(PushSchedule.Rule(1439, 1, 5, 10))
+        assertEquals(5, PushSchedule.activeRule(1439, rules)!!.folderId)
+        assertEquals(5, PushSchedule.activeRule(0, rules)!!.folderId)
+        assertNull(PushSchedule.activeRule(1, rules))
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // minutesUntilNextStart
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `minutesUntilNextStart is 1440 when there are no rules`() {
+        assertEquals(1440, PushSchedule.minutesUntilNextStart(0, emptyList()))
+        assertEquals(1440, PushSchedule.minutesUntilNextStart(900, emptyList()))
+    }
+
+    @Test
+    fun `minutesUntilNextStart is 1 when a rule covers the whole day (no gap ever)`() {
+        // 여러 규칙이 이어 붙어 하루 전체를 커버하면, 다음 분도 항상 매치되므로 gap이 없다.
+        val rules = listOf(
+            PushSchedule.Rule(0, 720, 1, 10),
+            PushSchedule.Rule(720, 0, 2, 10)
+        )
+        for (now in listOf(0, 359, 719, 1000, 1439)) {
+            assertEquals("now=$now", 1, PushSchedule.minutesUntilNextStart(now, rules))
+        }
+    }
+
+    @Test
+    fun `minutesUntilNextStart finds the correct gap with multiple rules`() {
+        // 09:00-10:00(540-600), 14:00-15:00(840-900). now=10:00 정각(600, gap 시작) →
+        // 다음 활성 시작까지 240분(14:00).
+        val rules = listOf(
+            PushSchedule.Rule(540, 600, 1, 10),
+            PushSchedule.Rule(840, 900, 2, 10)
+        )
+        assertEquals(240, PushSchedule.minutesUntilNextStart(600, rules))
+        // 두 규칙 사이의 gap 한복판(10:05)에서도 다음 규칙(14:00)까지 정확히 계산돼야 한다.
+        assertEquals(235, PushSchedule.minutesUntilNextStart(605, rules))
+    }
+
+    @Test
+    fun `minutesUntilNextStart handles midnight-crossing rule correctly`() {
+        // 22:00~06:00(1320~360) 하나만 있는 경우, 06:00~22:00 구간의 모든 now에서
+        // 정확한 거리(22:00까지)를 반환해야 한다.
+        val rules = listOf(PushSchedule.Rule(1320, 360, 1, 10))
+        assertEquals(1320 - 360, PushSchedule.minutesUntilNextStart(360, rules)) // 06:00 → 22:00
+        assertEquals(1, PushSchedule.minutesUntilNextStart(1319, rules)) // 21:59 → 22:00
+        // now가 이미 활성 구간 안(22:01)이면 함수는 "현재 상태"를 신경쓰지 않고 그냥
+        // now+1부터 스캔하므로, 다음 분도 여전히 커버되는 한 1을 반환한다(호출부는 이미
+        // activeRule(now)!=null인 분기에서는 이 함수를 쓰지 않는다 — TICK의 else 분기,
+        // 즉 activeRule(now)==null일 때만 호출된다).
+        assertEquals(1, PushSchedule.minutesUntilNextStart(1320, rules))
+    }
+
+    @Test
+    fun `minutesUntilNextStart exhaustive sweep matches activeRule null distance`() {
+        val rand = Random(77)
+        repeat(10) {
+            val rules = (0 until 4).map {
+                PushSchedule.Rule(rand.nextInt(1440), rand.nextInt(1440), it, 30)
+            }.filter { it.start != it.end }
+            for (now in 0..1439) {
+                val distance = PushSchedule.minutesUntilNextStart(now, rules)
+                if (PushSchedule.activeRule(now, rules) == null) {
+                    // distance분 뒤가 실제로 첫 매치 지점이어야 한다(그 사이는 전부 매치 없음).
+                    for (d in 1 until distance) {
+                        val t = (now + d) % 1440
+                        assertNull("rules=$rules now=$now d=$d", PushSchedule.activeRule(t, rules))
+                    }
+                    if (distance < 1440) {
+                        val t = (now + distance) % 1440
+                        assertNotNull("rules=$rules now=$now distance=$distance", PushSchedule.activeRule(t, rules))
+                    }
+                }
+            }
+        }
     }
 }
