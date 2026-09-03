@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../database/database_helper.dart';
 import 'locale_service.dart';
 import 'push_schedule.dart';
+import 'push_schedule_migration.dart';
 
 class NotificationNavEvent {
   final int folderId;
@@ -137,18 +138,25 @@ class NotificationService {
     return NotificationNavEvent(folderId, cardId);
   }
 
-  /// 즉시 테스트 알림 전송
+  /// 즉시 테스트 알림 전송. 지금 이 순간의 활성 규칙(없으면 목록의 첫 규칙, 그마저도
+  /// 없으면 전체 폴더)의 폴더에서 카드를 뽑는다 — gap 시간대에 테스트를 눌러도
+  /// "규칙이 하나라도 있으면 그중 대표를 쓴다"는 정의된 동작을 갖는다(무동작이 아님).
   static Future<void> showTestNotification() async {
     final isEn = LocaleService.currentLanguageCode() == 'en';
     String body = isEn ? 'Time to review your cards!' : '카드를 복습할 시간입니다!';
     String? payload;
 
     try {
-      final alarms = await DatabaseHelper.instance.getAllPushAlarms();
-      int? folderId;
-      if (alarms.isNotEmpty) {
-        folderId = alarms.first['folder_id'] as int?;
-      }
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      final rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
+      final now = DateTime.now();
+      final nowMinutes = now.hour * 60 + now.minute;
+      final rule = PushSchedule.activeRule(nowMinutes, rules) ??
+          (rules.isEmpty ? null : rules.first);
+      final folderId =
+          (rule == null || rule.folderId == PushSchedule.allFolders)
+              ? null
+              : rule.folderId;
       final card =
           await DatabaseHelper.instance.getRandomCard(folderId: folderId);
       if (card != null) {
@@ -215,23 +223,6 @@ class NotificationService {
     // 네이티브 PushNotificationService 카드 알림(50000+)까지 전부 삭제함.
     // 이 앱은 flutter_local_notifications 스케줄링을 사용하지 않으므로 cancelAll() 불필요.
 
-    // 알람 먼저 조회 (설정 마이그레이션에 필요)
-    List<Map<String, dynamic>> alarms;
-    try {
-      alarms = await DatabaseHelper.instance.getAllPushAlarms();
-    } catch (e) {
-      debugPrint('[NOTIF] rescheduleAll: getAllPushAlarms 실패: $e');
-      return;
-    }
-
-    if (alarms.isEmpty) {
-      debugPrint('[NOTIF] rescheduleAll: 설정된 알람 없음');
-      // 알람 테이블이 비어있어도 서비스가 실행 중일 수 있으므로 정리 (자가 치유)
-      try { await stopIntervalService(); } catch (_) {}
-      return;
-    }
-
-    // 알림 활성화 여부 확인
     Map<String, String> settings;
     try {
       settings = await DatabaseHelper.instance.getAllSettings();
@@ -240,160 +231,71 @@ class NotificationService {
       return;
     }
 
-    var enabledStr =
-        (settings['notification_enabled'] ?? '').toLowerCase();
+    // v1.3.8 이하 저장값(push_alarms 전역 인터벌 알람 + push_schedule 오버라이드
+    // 슬롯)을 push_rules 규칙 목록으로 1회 변환. 마이그레이션은 저장만 하고
+    // 돌아온다(rescheduleAll을 다시 부르지 않음 — 무한재귀 방지).
+    try {
+      await PushScheduleMigration.migrateIfNeeded(settings);
+    } catch (e) {
+      debugPrint('[NOTIF] rescheduleAll: migrateIfNeeded 실패: $e');
+    }
 
-    // 마이그레이션: 알람이 존재하지만 notification_enabled가 미설정인 경우
-    // (이전 버전에서 업데이트된 사용자) → 자동으로 'true' 설정
-    if (enabledStr.isEmpty && alarms.isNotEmpty) {
-      debugPrint('[NOTIF] 마이그레이션: 알람 존재하나 설정 미지정 → 자동 활성화');
+    // 마이그레이션이 push_rules/push_sound_enabled/push_rules_migrated를 새로
+    // 썼을 수 있으므로 재조회.
+    try {
+      settings = await DatabaseHelper.instance.getAllSettings();
+    } catch (e) {
+      debugPrint('[NOTIF] rescheduleAll: getAllSettings(재조회) 실패: $e');
+      return;
+    }
+
+    final rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
+
+    var enabledStr = (settings['notification_enabled'] ?? '').toLowerCase();
+
+    // 마이그레이션 이전 버전에서 업데이트된 사용자를 위한 자동 활성화 — 규칙이
+    // 존재하는데 notification_enabled가 미설정인 경우.
+    if (enabledStr.isEmpty && rules.isNotEmpty) {
+      debugPrint('[NOTIF] 마이그레이션: 규칙 존재하나 설정 미지정 → 자동 활성화');
       try {
         await DatabaseHelper.instance
             .upsertSetting('notification_enabled', 'true');
         enabledStr = 'true';
       } catch (e) {
-        debugPrint('[NOTIF] 마이그레이션 실패: $e');
+        debugPrint('[NOTIF] 자동 활성화 실패: $e');
       }
     }
 
-    if (enabledStr != 'true') {
-      debugPrint('[NOTIF] rescheduleAll: 알림 비활성화 (enabled=$enabledStr)');
-      // 비활성화 시에만 서비스 중지
+    if (enabledStr != 'true' || rules.isEmpty) {
+      debugPrint(
+          '[NOTIF] rescheduleAll: 비활성화 또는 규칙 없음 (enabled=$enabledStr, rules=${rules.length})');
+      // 비활성화 시(또는 규칙이 하나도 없을 때) 서비스 중지 — 자가 치유.
       try { await stopIntervalService(); } catch (_) {}
       return;
     }
 
-    // 시간대별 폴더·주기 스케줄. 저장된 원본이 지저분해도(공백/순서/잘못된 항목)
-    // decode→encode로 정규화한 뒤 네이티브에 넘긴다 — 네이티브 쪽 timingKey도
-    // 이 정규화된 CSV를 기준으로 만들어지므로 여기서 정규화가 어긋나면 편집할
-    // 때마다 불필요하게 타이머가 리셋된다.
-    final scheduleSlots =
-        PushSchedule.decode(settings[PushSchedule.settingCsvKey]);
-    final scheduleCsv = PushSchedule.encode(scheduleSlots);
-    final scheduleEnabledSetting =
-        (settings[PushSchedule.settingEnabledKey] ?? '').toLowerCase() ==
-            'true';
-    // 슬롯이 0개면 무조건 강제로 끈다 — "켜졌는데 슬롯 0개"인 모호한 상태를
-    // 네이티브에 전달하지 않는다(네이티브도 동일하게 scheduleEnabled&&slots.isEmpty
-    // 조합을 만들지 않도록 방어하지만, 여기서도 명시적으로 정리해 둔다).
-    final scheduleEnabled = scheduleEnabledSetting && scheduleSlots.isNotEmpty;
+    final soundEnabledStr = settings[PushSchedule.settingSoundKey];
+    final soundEnabled = (soundEnabledStr ?? 'true').toLowerCase() != 'false';
 
-    // 활성화 + 알람 있음 → interval 알람 찾아서 서비스 (재)시작
-    // NOTE: onStartCommand가 내부에서 handler.removeCallbacks 후 재스케줄하므로
-    //       별도 stopService 없이 바로 startService하면 됨 (STOP 인텐트 레이스 방지)
-    bool hasInterval = false;
-    debugPrint('[NOTIF] rescheduleAll: ${alarms.length}개 알람 처리');
-
-    for (final alarm in alarms) {
-      if ((alarm['enabled'] as int? ?? 1) != 1) continue;
-
-      final mode = alarm['mode'] as String? ?? 'fixed';
-      final folderId = alarm['folder_id'] as int?;
-      final soundEnabled = (alarm['sound_enabled'] as int? ?? 1) == 1;
-
-      if (mode == 'interval') {
-        final startTime = alarm['start_time'] as String?;
-        final endTime = alarm['end_time'] as String?;
-        final intervalMin = alarm['interval_min'] as int?;
-
-        // 필수 필드 검증
-        if (startTime == null || endTime == null || intervalMin == null) {
-          debugPrint('[NOTIF] 잘못된 interval 알람 (id=${alarm['id']}): '
-              'start=$startTime, end=$endTime, interval=$intervalMin');
-          continue;
-        }
-        if (intervalMin < 5 || intervalMin > 1440) {
-          debugPrint('[NOTIF] interval 범위 밖 (id=${alarm['id']}): $intervalMin분');
-          continue;
-        }
-
-        // 시간 파싱 (엄격한 HH:MM 형식)
-        final sp = startTime.split(':');
-        final ep = endTime.split(':');
-        if (sp.length != 2 || ep.length != 2) {
-          debugPrint('[NOTIF] 시간 형식 오류 (id=${alarm['id']}): $startTime ~ $endTime');
-          continue;
-        }
-
-        final startHour = int.tryParse(sp[0]);
-        final startMinute = int.tryParse(sp[1]);
-        final endHour = int.tryParse(ep[0]);
-        final endMinute = int.tryParse(ep[1]);
-        if (startHour == null || startMinute == null ||
-            endHour == null || endMinute == null) {
-          debugPrint('[NOTIF] 시간 파싱 실패 (id=${alarm['id']}): $startTime ~ $endTime');
-          continue;
-        }
-
-        // 범위 검증
-        if (startHour < 0 || startHour > 23 || startMinute < 0 || startMinute > 59 ||
-            endHour < 0 || endHour > 23 || endMinute < 0 || endMinute > 59) {
-          debugPrint('[NOTIF] 시간 범위 초과 (id=${alarm['id']}): $startTime ~ $endTime');
-          continue;
-        }
-
-        hasInterval = true;
-        await _startIntervalService(
-          startHour: startHour,
-          startMinute: startMinute,
-          endHour: endHour,
-          endMinute: endMinute,
-          intervalMin: intervalMin,
-          folderId: folderId,
-          soundEnabled: soundEnabled,
-          scheduleEnabled: scheduleEnabled,
-          scheduleCsv: scheduleCsv,
-        );
-      }
-    }
-
-    // interval 알람이 하나도 시작되지 않았으면 기존 서비스 정리
-    if (!hasInterval) {
-      try { await stopIntervalService(); } catch (_) {}
-    }
+    await _startPushService(
+      rulesCsv: PushSchedule.encode(rules),
+      soundEnabled: soundEnabled,
+    );
   }
 
   // ─── Foreground Service 제어 ───
 
-  static Future<void> _startIntervalService({
-    required int startHour,
-    required int startMinute,
-    required int endHour,
-    required int endMinute,
-    required int intervalMin,
-    int? folderId,
-    bool soundEnabled = true,
-    bool scheduleEnabled = false,
-    String scheduleCsv = '',
+  static Future<void> _startPushService({
+    required String rulesCsv,
+    required bool soundEnabled,
   }) async {
-    final startTotal = startHour * 60 + startMinute;
-    final endTotal = endHour * 60 + endMinute;
-    // intervalMin 최소 5분 방어 (endTotal == startTotal은 무의미하므로 거부)
-    // overnight 스케줄 (예: 22:00~06:00)은 endTotal < startTotal 이므로 허용
-    if (intervalMin < 5 || endTotal == startTotal) {
-      debugPrint('[NOTIF] 서비스 시작 건너뜀: '
-          'start=$startTotal, end=$endTotal, interval=$intervalMin');
-      return;
-    }
-
     try {
       await _pushNotifChannel.invokeMethod('startService', {
-        'intervalMin': intervalMin,
-        'startTotal': startTotal,
-        'endTotal': endTotal,
-        'folderId': folderId ?? -1,
+        'rulesCsv': rulesCsv,
         'soundEnabled': soundEnabled,
         'lang': LocaleService.currentLanguageCode(),
-        // 이 채널의 유일한 startService 호출자가 rescheduleAll(이 함수) 하나뿐이므로
-        // 여기선 항상 채워 넣는다 — MainActivity/PushNotificationService는 그래도
-        // hasExtra로 "없으면 보존"을 지켜, 향후 다른 호출 경로가 생겨도 안전하다.
-        'scheduleEnabled': scheduleEnabled,
-        'scheduleCsv': scheduleCsv,
       });
-      debugPrint('[NOTIF] 서비스 시작: '
-          '${startHour.toString().padLeft(2, "0")}:${startMinute.toString().padLeft(2, "0")}'
-          '~${endHour.toString().padLeft(2, "0")}:${endMinute.toString().padLeft(2, "0")}'
-          ', $intervalMin분');
+      debugPrint('[NOTIF] 서비스 시작: rules=$rulesCsv');
     } catch (e) {
       debugPrint('[NOTIF] 서비스 시작 실패: $e');
     }
@@ -422,36 +324,37 @@ class NotificationService {
     }
   }
 
-  /// 삭제된 폴더 ID 목록을 푸시 알림 시간대 스케줄(push_schedule) 슬롯에서 제거.
+  /// 삭제된 폴더 ID 목록을 푸시 알림 규칙(push_rules) 목록에서 제거.
   ///
   /// home_screen의 폴더 삭제 사후 정리에서 `needsPushReschedule` 플래그와 무관하게
-  /// 항상 호출돼야 한다 — 그 플래그는 push_alarms.folder_id(전역 기본 폴더)만
-  /// 추적해서, 기본 폴더는 안 건드리고 시간대 슬롯에만 걸린 삭제(예: 슬롯 하나가
-  /// 가리키던 폴더만 지운 경우)를 놓친다.
+  /// 항상 호출돼야 한다 — 그 플래그는 push_alarms.folder_id(옛 전역 기본 폴더)만
+  /// 추적해서, 규칙 하나가 가리키던 폴더만 지운 경우를 놓친다.
   static Future<void> removeFoldersFromPushSchedule(
       List<int> folderIdsToRemove) async {
     if (folderIdsToRemove.isEmpty) return;
     try {
       final settings = await DatabaseHelper.instance.getAllSettings();
-      final slots = PushSchedule.decode(settings[PushSchedule.settingCsvKey]);
-      if (slots.isEmpty) return;
+      final rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
+      if (rules.isEmpty) return;
 
       final removeSet = folderIdsToRemove.toSet();
-      final prunedSlots =
-          slots.where((s) => !removeSet.contains(s.folderId)).toList();
-      if (prunedSlots.length == slots.length) {
+      // folderId == allFolders(-1)은 실제 폴더 id가 아니므로 removeSet에 절대
+      // 포함되지 않는다 — "전체 폴더" 규칙은 이 pruning으로 지워지지 않는다.
+      final prunedRules =
+          rules.where((r) => !removeSet.contains(r.folderId)).toList();
+      if (prunedRules.length == rules.length) {
         return; // 변경 없음 — 이 삭제와 무관
       }
 
       await DatabaseHelper.instance.upsertSetting(
-          PushSchedule.settingCsvKey, PushSchedule.encode(prunedSlots));
+          PushSchedule.settingRulesKey, PushSchedule.encode(prunedRules));
 
-      // 슬롯이 있었는데 이번 pruning으로 전부 사라진 경우에만 스케줄을 끈다 —
-      // 슬롯 0개인데 스케줄 ON인 상태는 혼란스러운 무동작(no-op)이기 때문. 그 외
-      // (슬롯이 하나라도 남는 경우)엔 사용자가 설정한 enabled 값을 그대로 둔다.
-      if (prunedSlots.isEmpty) {
+      // 규칙이 있었는데 이번 pruning으로 전부 사라진 경우에만 마스터 스위치를 끈다
+      // — 규칙 0개인데 스위치 ON인 상태는 불변식 위반이기 때문. 그 외(규칙이 하나라도
+      // 남는 경우)엔 사용자가 설정한 enabled 값을 그대로 둔다.
+      if (prunedRules.isEmpty) {
         await DatabaseHelper.instance
-            .upsertSetting(PushSchedule.settingEnabledKey, 'false');
+            .upsertSetting('notification_enabled', 'false');
       }
 
       await rescheduleAll();
