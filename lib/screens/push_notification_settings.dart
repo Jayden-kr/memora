@@ -365,7 +365,15 @@ class _PushNotificationSettingsScreenState
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.pop(dialogCtx),
+                  onPressed: () {
+                    // 다이얼로그를 닫기 전에 포커스를 명시적으로 해제한다 — 인터벌
+                    // TextField에 포커스가 남은 채로(특히 시스템 BACK으로 키보드만
+                    // 내린 직후) pop하면, 아직 정리되지 않은 포커스 트리 의존성 때문에
+                    // 드물게 '_dependents.isEmpty' 프레임워크 크래시가 발생한다(실기기
+                    // 재현 확인). unfocus를 pop보다 먼저 완료시켜 그 경합을 없앤다.
+                    FocusScope.of(dialogCtx).unfocus();
+                    Navigator.pop(dialogCtx);
+                  },
                   child: Text(t.commonCancel),
                 ),
                 TextButton(
@@ -388,6 +396,8 @@ class _PushNotificationSettingsScreenState
                       }
                       intervalMin = parsed;
                     }
+                    // 위 Cancel 버튼과 동일한 이유로 pop 전에 포커스를 해제한다.
+                    FocusScope.of(dialogCtx).unfocus();
                     Navigator.pop(
                       dialogCtx,
                       PushRule(
