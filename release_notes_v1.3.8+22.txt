@@ -1,0 +1,18 @@
+<ko-KR>
+카드 푸시 알림도 시간대별로 폴더와 간격이 자동으로 바뀝니다
+
+- 09:00~18:00 영단어, 18:00~23:00 히브리어처럼 시간대를 정하면 폴더뿐 아니라 알림 간격까지 그때그때 바뀝니다
+- 시간대는 최대 5개까지 추가할 수 있고, 22:00~02:00처럼 자정을 넘는 구간도 됩니다
+- 간격을 비워두면 기본 간격을 그대로 씁니다
+- 시간대끼리 겹치면 실제 적용 시간을 목록에 함께 보여줍니다
+- 지정한 폴더가 삭제되거나 비어 있으면 기본 폴더로 대신 보냅니다
+</ko-KR>
+<en-US>
+Card push notifications can now auto-switch folder and interval by time of day
+
+- Set 9am-6pm to English words and 6pm-11pm to Hebrew, and both the folder and the interval switch on their own
+- Add up to 5 time ranges, including ones crossing midnight like 10pm-2am
+- Leave the interval empty to keep the default interval
+- When ranges overlap, the list shows the hours each one actually covers
+- If a range's folder is deleted or empty, the default folder is used instead
+</en-US>
