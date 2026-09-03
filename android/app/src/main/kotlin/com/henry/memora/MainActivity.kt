@@ -224,18 +224,14 @@ class MainActivity : FlutterActivity() {
                         "startService" -> {
                             val args = call.arguments as? Map<String, Any?> ?: emptyMap()
                             val intent = Intent(this, PushNotificationService::class.java).apply {
-                                putExtra("intervalMin", (args["intervalMin"] as? Number)?.toInt() ?: 30)
-                                putExtra("startTotal", (args["startTotal"] as? Number)?.toInt() ?: 540)
-                                putExtra("endTotal", (args["endTotal"] as? Number)?.toInt() ?: 1320)
-                                putExtra("folderId", (args["folderId"] as? Number)?.toInt() ?: -1)
                                 putExtra("soundEnabled", args["soundEnabled"] as? Boolean ?: true)
                                 putExtra("lang", (args["lang"] as? String) ?: "ko")
-                                // 신규 키는 "인자가 있을 때만" 기록 — 없으면 서비스가 prefs의 기존
-                                // 값을 그대로 쓴다(LockScreenService.saveSettings와 동일 규율).
-                                // 무조건 기본값을 넣으면, 이 두 키를 안 싣는 startService 호출
-                                // 경로가 향후 생겼을 때 사용자의 시간대 슬롯이 조용히 지워진다.
-                                (args["scheduleEnabled"] as? Boolean)?.let { putExtra("scheduleEnabled", it) }
-                                (args["scheduleCsv"] as? String)?.let { putExtra("scheduleCsv", it) }
+                                // rulesCsv는 "인자가 있을 때만" 기록 — 없으면 서비스가 prefs의
+                                // 기존 값을 그대로 쓴다(LockScreenService.saveSettings와 동일
+                                // 규율). 무조건 기본값(빈 문자열)을 넣으면, 이 키를 안 싣는
+                                // startService 호출 경로가 향후 생겼을 때 사용자의 규칙이
+                                // 조용히 지워진다.
+                                (args["rulesCsv"] as? String)?.let { putExtra("rulesCsv", it) }
                             }
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)

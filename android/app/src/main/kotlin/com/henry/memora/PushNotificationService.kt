@@ -3,6 +3,7 @@ package com.henry.memora
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteDatabase
@@ -12,10 +13,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 /**
- * 간격 반복 푸시 알림 Foreground Service
+ * 푸시 알림 Foreground Service — 시간대 규칙 목록(PushSchedule) 기반.
  * - 앱을 스와이프해서 날려도 살아남음 (START_STICKY)
  * - AlarmManager.setExactAndAllowWhileIdle로 프로세스 사망에도 정확한 간격 알림
  * - SQLite 직접 접근으로 랜덤 카드 조회
+ *
+ * v1.3.9 재설계: 마스터 활성시간창·전역 폴더·전역 인터벌 개념이 전부 사라졌다.
+ * 규칙에 안 걸리는 시각엔 알림이 안 온다(의도적 동작 변경) — [PushSchedule.activeRule]이
+ * null이면 그냥 조용히 다음 규칙 시작까지 대기한다.
  */
 class PushNotificationService : Service() {
     companion object {
@@ -30,18 +35,15 @@ class PushNotificationService : Service() {
         const val ACTION_TICK = "TICK"
         const val REQUEST_CODE_TICK = 10000
         const val REQUEST_CODE_RESTART = 9999
+        // 활성 규칙이 없을 때(gap) 다음 재평가까지 대기하는 최대 시간. minutesUntilNextStart가
+        // 최대 1439를 반환할 수 있으므로, DST/시계 스큐/Doze 오차가 쌓여도 최악의 경우 1시간
+        // 안에는 재평가하도록 캡을 씌운다.
+        const val MAX_GAP_POLL_MIN = 60
     }
 
-    private var intervalMin = 30
-    private var startTotal = 540   // 09:00
-    private var endTotal = 1320    // 22:00
-    private var folderId: Int? = null
     private var soundEnabled = true
     private var lang = "ko"
-    // 시간대별 폴더·주기 자동 전환(PushSchedule.kt). OFF면 slots는 항상 emptyList —
-    // "켜졌는데 슬롯 0개"라는 모호함을 만들지 않는다(LockScreenService와 동일 규율).
-    private var scheduleEnabled = false
-    private var slots: List<PushSchedule.Slot> = emptyList()
+    private var rules: List<PushSchedule.Rule> = emptyList()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -171,99 +173,96 @@ class PushNotificationService : Service() {
 
             saveRunning(true)
 
-            // 현재 시각을 한 번만 계산 → 활성 슬롯(폴더+간격 오버라이드) 판정 → 그 간격으로
-            // 다음 알람 예약. 슬롯 전환은 "지연 수용" 설계다: 폴더는 이번 TICK에서 바로
-            // 반영되지만(fireIfInRange가 이 slot 그대로 발화), 간격은 "다음" 예약부터만
-            // 반영된다 — 드리프트 방지 while 루프가 몇 TICK 안에 새 간격으로 자연히
-            // 수렴하므로 경계 전용 정확 알람은 의도적으로 추가하지 않는다.
+            // 현재 시각을 한 번만 계산 → 활성 규칙 판정 → 있으면 그 간격으로, 없으면(gap)
+            // 다음 규칙 시작까지(최대 MAX_GAP_POLL_MIN분) 다음 알람 예약.
             val now = nowMinutes()
-            val slot = activeSlotNow(now)
-            Log.d(TAG, "Schedule: now=%02d:%02d slots=%d matched=%s effInterval=%d effFolder=%s".format(
-                now / 60, now % 60, slots.size,
-                slot?.let { "[${it.start}-${it.end})->folder=${it.folderId},interval=${it.intervalMin}" } ?: "none",
-                effectiveIntervalMin(slot),
-                effectiveFolderId(slot)?.toString() ?: "all"
+            val rule = PushSchedule.activeRule(now, rules)
+            Log.d(TAG, "Schedule: now=%02d:%02d rules=%d matched=%s".format(
+                now / 60, now % 60, rules.size,
+                rule?.let { "[${it.start}-${it.end})->folder=${it.folderId},interval=${it.intervalMin}" } ?: "none(gap)"
             ))
 
-            // 다음 알람을 먼저 예약 (프로세스가 fireIfInRange 도중 죽어도 체인 유지)
-            // 핵심: 예정시각(savedNextFireTime) 기준으로 다음 계산 → 드리프트 누적 방지
-            val intervalMs = effectiveIntervalMin(slot) * 60 * 1000L
-            val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
-            var nextFireTime = savedFireTime + intervalMs
-            // 만약 nextFireTime이 이미 과거면 → 다음 슬롯까지 건너뛰기
-            while (nextFireTime <= System.currentTimeMillis()) {
-                nextFireTime += intervalMs
+            // 다음 알람을 먼저 예약 (프로세스가 발화 도중 죽어도 체인 유지)
+            if (rule != null) {
+                // 핵심: 예정시각(savedNextFireTime) 기준으로 다음 계산 → 드리프트 누적 방지
+                val intervalMs = rule.intervalMin * 60_000L
+                val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
+                var nextFireTime = savedFireTime + intervalMs
+                while (nextFireTime <= System.currentTimeMillis()) {
+                    nextFireTime += intervalMs
+                }
+                saveNextFireTime(nextFireTime)
+                scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
+            } else {
+                val gapMin = minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN)
+                val nextFireTime = System.currentTimeMillis() + gapMin * 60_000L
+                saveNextFireTime(nextFireTime)
+                scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
             }
-            saveNextFireTime(nextFireTime)
-            scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
 
-            // 예약 완료 후 발화 (프로세스 사망 시 이번 알림만 유실, 체인은 유지)
-            fireIfInRange(now, slot)
+            // 예약 완료 후 발화 (프로세스 사망 시 이번 알림만 유실, 체인은 유지). 규칙이
+            // 없으면(gap) 발화하지 않는다 — 이게 이 재설계의 핵심 동작 변경이다.
+            if (rule != null) fire(rule)
 
             return START_STICKY
         }
 
-        // 설정 읽기
+        // 설정 읽기 (Flutter의 startService 호출, 또는 부팅 복원처럼 extras 없는 콜드스타트)
         val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-        intervalMin = maxOf(5, intent?.getIntExtra("intervalMin", prefs.getInt("intervalMin", 30)) ?: prefs.getInt("intervalMin", 30))
-        startTotal = intent?.getIntExtra("startTotal", prefs.getInt("startTotal", 540)) ?: prefs.getInt("startTotal", 540)
-        endTotal = intent?.getIntExtra("endTotal", prefs.getInt("endTotal", 1320)) ?: prefs.getInt("endTotal", 1320)
-        // -1은 '전체 폴더'를 의미한다. 예전 코드는 intent의 -1을 .let으로 null로 바꾼 뒤
-        // 엘비스(?:)가 그 null을 '값 없음'으로 오해해 prefs의 이전 폴더로 폴백했다 → '특정 폴더
-        // → 전체 폴더' 전환이 무시되고 이전 필터가 영구 고착됐다(#2). intent가 folderId를
-        // 명시적으로 넘겼는지를 hasExtra로 판별해, 넘겼으면 prefs 폴백 없이 그 값(-1→null=전체)을 쓴다.
-        folderId = if (intent != null && intent.hasExtra("folderId")) {
-            intent.getIntExtra("folderId", -1).let { if (it == -1) null else it }
-        } else {
-            prefs.getInt("folderId", -1).let { if (it == -1) null else it }
-        }
         soundEnabled = intent?.getBooleanExtra("soundEnabled", prefs.getBoolean("soundEnabled", true))
             ?: prefs.getBoolean("soundEnabled", true)
         lang = AppLang.normalize(intent?.getStringExtra("lang") ?: prefs.getString("lang", null))
 
-        // 시간대별 스케줄. folderId와 같은 hasExtra 패턴 — "전달 안 함=보존" vs
-        // "명시적으로 넘김(켜짐/꺼짐, CSV)"을 구분한다. MainActivity가 scheduleEnabled/
-        // scheduleCsv를 ?.let으로 조건부 전달하므로(신규 키 보존 규율), 여기서도 값이
-        // 없으면 prefs의 기존 값을 그대로 쓴다.
-        scheduleEnabled = if (intent != null && intent.hasExtra("scheduleEnabled")) {
-            intent.getBooleanExtra("scheduleEnabled", false)
-        } else {
-            prefs.getBoolean("scheduleEnabled", false)
-        }
-        val scheduleCsvRaw = if (intent != null && intent.hasExtra("scheduleCsv")) {
-            intent.getStringExtra("scheduleCsv") ?: ""
+        // 규칙 CSV. hasExtra 패턴 — "전달 안 함=보존" vs "명시적으로 넘김(빈 문자열 포함)"을
+        // 구분한다. 프레퍼런스 키 이름은 이전 버전과 동일하게 "scheduleCsv"로 유지한다
+        // (§5.3 콜드스타트 폴백이 이 키를 그대로 재사용하기 때문).
+        val rulesCsvRaw = if (intent != null && intent.hasExtra("rulesCsv")) {
+            intent.getStringExtra("rulesCsv") ?: ""
         } else {
             prefs.getString("scheduleCsv", "") ?: ""
         }
-        // OFF면 파싱조차 하지 않는다 — "켜졌는데 슬롯 0개"의 모호함 제거(LockScreenService와 동일 규율).
-        slots = if (scheduleEnabled) PushSchedule.parse(scheduleCsvRaw) else emptyList()
-        // prefs에는 정규화된 CSV를 저장 — 공백/순서 차이가 timingKey를 불필요하게 리셋하지
-        // 않게 하고, scheduleEnabled가 꺼져 있어도 유효한 슬롯 데이터를 보존해 다시 켜면
-        // 그대로 복원되게 한다.
-        val canonicalCsv = PushSchedule.encode(PushSchedule.parse(scheduleCsvRaw))
+        val hasFreshRulesFromIntent = intent != null && intent.hasExtra("rulesCsv") &&
+            !intent.getStringExtra("rulesCsv").isNullOrEmpty()
 
-        // 타이밍 설정 변경 여부 판별 (폴더/알림음은 타이밍과 무관).
-        // ⚠️ scheduleEnabled/스케줄 CSV를 반드시 포함해야 한다 — 안 그러면 슬롯만
-        // 편집해서 저장해도 "타이밍 변경 없음"으로 오판돼 실행 중이던 타이머가 새
-        // 스케줄을 영영 반영하지 못한다.
-        val timingKey = "$intervalMin:$startTotal:$endTotal:${if (scheduleEnabled) 1 else 0}:$canonicalCsv"
+        rules = PushSchedule.parse(rulesCsvRaw)
+        if (rules.isEmpty()) {
+            val fallback = legacyFallbackRules(prefs)
+            if (fallback.isNotEmpty()) {
+                Log.w(TAG, "scheduleCsv 비어있음 — 레거시 prefs(startTotal/endTotal/intervalMin/folderId)로 규칙 폴백")
+                rules = fallback
+            }
+        }
+
+        // ⚠️ canonicalCsv/timingKey는 rulesCsvRaw(마이그레이션 전 상태 그대로) 기준이다 —
+        // 위의 레거시 폴백으로 합성된 rules를 여기 반영하지 않는다. loadSettingsFromPrefs()가
+        // 매 TICK마다 같은 레거시 prefs로 동일한 폴백을 재현하므로(레거시 키를 지우기 전까진)
+        // 실제 발화·표시는 rules 필드가 이미 담당하고, canonicalCsv는 순수하게 "Flutter가
+        // 실제로 보낸 값"만 반영해 Flutter가 진짜 새 CSV를 보내는 순간 timingKey가 정확히
+        // 갈라지게 한다.
+        val canonicalCsv = PushSchedule.encode(PushSchedule.parse(rulesCsvRaw))
+
+        // 타이밍 설정 변경 여부 판별. "v2:" 프리픽스는 업데이트 직후 남아있는 구
+        // timingKey("$intervalMin:$startTotal:..." 형식)와 절대 충돌하지 않게 하기 위함 —
+        // 프리픽스가 없으면 구 timingKey와 우연히 같은 문자열이 나올 여지가 있어 강제로
+        // 다르게 만든다.
+        val timingKey = "v2:$canonicalCsv"
         val savedTimingKey = prefs.getString("timingKey", "") ?: ""
         val wasRunning = prefs.getBoolean("running", false)
 
-        // 설정 저장 (재시작 시 복원용)
-        prefs.edit()
-            .putInt("intervalMin", intervalMin)
-            .putInt("startTotal", startTotal)
-            .putInt("endTotal", endTotal)
-            .putInt("folderId", folderId ?: -1)
-            .putBoolean("soundEnabled", soundEnabled)
-            .putBoolean("scheduleEnabled", scheduleEnabled)
+        val editor = prefs.edit()
             .putString("scheduleCsv", canonicalCsv)
+            .putBoolean("soundEnabled", soundEnabled)
             .putString("timingKey", timingKey)
             .putString("lang", lang)
-            .commit()  // apply() 대신 commit() — 서비스 kill 전 데이터 보존 보장
+        if (hasFreshRulesFromIntent) {
+            // Flutter가 실제로 비어있지 않은 규칙을 보냈다 — 이제부터는 §5.3 콜드스타트
+            // 폴백이 더 이상 필요 없으므로(scheduleCsv가 항상 최신 상태) 레거시 키를 지운다.
+            // 한 번 지워지면 폴백은 영구히 비활성화된다(다시 살아나 새 규칙을 덮어쓰지 않음).
+            editor.remove("startTotal").remove("endTotal").remove("intervalMin").remove("folderId")
+        }
+        editor.commit()  // apply() 대신 commit() — 서비스 kill 전 데이터 보존 보장
 
-        Log.d(TAG, "시작: ${startTotal/60}:${String.format(java.util.Locale.US, "%02d", startTotal%60)}~${endTotal/60}:${String.format(java.util.Locale.US, "%02d", endTotal%60)}, ${intervalMin}분 간격")
+        Log.d(TAG, "시작: 규칙 ${rules.size}개")
 
         // Foreground 알림
         val notification = createServiceNotification()
@@ -283,34 +282,40 @@ class PushNotificationService : Service() {
         // 기존 tick 알람 취소
         cancelTickAlarm()
 
+        // 메인 분기도 activeRule(now, rules)을 호출해 delayMs를 계산한다 — 이전 설계의
+        // "메인 분기는 슬롯을 조회하지 않는다"는 규율은 v1.3.9에서 의도적으로 뒤집혔다.
+        // 규칙 하나뿐이던 전역 인터벌 개념 자체가 사라졌으므로, 지금 활성 규칙이 있는지
+        // 없는지에 따라 delayMs가 달라져야 첫 알람이 올바른 시각에 잡힌다.
+        val now = nowMinutes()
+        val rule = PushSchedule.activeRule(now, rules)
+        val delayMs: Long = if (rule != null) {
+            rule.intervalMin * 60_000L
+        } else {
+            minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN) * 60_000L
+        }
+
         if (wasRunning && timingKey == savedTimingKey) {
             // 설정 동일 + 이미 실행 중이었음 → 남은 시간만 대기
             val nextFireTime = prefs.getLong("nextFireTime", 0L)
-            val now = System.currentTimeMillis()
-            val remaining = nextFireTime - now
-            val intervalMs = intervalMin * 60 * 1000L
+            val nowMs = System.currentTimeMillis()
+            val remaining = nextFireTime - nowMs
 
-            // interval 알람이므로 remaining은 정상적으로 intervalMs를 넘을 수 없다. 기기
-            // 시계를 과거로 돌리면 remaining이 intervalMs보다 훨씬 커질 수 있는데(시계 스큐),
-            // 그대로 유지하면 시계가 따라잡을 때까지 며칠씩 알림이 멈춘다 — 그런 경우도
-            // 새 interval로 리셋한다.
-            if (remaining in 1L..intervalMs) {
+            // remaining은 정상적으로 delayMs를 넘을 수 없다. 기기 시계를 과거로 돌리면
+            // remaining이 delayMs보다 훨씬 커질 수 있는데(시계 스큐), 그대로 유지하면
+            // 시계가 따라잡을 때까지 며칠씩 알림이 멈춘다 — 그런 경우도 새로 리셋한다.
+            if (remaining in 1L..delayMs) {
                 scheduleNextAlarm(remaining)
                 Log.d(TAG, "타이머 유지: ${remaining / 60000}분 ${(remaining % 60000) / 1000}초 남음")
             } else {
-                // 이전 예약 시간이 이미 지났거나(remaining<=0) 시계 스큐로 비정상적으로 먼
-                // 미래임(remaining>intervalMs) → 새 interval 시작 (즉시 발화 X)
-                // 알림은 TICK 알람만 발사해야 함. 앱 열기 = 알림 트리거 아님.
-                saveNextFireTime(System.currentTimeMillis() + intervalMs)
-                scheduleNextAlarm(intervalMs)
-                Log.d(TAG, "타이머 리셋 → ${intervalMin}분 후 다음 알림 예약")
+                saveNextFireTime(System.currentTimeMillis() + delayMs)
+                scheduleNextAlarm(delayMs)
+                Log.d(TAG, "타이머 리셋 → ${delayMs / 60000}분 후 다음 알림 예약")
             }
         } else {
-            // 새로 시작 or 설정 변경 → 전체 interval 타이머
-            val delayMs = intervalMin * 60 * 1000L
+            // 새로 시작 or 설정 변경 → 전체 타이머
             saveNextFireTime(System.currentTimeMillis() + delayMs)
             scheduleNextAlarm(delayMs)
-            Log.d(TAG, "${intervalMin}분 후 첫 알림 (설정 변경, start=$startTotal, end=$endTotal)")
+            Log.d(TAG, "${delayMs / 60000}분 후 첫 알림 (설정 변경)")
         }
 
         return START_STICKY
@@ -441,18 +446,35 @@ class PushNotificationService : Service() {
     }
 
     /**
-     * SharedPreferences에서 설정값 복원 (TICK 액션에서 프로세스 재생성 시 사용)
+     * §5.3 콜드스타트 갭 폴백: scheduleCsv가 비어 있고(아직 Flutter 마이그레이션이 돌지
+     * 않은 상태) 레거시 단일 인터벌 알람 prefs(startTotal/endTotal/intervalMin/folderId
+     * — v1.3.8 이전부터 있던 키)가 남아있으면 그 값으로 규칙 1개를 합성한다. 부팅
+     * 리시버(LockScreenStartReceiver.restorePushNotificationService)가 extras 없이
+     * 이 서비스를 띄우는 경로에서, Flutter가 아직 한 번도 열리지 않아 push_rules
+     * 마이그레이션이 돌지 않았다면 이 폴백이 없으면 규칙 0개 → 영구 무음이 된다.
+     */
+    private fun legacyFallbackRules(prefs: SharedPreferences): List<PushSchedule.Rule> {
+        if (!prefs.contains("startTotal") || !prefs.contains("endTotal")) return emptyList()
+        val s = prefs.getInt("startTotal", 540)
+        val e = prefs.getInt("endTotal", 1320)
+        if (s == e) return emptyList()
+        val folderId = prefs.getInt("folderId", -1)
+        val intervalMin = maxOf(5, prefs.getInt("intervalMin", 30))
+        return listOf(PushSchedule.Rule(s, e, folderId, intervalMin))
+    }
+
+    /**
+     * SharedPreferences에서 설정값 복원 (TICK/ACTION_SET_LANG에서 프로세스 재생성 시 사용)
      */
     private fun loadSettingsFromPrefs() {
         val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-        intervalMin = maxOf(5, prefs.getInt("intervalMin", 30))
-        startTotal = prefs.getInt("startTotal", 540)
-        endTotal = prefs.getInt("endTotal", 1320)
-        folderId = prefs.getInt("folderId", -1).let { if (it == -1) null else it }
         soundEnabled = prefs.getBoolean("soundEnabled", true)
         lang = prefs.getString("lang", "ko") ?: "ko"
-        scheduleEnabled = prefs.getBoolean("scheduleEnabled", false)
-        slots = if (scheduleEnabled) PushSchedule.parse(prefs.getString("scheduleCsv", null)) else emptyList()
+        rules = PushSchedule.parse(prefs.getString("scheduleCsv", null))
+        if (rules.isEmpty()) {
+            val fallback = legacyFallbackRules(prefs)
+            if (fallback.isNotEmpty()) rules = fallback
+        }
     }
 
     /** 자정 기준 경과 분(0~1439). minSdk 24라 java.time 대신 Calendar 사용. */
@@ -461,47 +483,10 @@ class PushNotificationService : Service() {
         return cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
     }
 
-    /**
-     * 마스터 활성시간창(양끝 포함, overnight 지원) 판정. fireIfInRange()가 원래 인라인으로
-     * 하던 계산을 순수 추출만 한 것 — 의미(양끝 포함)는 절대 바꾸지 않는다. 반열림으로
-     * "통일"하지 말 것: PushSchedule.Slot 쪽 판정(FolderSchedule.slotContains)은
-     * 하루를 여러 슬롯으로 분할하므로 반열림이 맞고, 여긴 "쏠지 말지"를 정하는 단일
-     * 범위라 경계 포함이 자연스럽다 — 둘 다 각자 맥락에서 옳다.
-     */
-    private fun inMasterWindow(now: Int): Boolean {
-        return if (startTotal <= endTotal) {
-            now in startTotal..endTotal
-        } else {
-            now >= startTotal || now <= endTotal
-        }
-    }
-
-    /**
-     * 마스터 창 밖이면 슬롯 자체가 무시된다(슬롯이 있어도 즉시 null 반환) — 스케줄
-     * 기능이 없던 오늘 코드와 완전히 동일한 동작을 보장하는 지점.
-     */
-    private fun activeSlotNow(now: Int): PushSchedule.Slot? {
-        if (!inMasterWindow(now)) return null
-        return PushSchedule.activeSlot(now, slots)
-    }
-
-    private fun effectiveIntervalMin(slot: PushSchedule.Slot?): Int {
-        if (slot == null || slot.intervalMin == PushSchedule.INHERIT) return intervalMin
-        return slot.intervalMin
-    }
-
-    private fun effectiveFolderId(slot: PushSchedule.Slot?): Int? {
-        return slot?.folderId ?: folderId
-    }
-
-    private fun fireIfInRange(nowTotal: Int, slot: PushSchedule.Slot?) {
-        if (!inMasterWindow(nowTotal)) {
-            Log.d(TAG, "시간 범위 밖 ($nowTotal not in [$startTotal, $endTotal]), 스킵")
-            return
-        }
-
-        Log.d(TAG, "알림 발사! ($nowTotal)")
-        val targetFolderId = effectiveFolderId(slot)
+    /** 활성 규칙 하나를 발화. 규칙의 folderId==ALL_FOLDERS(-1)면 전체 폴더(null 필터). */
+    private fun fire(rule: PushSchedule.Rule) {
+        Log.d(TAG, "알림 발사! (folder=${rule.folderId}, interval=${rule.intervalMin})")
+        val targetFolderId = if (rule.folderId == PushSchedule.ALL_FOLDERS) null else rule.folderId
         // DB I/O를 백그라운드 스레드에서 실행 (ANR 방지)
         Thread {
             try {
@@ -539,16 +524,16 @@ class PushNotificationService : Service() {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
             try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용 (별도 :push 프로세스)
 
-            // 랜덤 카드 조회 (시간대 슬롯이 지정한 폴더 우선)
+            // 랜덤 카드 조회 (규칙이 지정한 폴더 우선)
             var (cardId, cardFolderId, question) = queryRandomCard(db, targetFolderId)
 
-            // 카드 0건 폴백: 슬롯이 가리키는 폴더가 삭제되었거나 카드가 비어 있으면
-            // 전역 폴더로 1회 재조회 — 슬롯 폴더가 무효해졌다고 알림 자체가 조용히
-            // 끊기지 않게 한다. targetFolderId == folderId(슬롯이 없거나 전역과 같은
-            // 폴더)면 재조회해도 결과가 같으므로 스킵.
-            if (cardId <= 0 && targetFolderId != folderId) {
-                Log.w(TAG, "슬롯 폴더($targetFolderId) 카드 없음, 전역 폴더($folderId)로 재조회")
-                val fallback = queryRandomCard(db, folderId)
+            // 카드 0건 폴백: 규칙이 가리키는 폴더가 삭제되었거나 카드가 비어 있으면
+            // 전체 폴더로 1회 재조회 — 규칙 폴더가 무효해졌다고 알림 자체가 조용히
+            // 끊기지 않게 한다. targetFolderId가 이미 null(전체 폴더)이면 재조회해도
+            // 결과가 같으므로 스킵.
+            if (cardId <= 0 && targetFolderId != null) {
+                Log.w(TAG, "규칙 폴더($targetFolderId) 카드 없음, 전체 폴더로 재조회")
+                val fallback = queryRandomCard(db, null)
                 cardId = fallback.first
                 cardFolderId = fallback.second
                 question = fallback.third
@@ -667,6 +652,12 @@ class PushNotificationService : Service() {
         }
     }
 
+    private fun fmtClock(totalMinutes: Int): String {
+        val h = totalMinutes / 60
+        val m = totalMinutes % 60
+        return String.format(java.util.Locale.US, "%02d:%02d", h, m)
+    }
+
     private fun createServiceNotification(): Notification {
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -675,10 +666,21 @@ class PushNotificationService : Service() {
         val pi = PendingIntent.getActivity(this, 2, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val startH = startTotal / 60
-        val startM = startTotal % 60
-        val endH = endTotal / 60
-        val endM = endTotal % 60
+        // 상주 알림에 보여줄 문구는 지금 이 순간의 실제 상태를 반영한다: 활성 규칙이
+        // 있으면 그 시간대/간격을, 없으면(gap) 다음 규칙이 언제 시작하는지를, 규칙
+        // 자체가 없으면(스위치는 켜져 있는데 아직 규칙을 못 만든 극단적 상태) 일시중지를.
+        val now = nowMinutes()
+        val rule = PushSchedule.activeRule(now, rules)
+        val res = AppLang.wrap(this, lang)
+        val contentText = if (rule != null) {
+            val rangeText = "${fmtClock(rule.start)}~${fmtClock(rule.end)}"
+            res.getString(R.string.push_service_text_active, rangeText, rule.intervalMin)
+        } else if (rules.isNotEmpty()) {
+            val nextStartMin = (now + PushSchedule.minutesUntilNextStart(now, rules)) % 1440
+            res.getString(R.string.push_service_text_idle, fmtClock(nextStartMin))
+        } else {
+            res.getString(R.string.push_service_text_paused)
+        }
 
         // 상주 알림이 스와이프로 제거되면 서비스가 다시 알림을 생성
         val recreateIntent = Intent(this, PushNotificationService::class.java).apply {
@@ -688,12 +690,6 @@ class PushNotificationService : Service() {
             this, 200, recreateIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        val rangeText = "${String.format(java.util.Locale.US, "%02d:%02d", startH, startM)}~${String.format(java.util.Locale.US, "%02d:%02d", endH, endM)}"
-        // 상주 알림에 보여줄 간격은 "지금" 시각 기준 실효 간격 — 시간대 슬롯이 간격을
-        // 오버라이드하고 있다면 전역 intervalMin이 아니라 그 값을 보여줘야 한다.
-        val contentText = AppLang.wrap(this, lang)
-            .getString(R.string.push_service_text, rangeText, effectiveIntervalMin(activeSlotNow(nowMinutes())))
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")

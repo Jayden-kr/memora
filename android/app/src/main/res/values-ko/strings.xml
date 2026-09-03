@@ -27,5 +27,7 @@
     <string name="push_review_default_body">카드를 복습할 시간입니다!</string>
     <string name="push_service_channel_name">푸시 알림 서비스</string>
     <string name="push_service_channel_desc">간격 반복 알림 백그라운드 서비스</string>
-    <string name="push_service_text">%1$s, %2$d분 간격 알림 활성화</string>
+    <string name="push_service_text_active">%1$s, %2$d분 간격 알림 활성화</string>
+    <string name="push_service_text_idle">%1$s부터 알림 재개</string>
+    <string name="push_service_text_paused">알림 일시중지 — 설정된 시간대 없음</string>
 </resources>

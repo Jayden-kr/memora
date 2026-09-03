@@ -32,5 +32,7 @@
     <string name="push_review_default_body">Time to review your cards!</string>
     <string name="push_service_channel_name">Push notification service</string>
     <string name="push_service_channel_desc">Background service for interval notifications</string>
-    <string name="push_service_text">%1$s, notifications every %2$d min</string>
+    <string name="push_service_text_active">%1$s, notifications every %2$d min</string>
+    <string name="push_service_text_idle">Notifications resume at %1$s</string>
+    <string name="push_service_text_paused">Notifications paused — no time range set</string>
 </resources>

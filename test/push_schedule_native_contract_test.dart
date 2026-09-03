@@ -1,21 +1,27 @@
 // 논리 테스트가 볼 수 없는 "구조적" 회귀만 막는 트립와이어. (자매 파일
 // test/lock_screen_native_contract_test.dart와 같은 방식 — _stripComments/
-// _kotlinFunctionBody 헬퍼도 그대로 재사용한다.)
+// _braceBalancedBodyFrom 헬퍼도 그대로 재사용한다.)
 //
-// 여기서 지키는 5개 불변식은 전부 값이 아니라 코드의 "모양"에 관한 것이라, 어떤
-// 단위 테스트로도 잡히지 않는다. 각각이 실제로 이 기능을 망가뜨릴 수 있는, 그럴듯한
-// "정리/단순화" 리팩터가 원인이 된다:
-// 1. timingKey 대입식이 scheduleEnabled/정규화된 CSV를 빼먹으면, 슬롯만 편집해서
-//    저장해도 "타이밍 변경 없음"으로 오판돼 실행 중이던 타이머가 새 스케줄을
-//    영영 반영하지 못한다.
-// 2. fireIfInRange의 마스터창 판정(inMasterWindow)이 사라지면 시간 밖에서도
-//    알림이 발사된다.
-// 3. TICK의 intervalMs 계산이 raw intervalMin으로 되돌아가면, 슬롯의 간격
-//    오버라이드가 조용히 무시된다(폴더만 바뀌고 간격은 절대 안 바뀜).
+// v1.3.9 재설계로 다음 불변식들이 새로 생기거나 반전됐다:
+// 1. timingKey는 "v2:" 프리픽스 + canonicalCsv(=encode(parse(rulesCsvRaw))) 여야 한다.
+//    "v2:" 프리픽스가 없으면 업데이트 직후 prefs에 남은 구 timingKey
+//    ("$intervalMin:$startTotal:..." 형식)와 우연히 충돌할 위험이 있다.
+// 2. TICK 분기는 activeRule(now, rules)로 활성 규칙을 구하고, 있으면 그 intervalMin으로
+//    다음 알람을 잡고 fire(rule)로 발화해야 한다. 없으면(gap) minutesUntilNextStart 기반
+//    대기만 하고 발화하지 않는다 — "규칙에 안 걸리면 무음"이 이 재설계의 핵심이다.
+// 3. (반전) 메인 설정 분기도 이제 activeRule(now, rules)를 호출해야 한다 — 이전 설계의
+//    "메인 분기는 전역 intervalMin 기준을 유지한다(슬롯 조회 안 함)"는 전역 인터벌
+//    개념 자체가 사라지면서 폐기됐다.
 // 4. PushSchedule.kt가 FolderSchedule.slotContains 위임을 잃고 구간 포함 판정을
 //    복제/변형하면, 반열림·자정랩 같은 미묘한 규칙이 두 파일에서 갈라질 수 있다.
 // 5. FolderSchedule.kt(잠금화면)에 PushSchedule 관련 문자열이 스며들면 두 기능이
 //    한 파일에서 결합되기 시작했다는 신호 — "절대 하지 말 것"으로 명시된 오염.
+// 6. 삭제된 마스터창/전역값 개념(intervalMin/startTotal/endTotal/folderId 필드,
+//    inMasterWindow/effectiveIntervalMin/effectiveFolderId/activeSlotNow/fireIfInRange
+//    함수, PushSchedule.Slot/INHERIT/resolveFolderId/resolveIntervalMin/MAX_SLOTS)가
+//    되살아나지 않아야 한다.
+// 7. Dart _startPushService의 MethodChannel 페이로드는 rulesCsv만 보내고 startTotal 류의
+//    옛 필드는 보내지 않아야 한다.
 
 import 'dart:io';
 
@@ -73,14 +79,6 @@ String _stripComments(String src) {
   return out.toString();
 }
 
-/// `fun <name>(` 부터 중괄호 균형이 맞을 때까지의 본문을 잘라낸다.
-String _kotlinFunctionBody(String source, String name) {
-  final start = source.indexOf('fun $name(');
-  expect(start, greaterThanOrEqualTo(0),
-      reason: 'Kotlin 함수 $name 을 찾지 못했다. 이름이 바뀌었다면 이 테스트도 함께 고칠 것.');
-  return _braceBalancedBodyFrom(source, start);
-}
-
 /// [marker] 문자열이 처음 등장하는 지점부터 시작해, 그 뒤 첫 '{'부터 중괄호
 /// 균형이 맞을 때까지의 블록을 잘라낸다. 함수 이름이 아니라 `if (...)` 같은
 /// 조건문 블록을 잘라낼 때 쓴다.
@@ -115,10 +113,12 @@ String _pushSchedule() =>
     _read('android/app/src/main/kotlin/com/henry/memora/PushSchedule.kt');
 String _folderSchedule() =>
     _read('android/app/src/main/kotlin/com/henry/memora/FolderSchedule.kt');
+String _notificationService() =>
+    _read('lib/services/notification_service.dart');
 
 void main() {
-  group('네이티브 계약 트립와이어 — 푸시 알림 시간대 스케줄', () {
-    test('timingKey 대입식에 scheduleEnabled와 정규화된 스케줄 CSV 변수가 둘 다 등장해야 한다', () {
+  group('네이티브 계약 트립와이어 — 푸시 알림 시간대 규칙(v1.3.9)', () {
+    test('timingKey 대입식에 "v2:" 프리픽스와 canonicalCsv가 등장해야 한다', () {
       final pushServiceSource = _pushService();
       final lines = pushServiceSource
           .split('\n')
@@ -126,18 +126,15 @@ void main() {
           .toList();
       expect(lines, isNotEmpty, reason: 'timingKey 대입식을 찾지 못했다.');
       for (final line in lines) {
-        expect(line.contains('scheduleEnabled'), isTrue, reason: '''
-timingKey 대입식이 scheduleEnabled를 포함하지 않는다:
+        expect(line.contains('"v2:'), isTrue, reason: '''
+timingKey 대입식에 "v2:" 프리픽스가 없다:
   ${line.trim()}
 
-scheduleEnabled/스케줄 CSV가 timingKey에서 빠지면, 슬롯만 편집해서 저장해도
-"타이밍 변경 없음"으로 오판돼(timingKey == savedTimingKey) 실행 중이던 타이머가
-새 스케줄을 영영 반영하지 못한다.
+이 프리픽스가 없으면 업데이트 직후 prefs에 남아있는 구 timingKey
+("\$intervalMin:\$startTotal:..." 형식)와 우연히 같은 문자열이 나와 충돌할 수 있다.
 ''');
-        // canonicalCsv(정규화된 CSV) 변수가 쓰여야 한다 — scheduleCsvRaw를 그대로 쓰면
-        // 공백/순서 차이로 편집할 때마다 불필요하게 타이머가 리셋된다.
-        expect(line.contains('canonicalCsv') || line.contains('Csv'), isTrue,
-            reason: 'timingKey 대입식에 스케줄 CSV 변수가 보이지 않는다: ${line.trim()}');
+        expect(line.contains('canonicalCsv'), isTrue,
+            reason: 'timingKey 대입식에 canonicalCsv 변수가 보이지 않는다: ${line.trim()}');
       }
     });
 
@@ -145,82 +142,74 @@ scheduleEnabled/스케줄 CSV가 timingKey에서 빠지면, 슬롯만 편집해�
       final pushServiceSource = _pushService();
       expect(
         pushServiceSource.contains(
-            'PushSchedule.encode(PushSchedule.parse(scheduleCsvRaw))'),
+            'PushSchedule.encode(PushSchedule.parse(rulesCsvRaw))'),
         isTrue,
         reason: '''
-canonicalCsv를 만드는 "encode(parse(raw))" 정규화 파이프라인을 찾지 못했다.
-원본 문자열(scheduleCsvRaw)을 그대로 timingKey에 쓰면 공백/순서 차이만으로도
+canonicalCsv를 만드는 "encode(parse(rulesCsvRaw))" 정규화 파이프라인을 찾지 못했다.
+원본 문자열(rulesCsvRaw)을 그대로 timingKey에 쓰면 공백/순서 차이만으로도
 불필요하게 타이머가 리셋된다.
 ''',
       );
     });
 
-    test('fireIfInRange 경로에 마스터창 판정(inMasterWindow)이 살아있어야 한다', () {
-      final body = _kotlinFunctionBody(_pushService(), 'fireIfInRange');
-      expect(body.contains('inMasterWindow('), isTrue, reason: '''
-fireIfInRange()가 더 이상 inMasterWindow()를 호출하지 않는다.
-
-이 판정이 없어지면 활성시간창(startTotal~endTotal) 밖에서도 알림이 발사된다 —
-시간대 슬롯 기능을 붙이기 전부터 있던 마스터 게이트가 무너지는 것이다.
-''');
-    });
-
-    test('inMasterWindow는 양끝 포함 판정을 유지해야 한다(반열림으로 "통일" 금지)', () {
-      final body = _kotlinFunctionBody(_pushService(), 'inMasterWindow');
-      expect(body.contains('..'), isTrue, reason: '''
-inMasterWindow()에서 양끝 포함 range 연산자(..)가 사라졌다.
-
-fireIfInRange의 "쏠지 말지"는 단일 범위라 경계 포함(..)이 맞고, PushSchedule.Slot
-쪽 반열림 판정과는 의도적으로 다르다 — 통일하지 말 것.
-''');
-    });
-
-    test('ACTION_TICK의 간격 계산은 raw intervalMin이 아니라 effectiveIntervalMin(slot)을 써야 한다',
-        () {
+    test('TICK 분기는 activeRule(now, rules)로 활성 규칙을 구하고 fire(rule)로 발화해야 한다', () {
       final tickBody =
           _ifBlockBody(_pushService(), 'if (intent?.action == ACTION_TICK)');
-      expect(tickBody.contains('effectiveIntervalMin(slot)'), isTrue, reason: '''
-TICK 분기의 intervalMs 계산이 effectiveIntervalMin(slot)을 쓰지 않는다.
+      expect(tickBody.contains('PushSchedule.activeRule(now, rules)'), isTrue,
+          reason: 'TICK 분기가 PushSchedule.activeRule(now, rules)로 활성 규칙을 구하지 않는다.');
+      expect(tickBody.contains('rule.intervalMin'), isTrue, reason: '''
+TICK 분기의 간격 계산이 rule.intervalMin을 쓰지 않는다.
 
-raw intervalMin(전역값)으로 되돌아가면 시간대 슬롯의 간격 오버라이드가 조용히
-무시된다 — 폴더는 바뀌어도 알림 간격은 절대 안 바뀐다.
+전역 intervalMin으로 되돌아가면 규칙별 간격 오버라이드가 조용히 무시된다.
 ''');
-      expect(tickBody.contains('activeSlotNow(now)'), isTrue, reason: '''
-TICK 분기가 activeSlotNow(now)로 현재 활성 슬롯을 구하지 않는다.
+      expect(tickBody.contains('fire(rule)'), isTrue, reason: '''
+TICK 분기가 fire(rule) 형태로 판정된 규칙을 발화 경로에 넘기지 않는다.
 ''');
-      expect(tickBody.contains('fireIfInRange(now, slot)'), isTrue, reason: '''
-TICK 분기가 fireIfInRange(now, slot) 형태로 판정된 슬롯을 발화 경로에 넘기지
-않는다 — 폴더가 즉시 전환되지 않는다.
+      expect(tickBody.contains('minutesUntilNextStart'), isTrue, reason: '''
+TICK 분기가 활성 규칙이 없을 때(gap) minutesUntilNextStart로 다음 재평가 시각을
+계산하지 않는다 — 이게 없으면 gap 진입 후 다음 규칙 시작을 영영 놓칠 수 있다.
 ''');
     });
 
-    test('메인 설정 분기는 전역 intervalMin 기준을 유지해야 한다(슬롯 조회 안 함)', () {
-      // "타이머 유지"/"새로 시작" 분기(if (wasRunning && timingKey == savedTimingKey) 이후)는
-      // 의도적으로 슬롯을 조회하지 않는다 — timingKey가 바뀌면 이 분기 자체가
-      // (savedTimingKey 불일치로) "새로 시작" 쪽으로 빠지기 때문이다. 이 두 곳이
-      // activeSlotNow를 쓰기 시작하면 "메인 분기는 슬롯 조회 안 함" 설계가 깨진 것이다.
-      final pushServiceSource = _pushService();
-      final mainBranchStart =
-          pushServiceSource.indexOf('if (wasRunning && timingKey == savedTimingKey)');
-      expect(mainBranchStart, greaterThanOrEqualTo(0));
-      final openBrace = pushServiceSource.indexOf('{', mainBranchStart);
-      final mainBranchBody = _braceBalancedBodyFrom(pushServiceSource, mainBranchStart);
-      // if/else 전체(타이머 유지 + 새로 시작)를 포함하려면 else 블록도 봐야 하므로,
-      // if 블록이 실제로 끝나는 절대 위치(openBrace + 본문 길이) 뒤에서 else를 찾아
-      // 이어 붙인다. (if 본문 안에도 중첩된 "} else {"가 있어 단순 substring 탐색은
-      // 잘못된 지점을 집을 수 있다 — 절대 종료 위치를 명시적으로 계산해야 한다.)
-      final ifEndAbsolute = openBrace + mainBranchBody.length;
-      final elseIdx = pushServiceSource.indexOf('else', ifEndAbsolute);
-      expect(elseIdx, greaterThanOrEqualTo(0),
-          reason: 'if (wasRunning...) 블록 뒤에서 else를 찾지 못했다.');
-      final elseBody = _braceBalancedBodyFrom(pushServiceSource, elseIdx);
-      final combined = mainBranchBody + elseBody;
-      expect(combined.contains('activeSlotNow'), isFalse, reason: '''
-메인 설정 분기("타이머 유지"/"새로 시작")가 activeSlotNow를 호출하기 시작했다.
+    test('rule이 null이면(gap) TICK이 fire를 호출하지 않아야 한다(무음 동작 보증)', () {
+      final tickBody =
+          _ifBlockBody(_pushService(), 'if (intent?.action == ACTION_TICK)');
+      expect(tickBody.contains('if (rule != null) fire(rule)'), isTrue,
+          reason: 'TICK 분기가 "if (rule != null) fire(rule)" 형태로 gap일 때 발화를 건너뛰지 않는다.');
+    });
 
-설계상 이 분기는 슬롯을 조회하지 않는다 — timingKey가 스케줄 변경을 포함하도록
-이미 확장되어 있으므로, 스케줄이 바뀌면 이 분기 자체가 (savedTimingKey 불일치로)
-건너뛰어지고 TICK이 다음 발화 때 새 슬롯을 반영한다.
+    test('(반전) 메인 설정 분기도 이제 activeRule(now, rules)를 호출해야 한다', () {
+      // v1.3.8까지는 "메인 분기는 슬롯을 조회하지 않는다"가 불변식이었지만, 전역
+      // 인터벌 개념 자체가 사라지면서 이 트립와이어는 의도적으로 반전됐다 — 메인
+      // 분기도 지금 활성 규칙이 있는지에 따라 delayMs를 계산해야 첫 알람이 올바른
+      // 시각에 잡힌다.
+      //
+      // 주석은 _stripComments가 미리 제거하므로 마커로 쓸 수 없다 — 대신 파일
+      // 전체에서 "PushSchedule.activeRule(now, rules)" 호출 횟수를 센다. TICK
+      // 분기에 최소 1회(위 테스트가 이미 확인), 그리고 TICK 분기 밖(=메인 분기)에도
+      // 최소 1회 있어야 한다.
+      final pushServiceSource = _pushService();
+      final tickBody =
+          _ifBlockBody(pushServiceSource, 'if (intent?.action == ACTION_TICK)');
+      const needle = 'PushSchedule.activeRule(now, rules)';
+      int countOccurrences(String haystack) {
+        var count = 0;
+        var idx = 0;
+        while (true) {
+          idx = haystack.indexOf(needle, idx);
+          if (idx < 0) break;
+          count++;
+          idx += needle.length;
+        }
+        return count;
+      }
+
+      final totalCount = countOccurrences(pushServiceSource);
+      final tickCount = countOccurrences(tickBody);
+      expect(totalCount - tickCount, greaterThanOrEqualTo(1), reason: '''
+TICK 분기 밖(메인 설정 분기)에 activeRule(now, rules) 호출이 없다.
+
+전체 호출 횟수=$totalCount, TICK 분기 안 호출 횟수=$tickCount.
 ''');
     });
 
@@ -250,9 +239,60 @@ FolderSchedule.kt가 PushSchedule을 참조한다 — 두 기능이 결합되기
 ''');
     });
 
-    test('MAX_SLOTS는 5로 고정돼 있어야 한다(잠금화면의 50과 혼동 금지)', () {
-      expect(_pushSchedule().contains('const val MAX_SLOTS = 5'), isTrue,
-          reason: 'PushSchedule.MAX_SLOTS가 5가 아니게 바뀌었다(설계상 잠금화면의 50과 다름).');
+    test('MAX_RULES는 12로 고정돼 있어야 한다(잠금화면의 50과 혼동 금지)', () {
+      expect(_pushSchedule().contains('const val MAX_RULES = 12'), isTrue,
+          reason: 'PushSchedule.MAX_RULES가 12가 아니게 바뀌었다(설계상 잠금화면의 50과 다름).');
+    });
+
+    test('삭제된 마스터창/전역값 개념이 되살아나지 않아야 한다', () {
+      final pushServiceSource = _pushService();
+      final pushScheduleSource = _pushSchedule();
+      const deletedInService = [
+        'private var intervalMin',
+        'private var startTotal',
+        'private var endTotal',
+        'private var folderId',
+        'private var scheduleEnabled',
+        'fun inMasterWindow',
+        'fun effectiveIntervalMin',
+        'fun effectiveFolderId',
+        'fun activeSlotNow',
+        'fun fireIfInRange',
+      ];
+      for (final needle in deletedInService) {
+        expect(pushServiceSource.contains(needle), isFalse,
+            reason: 'PushNotificationService.kt에 삭제됐어야 할 "$needle"이 남아있다.');
+      }
+      const deletedInSchedule = [
+        'PushSchedule.INHERIT',
+        'class Slot',
+        'data class Slot',
+        'fun resolveFolderId',
+        'fun resolveIntervalMin',
+        'MAX_SLOTS',
+      ];
+      for (final needle in deletedInSchedule) {
+        expect(pushScheduleSource.contains(needle), isFalse,
+            reason: 'PushSchedule.kt에 삭제됐어야 할 "$needle"이 남아있다.');
+      }
+    });
+
+    test('Dart _startPushService 페이로드는 rulesCsv만 보내고 옛 필드(startTotal 등)를 보내지 않아야 한다', () {
+      final source = _notificationService();
+      expect(source.contains("'rulesCsv'"), isTrue,
+          reason: 'notification_service.dart의 startService 페이로드에 rulesCsv 키가 없다.');
+      const deletedPayloadKeys = [
+        "'startTotal'",
+        "'endTotal'",
+        "'intervalMin'",
+        "'folderId'",
+        "'scheduleEnabled'",
+        "'scheduleCsv'",
+      ];
+      for (final needle in deletedPayloadKeys) {
+        expect(source.contains(needle), isFalse,
+            reason: 'notification_service.dart에 삭제됐어야 할 페이로드 키 $needle이 남아있다.');
+      }
     });
   });
 }
