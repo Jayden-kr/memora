@@ -204,31 +204,17 @@ class _ImportScreenState extends State<ImportScreen> {
     });
   }
 
+  /// ⚠️ 예전엔 여기 스코프에 클로저 변수로 `TextEditingController`를 만들고
+  /// `try { showDialog(...) } finally { controller.dispose(); }`로 정리했었다 —
+  /// push_notification_settings.dart의 `_PushRuleDialog` 문서에 적힌 것과 동일한
+  /// '_dependents.isEmpty' 크래시 위험 패턴. 지금은 controller를
+  /// [_CreateFolderDialog]의 State가 소유해 dispose()가 Element unmount 시점에만
+  /// 불리도록 고쳤다.
   Future<void> _createNewLocalFolder() async {
     final t = AppLocalizations.of(context);
-    final controller = TextEditingController();
-    try {
     final name = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.homeNewFolderTitle),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(hintText: t.homeFolderNameHint),
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: Text(t.commonCreate),
-          ),
-        ],
-      ),
+      builder: (_) => const _CreateFolderDialog(),
     );
     if (name == null || name.isEmpty) return;
 
@@ -248,9 +234,6 @@ class _ImportScreenState extends State<ImportScreen> {
         await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     setState(() => _localFolders = localFolders);
-    } finally {
-      controller.dispose();
-    }
   }
 
   String _formatDuration(Duration d, AppLocalizations t) {
@@ -577,6 +560,58 @@ class _ImportScreenState extends State<ImportScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 로컬 폴더 생성 다이얼로그. [_ImportScreenState._createNewLocalFolder]가 사용한다.
+///
+/// StatefulWidget으로 만든 이유(중요): [TextEditingController]는 반드시
+/// `State.dispose()`에서만 정리해야 한다 — Future 콜백(`.whenComplete()`나
+/// `finally`)에 묶으면 Navigator.pop()이 반환하는 popped Future가 퇴장 애니메이션
+/// 완료보다 먼저 끝나버려서, 아직 화면에 남아 리빌드 중인 TextField가 이미 dispose된
+/// controller를 참조하는 경합이 생긴다(자세한 경위는
+/// push_notification_settings.dart의 `_PushRuleDialog` 문서 참고).
+class _CreateFolderDialog extends StatefulWidget {
+  const _CreateFolderDialog();
+
+  @override
+  State<_CreateFolderDialog> createState() => _CreateFolderDialogState();
+}
+
+class _CreateFolderDialogState extends State<_CreateFolderDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    // 여기서만 dispose한다 — Element가 실제로 unmount될 때(=다이얼로그 퇴장 애니메이션이
+    // 끝난 뒤)만 프레임워크가 이 메서드를 부르므로, 아직 마운트돼 리빌드 중인 TextField가
+    // dispose된 controller를 참조할 여지가 구조적으로 없다.
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(t.homeNewFolderTitle),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(hintText: t.homeFolderNameHint),
+        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(t.commonCancel),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: Text(t.commonCreate),
+        ),
+      ],
     );
   }
 }
