@@ -80,4 +80,20 @@ object BgContrast {
     ): Boolean = effectiveLuminance(
         relativeLuminance(bgColor), imageLuminance, imageAlpha, scrimAlpha
     ) < LUMINANCE_THRESHOLD
+
+    /**
+     * 6라운드 감사(2026-09-04)에서 분리: 배경 이미지 디코딩이 끝난 뒤 "auto" 판정이
+     * 뒤집혔으면 오버레이 뷰를 재생성해야 한다는 결정을 순수 함수로 뺐다
+     * (LockScreenService.applyBackgroundDrawable() 참고). 두 가지 불변조건을
+     * 이 함수 하나에 고정한다:
+     *  1) [bgTextMode]가 "light"/"dark"(강제 오버라이드)면 이미지 밝기와 무관하게
+     *     텍스트색이 이미 고정이므로, [previousDark]/[newDark]가 뭐든 재생성이
+     *     필요 없다 — 항상 false.
+     *  2) "auto"일 때만 [previousDark] != [newDark]가 실제 재생성 트리거다.
+     */
+    fun shouldRegenerateForPaletteFlip(
+        bgTextMode: String,
+        previousDark: Boolean,
+        newDark: Boolean
+    ): Boolean = bgTextMode == "auto" && previousDark != newDark
 }

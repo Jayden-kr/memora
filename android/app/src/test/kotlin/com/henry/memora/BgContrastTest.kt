@@ -179,4 +179,29 @@ class BgContrastTest {
         )
         assertTrue("blended=$blended should be roughly mid-range", blended in 0.4..0.6)
     }
+
+    // ─────────────────────────────────────────────────────────
+    // shouldRegenerateForPaletteFlip — 6라운드 감사 제안으로 분리한 재생성
+    // 트리거 결정. LockScreenService.applyBackgroundDrawable()의 디코딩 완료
+    // 콜백이 이 함수로 "auto 모드에서 판정이 실제로 뒤집혔을 때만" 뷰를
+    // 재생성한다.
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `forced light or dark mode never triggers regeneration regardless of flip`() {
+        // 6라운드가 재확인한 불변조건: 강제 모드는 이미지 밝기와 무관하게
+        // 텍스트색이 고정이니, previousDark/newDark가 뭐든 재생성 불필요.
+        assertFalse(BgContrast.shouldRegenerateForPaletteFlip("light", previousDark = true, newDark = false))
+        assertFalse(BgContrast.shouldRegenerateForPaletteFlip("light", previousDark = false, newDark = true))
+        assertFalse(BgContrast.shouldRegenerateForPaletteFlip("dark", previousDark = true, newDark = false))
+        assertFalse(BgContrast.shouldRegenerateForPaletteFlip("dark", previousDark = false, newDark = true))
+    }
+
+    @Test
+    fun `auto mode triggers regeneration only when the decision actually flips`() {
+        assertTrue(BgContrast.shouldRegenerateForPaletteFlip("auto", previousDark = true, newDark = false))
+        assertTrue(BgContrast.shouldRegenerateForPaletteFlip("auto", previousDark = false, newDark = true))
+        assertFalse(BgContrast.shouldRegenerateForPaletteFlip("auto", previousDark = true, newDark = true))
+        assertFalse(BgContrast.shouldRegenerateForPaletteFlip("auto", previousDark = false, newDark = false))
+    }
 }

@@ -1091,10 +1091,19 @@ class LockScreenService : Service() {
                 // 새로 만들 때)에서만 불린다. 그래서 판정이 실제로 뒤집혔을 때만 뷰를
                 // 재생성해서 반영한다(currentIndex는 안 건드림 — Stage 2b와 동일 규율).
                 // 안 뒤집혔으면(대부분의 경우) 배경 레이어만 교체하고 끝낸다.
+                //
+                // 6라운드 감사 제안 반영: "뒤집혔는지 + auto 모드인지"를
+                // BgContrast.shouldRegenerateForPaletteFlip()(순수함수)로 뽑아냈다 —
+                // "강제 light/dark 모드는 절대 재생성 트리거 안 함"이라는 불변조건이
+                // BgContrastTest.kt로 고정되어, 나중에 이 조건을 실수로 건드려도
+                // 테스트가 잡는다.
                 if (bgTextMode == "auto") {
                     val previousDark = appliedIsDarkPalette
                     applyPalette()
-                    if (appliedIsDarkPalette != previousDark) {
+                    if (BgContrast.shouldRegenerateForPaletteFlip(
+                            bgTextMode, previousDark, appliedIsDarkPalette
+                        )
+                    ) {
                         dismissOverlay()
                         showOverlayOnMainThread(resetIndex = false)
                         return@post
