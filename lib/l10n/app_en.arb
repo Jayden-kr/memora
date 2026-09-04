@@ -247,6 +247,10 @@
   "lockOrderSequential": "Sequential",
   "lockOrderRandom": "Random",
   "lockBgColor": "Background",
+  "lockBgCustomColor": "Custom color",
+  "lockBgHexLabel": "Hex code",
+  "lockBgOpacity": "Opacity",
+  "lockBgApply": "Apply",
 
   "lockScheduleEnable": "Time-based folder switching",
   "lockScheduleEnableSubtitle": "Show a different folder depending on the time of day",

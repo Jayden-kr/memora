@@ -6,6 +6,7 @@ import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/lock_screen_service.dart';
+import '../widgets/color_picker_dialog.dart';
 
 class LockScreenSettingsScreen extends StatefulWidget {
   const LockScreenSettingsScreen({super.key});
@@ -287,6 +288,19 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
   void _onDeleteSlotTapped(int index) {
     setState(() => _slots.removeAt(index));
+    _onSettingChanged();
+  }
+
+  // ─── 배경색 ───
+
+  Future<void> _openCustomColorPicker() async {
+    final result = await showColorPickerDialog(
+      context: context,
+      initialColor: _bgColor,
+    );
+    if (!mounted) return;
+    if (result == null) return;
+    setState(() => _bgColor = result);
     _onSettingChanged();
   }
 
@@ -663,30 +677,76 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Wrap(
               spacing: 12,
-              children: _bgColorPresets.map((color) {
-                final selected = _bgColor == color;
-                return GestureDetector(
-                  onTap: () {
-                    setState(() => _bgColor = color);
-                    _onSettingChanged();
-                  },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Color(color),
-                      shape: BoxShape.circle,
-                      border: selected
-                          ? Border.all(
-                              color: Theme.of(context).colorScheme.primary,
-                              width: 3)
-                          : Border.all(
-                              color: Theme.of(context).colorScheme.outline,
-                              width: 1),
+              runSpacing: 12,
+              children: [
+                // 현재 _bgColor가 6개 프리셋 중 어느 것과도 일치하지 않으면(=커스텀
+                // 색이 적용된 상태) 그 사실을 보여주는 별도 스와치.
+                if (!_bgColorPresets.contains(_bgColor))
+                  GestureDetector(
+                    onTap: _openCustomColorPicker,
+                    child: Tooltip(
+                      message: t.lockBgCustomColor,
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        padding: const EdgeInsets.all(2),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.primary,
+                            width: 3,
+                          ),
+                        ),
+                        child: ColorSwatchPreview(color: Color(_bgColor), size: 36),
+                      ),
                     ),
                   ),
-                );
-              }).toList(),
+                ..._bgColorPresets.map((color) {
+                  final selected = _bgColor == color;
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() => _bgColor = color);
+                      _onSettingChanged();
+                    },
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Color(color),
+                        shape: BoxShape.circle,
+                        border: selected
+                            ? Border.all(
+                                color: Theme.of(context).colorScheme.primary,
+                                width: 3)
+                            : Border.all(
+                                color: Theme.of(context).colorScheme.outline,
+                                width: 1),
+                      ),
+                    ),
+                  );
+                }),
+                Tooltip(
+                  message: t.lockBgCustomColor,
+                  child: GestureDetector(
+                    onTap: _openCustomColorPicker,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outline,
+                          width: 1,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.add,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 32),
