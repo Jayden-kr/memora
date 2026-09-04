@@ -73,8 +73,13 @@ class LockScreenService : Service() {
     // 4라운드 감사 수정: bgBitmap과 같은 키로 캐시되는 그 이미지의 평균 상대휘도(0..1).
     // "auto" 텍스트 모드가 단색 bgColor뿐 아니라 실제 합성된 화면(이미지+스크림)까지
     // 반영하는 데 쓴다(applyPalette() 참고). bgBitmapCacheKey가 지금 bgImagePath와
-    // 일치할 때만 유효하다 — 아직 디코딩 전(이미지 새로 고른 첫 글랜스)이면 null이라
-    // applyPalette()가 색상 전용으로 근사하고, 디코딩이 끝나는 다음 글랜스부터 정확해진다.
+    // 일치할 때만 유효하다 — 아직 디코딩 전(이미지를 방금 고른 뒤 최초 1회)이면
+    // null이라 applyPalette()가 색상 전용으로 근사한다. ⚠️5라운드 감사에서 발견:
+    // "디코딩이 끝나는 다음 글랜스부터 정확해진다"는 예전 주석은 틀렸다 — 화면
+    // 껐다켜기(글랜스)는 updateCardDisplay()만 돌아 텍스트 색을 절대 안 바꾼다.
+    // 그래서 applyBackgroundDrawable()의 디코딩 완료 콜백이 판정이 실제로 뒤집혔을
+    // 때 스스로 뷰 재생성을 트리거한다(appliedIsDarkPalette 비교) — "다음 글랜스"가
+    // 아니라 "디코딩이 끝나는 즉시"가 맞는 설명이다.
     @Volatile
     private var bgImageAvgLuminance: Double? = null
 
@@ -145,6 +150,16 @@ class LockScreenService : Service() {
     // 동일), 라이트 팔레트에서는 검정 계열 반투명으로 채운다.
     private var overlayFaint = Color.parseColor("#33FFFFFF")
     private var overlaySoft = Color.parseColor("#22FFFFFF")
+    // applyPalette()가 마지막으로 계산한 dark/light 여부. 5라운드 감사(2026-09-04)에서
+    // 발견: 위 색상 필드들은 applyPalette()가 값을 다시 채워도, 그 값을 실제 TextView에
+    // 입히는 곳은 createOverlayLayout()(뷰를 완전히 새로 만들 때)뿐이다. "글랜스"(화면
+    // 껐다 켜기, 오버레이는 유지)는 advanceCard()+updateCardDisplay()만 돌아서 색은 절대
+    // 안 건드린다 — 즉 배경 이미지 디코딩이 늦게 끝나 "auto" 판정이 뒤늦게 바뀌어도,
+    // 뷰가 재생성되기 전까진 화면엔 절대 반영 안 된다. 이 필드로 "지금 화면에 실제로
+    // 적용된 값"을 추적해서, applyBackgroundDrawable()의 디코딩 완료 콜백이 이 값과
+    // 새로 계산한 값이 달라졌을 때만 재생성을 스스로 트리거하게 한다.
+    @Volatile
+    private var appliedIsDarkPalette: Boolean = true
 
     // 하단 막대: 지렁이 울렁임 + 슬라이드 압축 모션
     @Volatile
@@ -444,6 +459,7 @@ class LockScreenService : Service() {
                 bgColor, currentImageAvgLuminanceOrNull(), bgImageAlpha, bgScrimAlpha
             )
         }
+        appliedIsDarkPalette = dark
         if (dark) {
             coralPrimary = Color.parseColor("#FF6B6B")
             coralLight = Color.parseColor("#FFA8A8")
@@ -468,9 +484,11 @@ class LockScreenService : Service() {
     /**
      * bgImagePath가 지금 화면 크기 기준으로 캐시된 bgBitmap(=bgBitmapCacheKey)과
      * 일치할 때만 그 평균 휘도를 반환한다. 아직 그 경로/화면크기로 디코딩된 적이
-     * 없으면(이미지를 방금 고른 첫 글랜스, 또는 화면 회전으로 캐시 키가 달라진 경우)
-     * null — applyPalette()가 이땐 색상 전용으로 근사하고, 디코딩이 끝나 캐시가
-     * 채워지는 다음 글랜스부터 이미지까지 반영된 정확한 판정을 쓴다.
+     * 없으면(이미지를 방금 고른 직후, 또는 화면 회전으로 캐시 키가 달라진 경우)
+     * null — applyPalette()가 이땐 색상 전용으로 근사한다. 디코딩이 끝나면
+     * applyBackgroundDrawable()의 콜백이 판정이 뒤집혔는지 스스로 확인해 필요할
+     * 때만 뷰를 재생성한다(appliedIsDarkPalette 참고) — "다음 글랜스"를 기다릴
+     * 필요 없다.
      */
     private fun currentImageAvgLuminanceOrNull(): Double? {
         val path = bgImagePath
@@ -1060,17 +1078,33 @@ class LockScreenService : Service() {
                 bgBitmap = decoded.bitmap
                 bgBitmapCacheKey = key
                 bgImageAvgLuminance = decoded.avgLuminance
-                // 이 글랜스의 팔레트는 이미 이미지 디코딩 전에 loadSettings()에서 계산돼
-                // 버렸다(색상 전용 근사) — 방금 캐시가 채워졌으니 다음 글랜스(=다음
-                // showOverlay() 호출)부터 이미지까지 반영된 정확한 판정을 쓴다.
+                // 지연 recycle — 그리기 파이프라인 완료 보장(loadImages와 동일 패턴).
+                // 재생성 여부와 무관하게 옛 비트맵은 이미 교체됐으니 먼저 처리한다.
+                if (old != null && old !== decoded.bitmap && !old.isRecycled) {
+                    mainHandler.post { if (!old.isRecycled) old.recycle() }
+                }
+
+                // ⚠️ 5라운드 감사 수정: "auto" 모드에서 방금 확보한 이미지 평균휘도가
+                // 실제로 명/암 판정을 뒤집을 수 있다. 그런데 이미 만들어진 TextView들의
+                // 색은 이 시점에 자동으로 안 바뀐다 — updateCardDisplay()는 텍스트
+                // 내용만 갱신하고, setTextColor()는 createOverlayLayout()(뷰를 완전히
+                // 새로 만들 때)에서만 불린다. 그래서 판정이 실제로 뒤집혔을 때만 뷰를
+                // 재생성해서 반영한다(currentIndex는 안 건드림 — Stage 2b와 동일 규율).
+                // 안 뒤집혔으면(대부분의 경우) 배경 레이어만 교체하고 끝낸다.
+                if (bgTextMode == "auto") {
+                    val previousDark = appliedIsDarkPalette
+                    applyPalette()
+                    if (appliedIsDarkPalette != previousDark) {
+                        dismissOverlay()
+                        showOverlayOnMainThread(resetIndex = false)
+                        return@post
+                    }
+                }
+
                 try {
                     root.background = composeBackgroundLayers(decoded.bitmap)
                 } catch (_: Throwable) {
                     // 조립 실패해도 ColorDrawable(bgColor)로 강등된 상태 유지.
-                }
-                // 지연 recycle — 그리기 파이프라인 완료 보장(loadImages와 동일 패턴).
-                if (old != null && old !== decoded.bitmap && !old.isRecycled) {
-                    mainHandler.post { if (!old.isRecycled) old.recycle() }
                 }
             }
         }
