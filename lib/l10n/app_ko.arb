@@ -413,7 +413,6 @@
   "lockBgHexLabel": "Hex 코드",
   "lockBgOpacity": "투명도",
   "lockBgApply": "적용",
-  "lockBgPreview": "미리보기",
   "lockBgTextMode": "텍스트 색상",
   "lockBgTextModeAuto": "자동",
   "lockBgTextModeLight": "밝게",

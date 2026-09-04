@@ -372,11 +372,18 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   /// lock_bg/ 디렉토리에서 [keepPath]가 아닌 파일을 전부 지운다("최대 1개만 유지"
   /// 불변식 강제). keepPath가 빈 문자열이면 전부 지운다. 실패해도 조용히 무시한다 —
   /// 다음에 이 화면을 열 때 다시 시도되므로 영구히 남지 않는다.
+  ///
+  /// ⚠️ 1라운드 감사(2026-09-04)에서 발견한 TOCTOU 레이스 방지: 이 fire-and-forget
+  /// 정리가 끝나기 전에 사용자가 새 이미지를 골라 복사하면(_pickBackgroundImage),
+  /// keepPath가 그 시점 기준 옛 값이라 방금 복사된 새 파일까지 지울 수 있었다.
+  /// _pickingBgImage가 세워지면(=선택이 진행 중이면) 그 파일 판단은 새 선택 흐름에
+  /// 맡기고 이 루프는 즉시 중단한다 — 지우다 만 파일은 다음 방문 때 다시 정리된다.
   Future<void> _cleanupStaleBgImages(String keepPath) async {
     try {
       final bgDir = await _bgImageDir();
       if (!await bgDir.exists()) return;
       await for (final entity in bgDir.list(followLinks: false)) {
+        if (_pickingBgImage) return;
         if (entity is! File) continue;
         if (keepPath.isNotEmpty && p.equals(entity.path, keepPath)) continue;
         try {

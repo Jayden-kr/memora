@@ -92,10 +92,10 @@ class PushNotificationServiceTest {
 
     @Test
     fun `guard blocks exclusion when card pool is at or below the danger threshold`() {
-        // 최근 5개를 기억하는데 폴더에 카드가 딱 6개(recentSize+1)뿐이면 제외 조건을
-        // 걸면 0건이 나올 수 있다 — 걸면 안 된다.
-        assertFalse(PushNotificationService.shouldExcludeRecentCards(totalCount = 6, recentSize = 5))
-        // 더 적어도(카드 <= 최근개수) 당연히 걸면 안 된다.
+        // 최근 5개를 기억하는데 폴더에 카드가 딱 5개(recentSize와 같음)뿐이면 전부
+        // 제외 대상이라 0건이 나올 수 있다 — 걸면 안 된다.
+        assertFalse(PushNotificationService.shouldExcludeRecentCards(totalCount = 5, recentSize = 5))
+        // 더 적어도(카드 < 최근개수) 당연히 걸면 안 된다.
         assertFalse(PushNotificationService.shouldExcludeRecentCards(totalCount = 3, recentSize = 5))
         assertFalse(PushNotificationService.shouldExcludeRecentCards(totalCount = 0, recentSize = 5))
     }
@@ -107,12 +107,21 @@ class PushNotificationServiceTest {
     }
 
     @Test
-    fun `guard boundary — exactly recentSize plus one is still blocked`() {
-        assertFalse(PushNotificationService.shouldExcludeRecentCards(totalCount = 6, recentSize = 5))
+    fun `guard boundary — exactly recentSize is still blocked`() {
+        // worst-case로 recentSize개 전부가 이 카드 5장 안에 있으면 제외 후 0건.
+        assertFalse(PushNotificationService.shouldExcludeRecentCards(totalCount = 5, recentSize = 5))
     }
 
     @Test
-    fun `guard boundary — one more than recentSize plus one is allowed`() {
+    fun `guard boundary — exactly recentSize plus one is allowed`() {
+        // worst-case로 제외해도 1건은 남는다 — 1라운드 감사에서 발견된 off-by-one 수정:
+        // 예전엔 이 경계에서 false였다(불필요하게 보수적 — 이 경계에서만 재출현 방지가
+        // 안 걸리는 구멍이었다).
+        assertTrue(PushNotificationService.shouldExcludeRecentCards(totalCount = 6, recentSize = 5))
+    }
+
+    @Test
+    fun `guard boundary — well above recentSize is allowed`() {
         assertTrue(PushNotificationService.shouldExcludeRecentCards(totalCount = 7, recentSize = 5))
     }
 }

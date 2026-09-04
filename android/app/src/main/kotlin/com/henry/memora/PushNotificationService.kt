@@ -59,12 +59,20 @@ class PushNotificationService : Service() {
         internal fun encodeRecentIds(ids: List<Int>): String = ids.joinToString(",")
 
         /**
-         * 직전 카드 제외 조건을 걸어도 안전한지 판정. 대상 범위의 카드 총 개수
-         * ([totalCount])가 (최근 카드 개수([recentSize]) + 1) 이하면 제외 조건을 걸 경우
-         * 0건이 나와 알림이 조용히 끊길 수 있으므로 false(제외 조건 없이 조회)를 반환한다.
+         * 직전 카드 제외 조건을 걸어도 안전한지 판정. [recentSize]개를 전부 제외해도
+         * 최소 1건은 남아야 하므로, 안전 조건은 (카드 총 개수 [totalCount]) > (최근 카드
+         * 개수 [recentSize]) — 즉 totalCount가 recentSize+1 이상이면 충분하다(그 경우
+         * worst-case로도 1건이 남는다). totalCount가 recentSize와 같거나 더 작으면
+         * 제외 조건을 걸 경우 0건이 나와 알림이 조용히 끊길 수 있으므로 false(제외
+         * 조건 없이 조회)를 반환한다.
+         *
+         * ⚠️ 1라운드 감사(2026-09-04)에서 발견: 예전엔 `totalCount > recentSize + 1`로
+         * 한 단계 더 보수적이었다 — 카드가 정확히 recentSize+1개일 때(예: 최근 5개
+         * 기억+카드 6개) 제외해도 1건이 남는데도 가드가 막아, 하필 이 재출현 방지
+         * 기능이 막으려던 그 상황(직전 카드가 바로 또 뜸)이 이 경계값에서만 빠져나갔다.
          */
         internal fun shouldExcludeRecentCards(totalCount: Int, recentSize: Int): Boolean =
-            recentSize > 0 && totalCount > recentSize + 1
+            recentSize > 0 && totalCount > recentSize
     }
 
     private var lang = "ko"
