@@ -70,6 +70,13 @@ class LockScreenService : Service() {
     private var bgBitmap: Bitmap? = null
     @Volatile
     private var bgBitmapCacheKey: String? = null
+    // 4라운드 감사 수정: bgBitmap과 같은 키로 캐시되는 그 이미지의 평균 상대휘도(0..1).
+    // "auto" 텍스트 모드가 단색 bgColor뿐 아니라 실제 합성된 화면(이미지+스크림)까지
+    // 반영하는 데 쓴다(applyPalette() 참고). bgBitmapCacheKey가 지금 bgImagePath와
+    // 일치할 때만 유효하다 — 아직 디코딩 전(이미지 새로 고른 첫 글랜스)이면 null이라
+    // applyPalette()가 색상 전용으로 근사하고, 디코딩이 끝나는 다음 글랜스부터 정확해진다.
+    @Volatile
+    private var bgImageAvgLuminance: Double? = null
 
     // 서비스 활성 상태 (Handler 콜백에서 체크)
     @Volatile
@@ -263,6 +270,7 @@ class LockScreenService : Service() {
         bgBitmap?.let { if (!it.isRecycled) it.recycle() }
         bgBitmap = null
         bgBitmapCacheKey = null
+        bgImageAvgLuminance = null
         fontRegular = null
         fontBold = null
         // 대기 중인 콜백 제거 → 서비스 GC 지연 방지
@@ -424,13 +432,17 @@ class LockScreenService : Service() {
      *
      * ⚠️ 회귀 기준: bgTextMode="auto" & bgColor=기본값(0xFF1A1A2E)이면 이 결과는
      * 오늘 하드코딩돼 있던 다크 팔레트 값과 완전히 동일해야 한다(BgContrastTest.kt,
-     * lock_screen_native_contract_test.dart가 함께 지킨다).
+     * lock_screen_native_contract_test.dart가 함께 지킨다). 이미지가 없으면(대부분의
+     * 기존 사용자) [currentImageAvgLuminanceOrNull]이 항상 null이라 이 조건은 그대로
+     * 성립한다.
      */
     private fun applyPalette() {
         val dark = when (bgTextMode) {
             "light" -> false
             "dark" -> true
-            else -> BgContrast.isDarkPalette(bgColor)
+            else -> BgContrast.isDarkPaletteEffective(
+                bgColor, currentImageAvgLuminanceOrNull(), bgImageAlpha, bgScrimAlpha
+            )
         }
         if (dark) {
             coralPrimary = Color.parseColor("#FF6B6B")
@@ -451,6 +463,22 @@ class LockScreenService : Service() {
             overlayFaint = Color.parseColor("#33000000")
             overlaySoft = Color.parseColor("#22000000")
         }
+    }
+
+    /**
+     * bgImagePath가 지금 화면 크기 기준으로 캐시된 bgBitmap(=bgBitmapCacheKey)과
+     * 일치할 때만 그 평균 휘도를 반환한다. 아직 그 경로/화면크기로 디코딩된 적이
+     * 없으면(이미지를 방금 고른 첫 글랜스, 또는 화면 회전으로 캐시 키가 달라진 경우)
+     * null — applyPalette()가 이땐 색상 전용으로 근사하고, 디코딩이 끝나 캐시가
+     * 채워지는 다음 글랜스부터 이미지까지 반영된 정확한 판정을 쓴다.
+     */
+    private fun currentImageAvgLuminanceOrNull(): Double? {
+        val path = bgImagePath
+        if (path.isEmpty()) return null
+        val dm = resources.displayMetrics
+        if (dm.widthPixels <= 0 || dm.heightPixels <= 0) return null
+        val key = bgCacheKeyFor(path, dm.widthPixels, dm.heightPixels)
+        return if (bgBitmapCacheKey == key) bgImageAvgLuminance else null
     }
 
     /**
@@ -1020,7 +1048,7 @@ class LockScreenService : Service() {
             mainHandler.post {
                 if (!isServiceActive || overlayView !== root || !root.isAttachedToWindow()) {
                     // 그 사이 오버레이가 dismiss/재생성됐다 — 이 결과는 더 이상 유효하지 않다.
-                    decoded?.let { if (!it.isRecycled) it.recycle() }
+                    decoded?.bitmap?.let { if (!it.isRecycled) it.recycle() }
                     return@post
                 }
                 if (decoded == null) {
@@ -1029,15 +1057,19 @@ class LockScreenService : Service() {
                     return@post
                 }
                 val old = bgBitmap
-                bgBitmap = decoded
+                bgBitmap = decoded.bitmap
                 bgBitmapCacheKey = key
+                bgImageAvgLuminance = decoded.avgLuminance
+                // 이 글랜스의 팔레트는 이미 이미지 디코딩 전에 loadSettings()에서 계산돼
+                // 버렸다(색상 전용 근사) — 방금 캐시가 채워졌으니 다음 글랜스(=다음
+                // showOverlay() 호출)부터 이미지까지 반영된 정확한 판정을 쓴다.
                 try {
-                    root.background = composeBackgroundLayers(decoded)
+                    root.background = composeBackgroundLayers(decoded.bitmap)
                 } catch (_: Throwable) {
                     // 조립 실패해도 ColorDrawable(bgColor)로 강등된 상태 유지.
                 }
                 // 지연 recycle — 그리기 파이프라인 완료 보장(loadImages와 동일 패턴).
-                if (old != null && old !== decoded && !old.isRecycled) {
+                if (old != null && old !== decoded.bitmap && !old.isRecycled) {
                     mainHandler.post { if (!old.isRecycled) old.recycle() }
                 }
             }
@@ -1055,9 +1087,35 @@ class LockScreenService : Service() {
         return LayerDrawable(arrayOf(ColorDrawable(bgColor), bmpDrawable, scrimDrawable))
     }
 
+    /** [decodeBackgroundBitmap] 성공 결과 — 화면크기 비트맵과 그 평균 상대휘도(0..1). */
+    private data class DecodedBackground(val bitmap: Bitmap, val avgLuminance: Double)
+
+    /**
+     * 성긴 그리드(16x16=256점)로 비트맵의 평균 상대휘도(0..1)를 근사한다. 전체
+     * 픽셀을 훑지 않아 화면 크기와 무관하게 비용이 일정하다 — decodeBackgroundBitmap이
+     * 이미 화면 크기로 다운스케일한 비트맵에 한 번만 호출하므로 충분히 싸다.
+     */
+    private fun averageLuminance(bitmap: Bitmap): Double {
+        val cols = 16
+        val rows = 16
+        var sum = 0.0
+        var count = 0
+        for (yi in 0 until rows) {
+            val y = (bitmap.height * (yi + 0.5) / rows).toInt().coerceIn(0, bitmap.height - 1)
+            for (xi in 0 until cols) {
+                val x = (bitmap.width * (xi + 0.5) / cols).toInt().coerceIn(0, bitmap.width - 1)
+                sum += BgContrast.relativeLuminance(bitmap.getPixel(x, y))
+                count++
+            }
+        }
+        return if (count > 0) sum / count else 0.5
+    }
+
     /**
      * 배경 이미지를 화면 픽셀 크기(screenW x screenH)로 다운샘플 + cover 스케일 +
-     * center-crop해서 RGB_565 비트맵 한 장으로 만든다. 반드시 bgHandler(백그라운드
+     * center-crop해서 RGB_565 비트맵 한 장으로 만들고, 그 평균 휘도까지 함께 계산한다
+     * (4라운드 감사 수정 — "auto" 텍스트 모드가 실제 이미지 밝기를 반영하는 데 쓴다,
+     * applyPalette()/currentImageAvgLuminanceOrNull() 참고). 반드시 bgHandler(백그라운드
      * 스레드)에서만 호출한다.
      *
      * 중간 비트맵을 최소화하기 위해(OOM 위험 축소) createScaledBitmap 등으로 여러 장을
@@ -1067,7 +1125,7 @@ class LockScreenService : Service() {
      * 실패(파일 없음/손상/OOM 등 Throwable 전부)하면 null을 반환한다 — 호출부가
      * 단색으로 조용히 강등한다.
      */
-    private fun decodeBackgroundBitmap(path: String, screenW: Int, screenH: Int): Bitmap? {
+    private fun decodeBackgroundBitmap(path: String, screenW: Int, screenH: Int): DecodedBackground? {
         return try {
             val file = java.io.File(path)
             if (!file.exists()) return null
@@ -1125,7 +1183,7 @@ class LockScreenService : Service() {
             val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
             canvas.drawBitmap(decoded, matrix, paint)
             decoded.recycle()
-            target
+            DecodedBackground(target, averageLuminance(target))
         } catch (_: Throwable) {
             // OutOfMemoryError는 Exception이 아니라 Error라 잡히지 않는다 — Throwable로
             // 잡아 디코딩 실패 한 건만 조용히 강등시키고 서비스/프로세스는 죽지 않게 한다.

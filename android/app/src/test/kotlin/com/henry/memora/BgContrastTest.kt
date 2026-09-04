@@ -96,4 +96,87 @@ class BgContrastTest {
             1e-9
         )
     }
+
+    // ─────────────────────────────────────────────────────────
+    // isDarkPaletteEffective / effectiveLuminance — 4라운드 감사 수정.
+    // "auto"가 단색뿐 아니라 배경 이미지+스크림까지 반영하는지.
+    // ─────────────────────────────────────────────────────────
+
+    private val darkDefault = 0xFF1A1A2E.toInt()
+
+    @Test
+    fun `no image (null luminance) behaves exactly like isDarkPalette — regression`() {
+        assertEquals(
+            BgContrast.isDarkPalette(darkDefault),
+            BgContrast.isDarkPaletteEffective(
+                darkDefault, imageLuminance = null, imageAlpha = 255, scrimAlpha = 0
+            )
+        )
+        val bright = 0xFFFFFFFF.toInt()
+        assertEquals(
+            BgContrast.isDarkPalette(bright),
+            BgContrast.isDarkPaletteEffective(
+                bright, imageLuminance = null, imageAlpha = 255, scrimAlpha = 0
+            )
+        )
+    }
+
+    @Test
+    fun `bright full-opacity image over dark background flips to light palette`() {
+        // 어두운 기본 배경(휘도 ~0.03) + 완전 불투명한 새하얀 이미지(휘도 1.0) +
+        // 스크림 없음 → 실제로 보이는 건 거의 흰 이미지다. dark 팔레트(흰 텍스트)를
+        // 그대로 쓰면 안 보인다.
+        assertFalse(
+            BgContrast.isDarkPaletteEffective(
+                darkDefault, imageLuminance = 1.0, imageAlpha = 255, scrimAlpha = 0
+            )
+        )
+    }
+
+    @Test
+    fun `image alpha 0 ignores image luminance entirely`() {
+        // 이미지가 완전 투명(alpha=0)이면 화면엔 안 보이니 bgColor만으로 판정해야
+        // 한다 — imageLuminance가 극단값이어도 결과가 바뀌면 안 된다.
+        assertEquals(
+            BgContrast.isDarkPalette(darkDefault),
+            BgContrast.isDarkPaletteEffective(
+                darkDefault, imageLuminance = 1.0, imageAlpha = 0, scrimAlpha = 0
+            )
+        )
+    }
+
+    @Test
+    fun `fully opaque black scrim forces dark palette regardless of image`() {
+        // 스크림이 완전 불투명한 검정(alpha=255)이면 그 위에 뭐가 있든 실제로
+        // 보이는 화면은 검정이다 — 밝은 이미지라도 dark 팔레트가 맞다.
+        assertTrue(
+            BgContrast.isDarkPaletteEffective(
+                bgColor = 0xFFFFFFFF.toInt(),
+                imageLuminance = 1.0,
+                imageAlpha = 255,
+                scrimAlpha = 255
+            )
+        )
+        assertEquals(
+            0.0,
+            BgContrast.effectiveLuminance(
+                bgColorLuminance = 1.0, imageLuminance = 1.0, imageAlpha = 255, scrimAlpha = 255
+            ),
+            1e-9
+        )
+    }
+
+    @Test
+    fun `partial image alpha blends toward image luminance`() {
+        // 어두운 배경(휘도 ~0) 위에 흰 이미지(휘도 1.0)를 50%만 올리면 대략
+        // 중간(~0.5)이어야 한다 — 정확한 배경휘도를 계산하지 않고 근사값으로
+        // 넉넉한 허용오차를 둔다.
+        val blended = BgContrast.effectiveLuminance(
+            bgColorLuminance = BgContrast.relativeLuminance(darkDefault),
+            imageLuminance = 1.0,
+            imageAlpha = 128,
+            scrimAlpha = 0
+        )
+        assertTrue("blended=$blended should be roughly mid-range", blended in 0.4..0.6)
+    }
 }

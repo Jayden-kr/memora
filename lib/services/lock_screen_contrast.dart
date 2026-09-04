@@ -22,5 +22,16 @@ double lockScreenRelativeLuminance(int argb) {
 }
 
 /// true면 배경이 어둡다 → 밝은(흰색 계열) 텍스트를 써야 한다.
+///
+/// ⚠️ 알려진 한계(4라운드 감사, 2026-09-04): 이 함수는 [bgColor] 단색만 본다.
+/// 네이티브(BgContrast.kt)는 배경 이미지+스크림까지 합성한 실제 화면 기준으로
+/// `isDarkPaletteEffective()`를 써서 더 정확하게 판정하도록 고쳐졌지만, 이
+/// Dart 함수(=설정화면 라이브 미리보기 [LockScreenPreview]가 쓴다)는 의도적으로
+/// 그대로 남겨뒀다 — 미리보기가 실제 파일을 디코딩해 평균 밝기를 구하려면
+/// 상당한 복잡도(비동기 디코딩+캐싱)가 추가되는데, 이 위젯은 애초에 "픽셀 단위
+/// 일치가 목적이 아니라 방향성만 맞으면 된다"고 설계됐다(lock_screen_preview.dart
+/// 문서 참고). 그 결과 "밝은 이미지를 낮은 스크림으로 올린 auto 모드"처럼 드문
+/// 조합에서는 미리보기와 실제 잠금화면의 텍스트 색이 잠깐 어긋날 수 있다 —
+/// 알고 있는 잔여 격차이지 놓친 게 아니다.
 bool isDarkPalette(int bgColor) =>
     lockScreenRelativeLuminance(bgColor) < kLockScreenLuminanceThreshold;
