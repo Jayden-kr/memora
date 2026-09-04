@@ -278,7 +278,6 @@
   "pushAllFolders": "All folders",
   "pushSendTest": "Send test notification",
   "pushTestSent": "Test notification sent.",
-  "pushSound": "Sound",
   "pushIntervalLabel": "Interval",
   "pushIntervalMinutes": "min",
   "pushExactAlarmTitle": "Exact alarm permission needed",
@@ -307,6 +306,7 @@
   "pushScheduleFolderEmpty": "No cards — sent from all folders instead",
   "pushScheduleActualRange": "Actually applies {ranges}",
   "pushScheduleNeverApplies": "Hidden by an earlier range; never applies",
+  "pushOrderRandomNote": "Cards are picked at random from the folder.",
 
   "cardListSearchHint": "Search...",
   "cardListSearchEmpty": "No matching cards.",

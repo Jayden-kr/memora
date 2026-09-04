@@ -22,7 +22,6 @@ class _PushNotificationSettingsScreenState
     extends State<PushNotificationSettingsScreen> with WidgetsBindingObserver {
   bool _enabled = false;
   List<Folder> _folders = [];
-  bool _soundEnabled = true;
   bool _loading = true;
   // 기본값 true — 실제 체크가 끝나기 전까지 경고 카드가 잠깐 보였다 사라지는 깜빡임 방지.
   bool _exactAlarmPermitted = true;
@@ -91,8 +90,6 @@ class _PushNotificationSettingsScreenState
     // 규칙을 조용히 지워버리기 때문. 문제가 있으면 화면에 빨갛게 보여줘서
     // (_buildPushRuleTile) 사용자가 직접 고치게 한다.
     _rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
-    final soundStr = settings[PushSchedule.settingSoundKey];
-    _soundEnabled = (soundStr ?? 'true').toLowerCase() != 'false';
 
     setState(() {
       _folders = folders;
@@ -117,8 +114,6 @@ class _PushNotificationSettingsScreenState
     try {
       await DatabaseHelper.instance.upsertSetting(
           PushSchedule.settingRulesKey, PushSchedule.encode(_rules));
-      await DatabaseHelper.instance.upsertSetting(
-          PushSchedule.settingSoundKey, _soundEnabled.toString());
       await NotificationService.rescheduleAll();
     } catch (e) {
       debugPrint('[PUSH_SETTINGS] global settings apply failed: $e');
@@ -226,8 +221,6 @@ class _PushNotificationSettingsScreenState
           .upsertSetting(_settingNotificationEnabled, 'false');
       await DatabaseHelper.instance
           .upsertSetting(PushSchedule.settingRulesKey, '');
-      await DatabaseHelper.instance.upsertSetting(
-          PushSchedule.settingSoundKey, _soundEnabled.toString());
       await NotificationService.rescheduleAll();
     } catch (e) {
       debugPrint('[PUSH_SETTINGS] last-rule delete apply failed: $e');
@@ -497,6 +490,13 @@ class _PushNotificationSettingsScreenState
 
                 ..._buildPushRulesSection(t),
                 const Divider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: Text(
+                    t.pushOrderRandomNote,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
 
                 ListTile(
                   title: Text(t.pushSendTest),
@@ -513,21 +513,6 @@ class _PushNotificationSettingsScreenState
                           );
                         }
                       : null,
-                ),
-                const Divider(),
-
-                ListTile(
-                  title: Text(t.pushSound),
-                  trailing: Transform.scale(
-                    scale: 0.8,
-                    child: Switch(
-                      value: _soundEnabled,
-                      onChanged: (v) {
-                        setState(() => _soundEnabled = v);
-                        _updateGlobalSettings();
-                      },
-                    ),
-                  ),
                 ),
               ],
             ),

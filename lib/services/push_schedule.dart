@@ -32,6 +32,8 @@ class PushSchedule {
   static const int defaultIntervalMin = 30;
 
   static const String settingRulesKey = 'push_rules';
+
+  /// v1.4.0에서 사운드 토글 제거됨. 기존 저장값을 지우지 않기 위해 키 이름만 예약해 둔다.
   static const String settingSoundKey = 'push_sound_enabled';
 
   /// rulesCsv("start:end:folderId:intervalMin,...") → 규칙 목록. 간격 필드를

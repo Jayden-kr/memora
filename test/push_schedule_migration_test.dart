@@ -209,38 +209,6 @@ void main() {
     });
   });
 
-  group('buildRules — soundEnabled', () {
-    test('알람의 sound_enabled==0이면 false로 보존', () {
-      final result = PushScheduleMigration.buildRules(
-        legacyScheduleCsv: null,
-        legacyScheduleEnabled: false,
-        alarms: [_intervalAlarm(soundEnabled: 0)],
-        notificationEnabled: true,
-      );
-      expect(result.soundEnabled, isFalse);
-    });
-
-    test('알람의 sound_enabled==1이면 true로 보존', () {
-      final result = PushScheduleMigration.buildRules(
-        legacyScheduleCsv: null,
-        legacyScheduleEnabled: false,
-        alarms: [_intervalAlarm(soundEnabled: 1)],
-        notificationEnabled: true,
-      );
-      expect(result.soundEnabled, isTrue);
-    });
-
-    test('알람이 없으면 기본값 true', () {
-      final result = PushScheduleMigration.buildRules(
-        legacyScheduleCsv: null,
-        legacyScheduleEnabled: false,
-        alarms: const [],
-        notificationEnabled: true,
-      );
-      expect(result.soundEnabled, isTrue);
-    });
-  });
-
   group('buildRules — 순수성', () {
     test('동일 입력으로 2회 호출해도 동일한 결과(부작용 없음)', () {
       final alarms = [_intervalAlarm(folderId: 5)];
@@ -256,7 +224,6 @@ void main() {
         alarms: alarms,
         notificationEnabled: true,
       );
-      expect(once.soundEnabled, twice.soundEnabled);
       expect(once.rules.length, twice.rules.length);
       for (var i = 0; i < once.rules.length; i++) {
         expect(once.rules[i].start, twice.rules[i].start);

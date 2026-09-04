@@ -39,9 +39,34 @@ class PushNotificationService : Service() {
         // 최대 1439를 반환할 수 있으므로, DST/시계 스큐/Doze 오차가 쌓여도 최악의 경우 1시간
         // 안에는 재평가하도록 캡을 씌운다.
         const val MAX_GAP_POLL_MIN = 60
+        // 직전 카드 재출현 방지에 기억해 두는 최근 카드 ID 최대 개수.
+        const val RECENT_CARD_LIMIT = 5
+
+        // ── 아래 세 함수는 Android API 의존성 0인 순수 로직이라 companion object에
+        // 둬서 인스턴스 생성 없이 JVM 유닛테스트가 가능하다(PushNotificationServiceTest.kt).
+
+        /**
+         * SharedPreferences의 recentCardIds CSV("id,id,...", 최근이 맨 앞)를 정수 목록으로
+         * 파싱. 어떤 입력에도 throw하지 않는다 — 빈 문자열/null/깨진 토큰은 조용히 무시하고,
+         * 최대 [RECENT_CARD_LIMIT]개까지만 취한다.
+         */
+        internal fun parseRecentIds(csv: String?): List<Int> {
+            if (csv.isNullOrEmpty()) return emptyList()
+            return csv.split(",").mapNotNull { it.trim().toIntOrNull() }.take(RECENT_CARD_LIMIT)
+        }
+
+        /** [parseRecentIds]의 역변환. */
+        internal fun encodeRecentIds(ids: List<Int>): String = ids.joinToString(",")
+
+        /**
+         * 직전 카드 제외 조건을 걸어도 안전한지 판정. 대상 범위의 카드 총 개수
+         * ([totalCount])가 (최근 카드 개수([recentSize]) + 1) 이하면 제외 조건을 걸 경우
+         * 0건이 나와 알림이 조용히 끊길 수 있으므로 false(제외 조건 없이 조회)를 반환한다.
+         */
+        internal fun shouldExcludeRecentCards(totalCount: Int, recentSize: Int): Boolean =
+            recentSize > 0 && totalCount > recentSize + 1
     }
 
-    private var soundEnabled = true
     private var lang = "ko"
     private var rules: List<PushSchedule.Rule> = emptyList()
 
@@ -209,8 +234,6 @@ class PushNotificationService : Service() {
 
         // 설정 읽기 (Flutter의 startService 호출, 또는 부팅 복원처럼 extras 없는 콜드스타트)
         val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-        soundEnabled = intent?.getBooleanExtra("soundEnabled", prefs.getBoolean("soundEnabled", true))
-            ?: prefs.getBoolean("soundEnabled", true)
         lang = AppLang.normalize(intent?.getStringExtra("lang") ?: prefs.getString("lang", null))
 
         // 규칙 CSV. hasExtra 패턴 — "전달 안 함=보존" vs "명시적으로 넘김(빈 문자열 포함)"을
@@ -251,7 +274,6 @@ class PushNotificationService : Service() {
 
         val editor = prefs.edit()
             .putString("scheduleCsv", canonicalCsv)
-            .putBoolean("soundEnabled", soundEnabled)
             .putString("timingKey", timingKey)
             .putString("lang", lang)
         if (hasFreshRulesFromIntent) {
@@ -468,7 +490,6 @@ class PushNotificationService : Service() {
      */
     private fun loadSettingsFromPrefs() {
         val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-        soundEnabled = prefs.getBoolean("soundEnabled", true)
         lang = prefs.getString("lang", "ko") ?: "ko"
         rules = PushSchedule.parse(prefs.getString("scheduleCsv", null))
         if (rules.isEmpty()) {
@@ -497,15 +518,48 @@ class PushNotificationService : Service() {
         }.start()
     }
 
-    /**
-     * cards 테이블에서 [folderIdFilter](null이면 전체)로 필터링한 랜덤 카드 1건을 조회.
-     * 반환: Triple(cardId, cardFolderId, question) — cardId<=0이면 조회 실패(0건).
-     */
-    private fun queryRandomCard(db: SQLiteDatabase, folderIdFilter: Int?): Triple<Int, Int, String> {
+    /** cards 테이블에서 [folderIdFilter](null이면 전체)로 필터링한 카드 총 개수. */
+    private fun countCards(db: SQLiteDatabase, folderIdFilter: Int?): Int {
         val where = if (folderIdFilter != null) "folder_id = ?" else null
         val args = if (folderIdFilter != null) arrayOf(folderIdFilter.toString()) else null
+        val cursor = db.query("cards", arrayOf("COUNT(*) AS cnt"), where, args, null, null, null)
+        cursor.use {
+            if (it.moveToFirst()) return it.getInt(it.getColumnIndexOrThrow("cnt"))
+        }
+        return 0
+    }
+
+    /**
+     * cards 테이블에서 [folderIdFilter](null이면 전체)로 필터링한 랜덤 카드 1건을 조회.
+     * [recentCardIds]에 담긴 카드는 가능하면 제외해 직전에 뜬 카드가 바로 다음에 또
+     * 뜨지 않게 한다 — 단, 대상 범위의 카드 총 개수가 (recentCardIds 크기 + 1) 이하면
+     * 제외 조건 없이 조회한다(그렇지 않으면 0건이 나와 알림이 조용히 끊긴다).
+     * 반환: Triple(cardId, cardFolderId, question) — cardId<=0이면 조회 실패(0건).
+     */
+    private fun queryRandomCard(
+        db: SQLiteDatabase,
+        folderIdFilter: Int?,
+        recentCardIds: List<Int> = emptyList()
+    ): Triple<Int, Int, String> {
+        val totalCount = countCards(db, folderIdFilter)
+        val applyExclusion = shouldExcludeRecentCards(totalCount, recentCardIds.size)
+
+        val whereClauses = mutableListOf<String>()
+        val args = mutableListOf<String>()
+        if (folderIdFilter != null) {
+            whereClauses.add("folder_id = ?")
+            args.add(folderIdFilter.toString())
+        }
+        if (applyExclusion) {
+            val placeholders = recentCardIds.joinToString(",") { "?" }
+            whereClauses.add("id NOT IN ($placeholders)")
+            args.addAll(recentCardIds.map { it.toString() })
+        }
+        val where = if (whereClauses.isNotEmpty()) whereClauses.joinToString(" AND ") else null
+        val whereArgs = if (args.isNotEmpty()) args.toTypedArray() else null
+
         val cursor = db.query("cards", arrayOf("id", "folder_id", "question"),
-            where, args, null, null, "RANDOM()", "1")
+            where, whereArgs, null, null, "RANDOM()", "1")
         cursor.use {
             if (it.moveToFirst()) {
                 val q = it.getString(it.getColumnIndexOrThrow("question"))
@@ -524,8 +578,13 @@ class PushNotificationService : Service() {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
             try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용 (별도 :push 프로세스)
 
-            // 랜덤 카드 조회 (규칙이 지정한 폴더 우선)
-            var (cardId, cardFolderId, question) = queryRandomCard(db, targetFolderId)
+            // 직전에 뜬 카드 재출현 방지용 최근 카드 ID 목록. push_notif_prefs는
+            // :push 프로세스(이 서비스)만 읽고 쓴다.
+            val pushPrefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+            val recentCardIds = parseRecentIds(pushPrefs.getString("recentCardIds", null))
+
+            // 랜덤 카드 조회 (규칙이 지정한 폴더 우선, 직전 카드들 제외)
+            var (cardId, cardFolderId, question) = queryRandomCard(db, targetFolderId, recentCardIds)
 
             // 카드 0건 폴백: 규칙이 가리키는 폴더가 삭제되었거나 카드가 비어 있으면
             // 전체 폴더로 1회 재조회 — 규칙 폴더가 무효해졌다고 알림 자체가 조용히
@@ -533,7 +592,7 @@ class PushNotificationService : Service() {
             // 결과가 같으므로 스킵.
             if (cardId <= 0 && targetFolderId != null) {
                 Log.w(TAG, "규칙 폴더($targetFolderId) 카드 없음, 전체 폴더로 재조회")
-                val fallback = queryRandomCard(db, null)
+                val fallback = queryRandomCard(db, null, recentCardIds)
                 cardId = fallback.first
                 cardFolderId = fallback.second
                 question = fallback.third
@@ -584,12 +643,14 @@ class PushNotificationService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
 
-            if (!soundEnabled) {
-                builder.setSilent(true)
-            }
-
             nm?.notify(notifId, builder.build())
             Log.d(TAG, "알림 표시 완료: cardId=$cardId, payload=$payload, body=$question")
+
+            // 발화 성공 후 recentCardIds 갱신: 새 카드를 맨 앞에 추가, 5개 초과분은 버림.
+            // 이 prefs는 :push 프로세스(이 서비스 자신)만 읽고 쓴다.
+            val updatedRecent = (listOf(cardId) + recentCardIds.filter { it != cardId })
+                .take(RECENT_CARD_LIMIT)
+            pushPrefs.edit().putString("recentCardIds", encodeRecentIds(updatedRecent)).apply()
         } catch (e: Exception) {
             Log.e(TAG, "알림 표시 실패", e)
         } finally {

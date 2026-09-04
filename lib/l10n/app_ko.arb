@@ -445,7 +445,6 @@
   "pushAllFolders": "전체 폴더",
   "pushSendTest": "테스트 알림 보내기",
   "pushTestSent": "테스트 알림을 보냈습니다.",
-  "pushSound": "알림음",
   "pushIntervalLabel": "간격",
   "pushIntervalMinutes": "분",
   "pushExactAlarmTitle": "정확한 시간 알림 권한이 필요합니다",
@@ -484,6 +483,7 @@
     }
   },
   "pushScheduleNeverApplies": "앞 시간대에 가려져 적용되지 않습니다",
+  "pushOrderRandomNote": "카드는 폴더 안에서 무작위로 선택됩니다.",
 
   "cardListSearchHint": "검색...",
   "cardListSearchEmpty": "검색 결과가 없습니다.",

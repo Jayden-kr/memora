@@ -102,7 +102,7 @@ class PushScheduleMigration {
   ///    폴더/30분). 아니면 빈 목록.
   ///
   /// 최종적으로 encode→decode 1회로 정규화(정렬+12개 컷+간격 재검증)한다.
-  static ({List<PushRule> rules, bool soundEnabled}) buildRules({
+  static ({List<PushRule> rules}) buildRules({
     required String? legacyScheduleCsv,
     required bool legacyScheduleEnabled,
     required List<Map<String, dynamic>> alarms,
@@ -155,21 +155,15 @@ class PushScheduleMigration {
       ];
     }
 
-    bool soundEnabled = true;
-    if (alarms.isNotEmpty) {
-      final raw = alarms.first['sound_enabled'];
-      if (raw != null) soundEnabled = raw == 1;
-    }
-
     final normalized = PushSchedule.decode(PushSchedule.encode(rules));
-    return (rules: normalized, soundEnabled: soundEnabled);
+    return (rules: normalized);
   }
 
   /// settings에 아직 `push_rules`가 없고 마이그레이션이 실행된 적 없으면 1회 실행.
-  /// 순서: ① push_rules upsert → ② push_sound_enabled upsert → ③
-  /// push_rules_migrated='true' upsert (플래그는 반드시 마지막 — 중간에 죽어도
-  /// 다음 호출이 안전하게 재시도한다). encoded가 빈 문자열이어도 플래그는 쓴다
-  /// (안 그러면 매번 재시도해 알림 비활성 사용자에게 계속 불필요한 DB 쓰기가 생긴다).
+  /// 순서: ① push_rules upsert → ② push_rules_migrated='true' upsert (플래그는
+  /// 반드시 마지막 — 중간에 죽어도 다음 호출이 안전하게 재시도한다). encoded가 빈
+  /// 문자열이어도 플래그는 쓴다(안 그러면 매번 재시도해 알림 비활성 사용자에게 계속
+  /// 불필요한 DB 쓰기가 생긴다).
   static Future<void> migrateIfNeeded(Map<String, String> settings) async {
     final alreadyMigrated =
         (settings[migratedKey] ?? '').toLowerCase() == 'true';
@@ -201,8 +195,6 @@ class PushScheduleMigration {
     try {
       await DatabaseHelper.instance
           .upsertSetting(PushSchedule.settingRulesKey, encoded);
-      await DatabaseHelper.instance.upsertSetting(
-          PushSchedule.settingSoundKey, built.soundEnabled.toString());
       await DatabaseHelper.instance.upsertSetting(migratedKey, 'true');
     } catch (e) {
       debugPrint('[PUSH_MIGRATION] 저장 실패: $e');

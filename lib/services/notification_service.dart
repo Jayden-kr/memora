@@ -240,8 +240,7 @@ class NotificationService {
       debugPrint('[NOTIF] rescheduleAll: migrateIfNeeded 실패: $e');
     }
 
-    // 마이그레이션이 push_rules/push_sound_enabled/push_rules_migrated를 새로
-    // 썼을 수 있으므로 재조회.
+    // 마이그레이션이 push_rules/push_rules_migrated를 새로 썼을 수 있으므로 재조회.
     try {
       settings = await DatabaseHelper.instance.getAllSettings();
     } catch (e) {
@@ -274,12 +273,8 @@ class NotificationService {
       return;
     }
 
-    final soundEnabledStr = settings[PushSchedule.settingSoundKey];
-    final soundEnabled = (soundEnabledStr ?? 'true').toLowerCase() != 'false';
-
     await _startPushService(
       rulesCsv: PushSchedule.encode(rules),
-      soundEnabled: soundEnabled,
     );
   }
 
@@ -287,12 +282,10 @@ class NotificationService {
 
   static Future<void> _startPushService({
     required String rulesCsv,
-    required bool soundEnabled,
   }) async {
     try {
       await _pushNotifChannel.invokeMethod('startService', {
         'rulesCsv': rulesCsv,
-        'soundEnabled': soundEnabled,
         'lang': LocaleService.currentLanguageCode(),
       });
       debugPrint('[NOTIF] 서비스 시작: rules=$rulesCsv');

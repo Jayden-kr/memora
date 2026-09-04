@@ -224,7 +224,6 @@ class MainActivity : FlutterActivity() {
                         "startService" -> {
                             val args = call.arguments as? Map<String, Any?> ?: emptyMap()
                             val intent = Intent(this, PushNotificationService::class.java).apply {
-                                putExtra("soundEnabled", args["soundEnabled"] as? Boolean ?: true)
                                 putExtra("lang", (args["lang"] as? String) ?: "ko")
                                 // rulesCsv는 "인자가 있을 때만" 기록 — 없으면 서비스가 prefs의
                                 // 기존 값을 그대로 쓴다(LockScreenService.saveSettings와 동일
