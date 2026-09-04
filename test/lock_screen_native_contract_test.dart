@@ -246,6 +246,65 @@ scheduleEnabled/scheduleCsv와 같은 이유로 위험하다 — 기본값을 �
           reason: 'null 인 bgTextMode 를 인자 맵에서 빼는 가드가 사라졌다.');
     });
 
+    test(
+        'MainActivity.saveSettings 는 Stage 3 배경 이미지 키를 "인자가 있을 때만" 기록해야 한다',
+        () {
+      final source =
+          _read('android/app/src/main/kotlin/com/henry/memora/MainActivity.kt');
+      final body = _kotlinFunctionBody(source, 'saveSettings');
+
+      for (final key in ['bg_image_path', 'bg_image_alpha', 'bg_scrim_alpha']) {
+        final lines =
+            body.split('\n').where((l) => l.contains('"$key"')).toList();
+
+        expect(lines, isNotEmpty,
+            reason: 'saveSettings 가 $key 를 더 이상 기록하지 않는다. '
+                '설정 화면에서 배경 이미지를 바꿔도 저장되지 않는다.');
+
+        for (final line in lines) {
+          expect(line.contains('?.let'), isTrue, reason: '''
+saveSettings 가 $key 를 조건 없이 기록하고 있다:
+  ${line.trim()}
+
+scheduleEnabled/scheduleCsv/bg_text_mode와 정확히 같은 이유로 위험하다 —
+lib/main.dart 의 _restoreLockScreenService()는 앱을 켤 때마다 startService 를
+태우면서 배경 이미지 키를 싣지 않는다. 조건 없이 기록하면 앱을 껐다 켤 때마다
+사용자가 고른 배경 이미지/투명도/스크림이 조용히 초기화된다.
+
+`(settings["..."] as? T)?.let { editor.put...(...) }` 형태를 유지할 것.
+''');
+        }
+      }
+    });
+
+    test(
+        'Dart 쪽 Stage 3 배경 이미지 인자도 nullable 이어야 하고 null 이면 생략돼야 한다', () {
+      final source = _read('lib/services/lock_screen_service.dart');
+
+      // startService / saveSettings 두 곳
+      for (final decl in [
+        'String? bgImagePath,',
+        'int? bgImageAlpha,',
+        'int? bgScrimAlpha,',
+      ]) {
+        expect(decl.allMatches(source).length, 2, reason: '''
+$decl 선언이 nullable 이 아니거나(또는 개수가 2가 아니다).
+
+bgTextMode와 같은 이유로 위험하다 — 기본값을 가진 non-nullable 파라미터로 바꾸면
+컴파일은 통과하지만, 이 인자를 넘기지 않는 호출자(_restoreLockScreenService)가
+조용히 기본값을 저장해 사용자의 배경 이미지 설정을 지운다.
+''');
+      }
+      for (final guard in [
+        "if (bgImagePath != null) args['bgImagePath'] = bgImagePath;",
+        "if (bgImageAlpha != null) args['bgImageAlpha'] = bgImageAlpha;",
+        "if (bgScrimAlpha != null) args['bgScrimAlpha'] = bgScrimAlpha;",
+      ]) {
+        expect(guard.allMatches(source).length, 2,
+            reason: 'null 값을 인자 맵에서 빼는 가드가 사라졌다: $guard');
+      }
+    });
+
     test('BgContrast 대비 임계값이 Kotlin/Dart 양쪽에서 같은 값이어야 한다', () {
       final kotlinSource = _read(
           'android/app/src/main/kotlin/com/henry/memora/BgContrast.kt');

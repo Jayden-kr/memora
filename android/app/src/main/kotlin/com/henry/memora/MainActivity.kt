@@ -576,6 +576,11 @@ class MainActivity : FlutterActivity() {
         // 보존. main.dart의 _restoreLockScreenService()가 이 인자를 안 실어 보내므로
         // 무조건 기록하면 앱을 켤 때마다 사용자가 고른 텍스트 모드가 "auto"로 되돌아간다.
         (settings["bgTextMode"] as? String)?.let { editor.putString("bg_text_mode", it) }
+        // Stage 3(배경 이미지) 키도 동일한 이유로 "인자가 있을 때만 기록". bgImagePath는
+        // 빈 문자열도 유효한 값(=이미지 제거)이라 as? String으로 충분 — null일 때만 생략.
+        (settings["bgImagePath"] as? String)?.let { editor.putString("bg_image_path", it) }
+        (settings["bgImageAlpha"] as? Number)?.let { editor.putInt("bg_image_alpha", it.toInt()) }
+        (settings["bgScrimAlpha"] as? Number)?.let { editor.putInt("bg_scrim_alpha", it.toInt()) }
 
         // 서비스 kill 전 데이터 보존 보장 — apply() 대신 commit()
         // (LockScreenService.setServiceRunning():236, PushNotificationService와 동일 이유).
@@ -606,6 +611,9 @@ class MainActivity : FlutterActivity() {
             "reversed" to prefs.getBoolean("reversed", false),
             "bgColor" to prefs.getInt("bg_color", 0xFF1A1A2E.toInt()),
             "bgTextMode" to (prefs.getString("bg_text_mode", "auto") ?: "auto"),
+            "bgImagePath" to (prefs.getString("bg_image_path", "") ?: ""),
+            "bgImageAlpha" to prefs.getInt("bg_image_alpha", 255),
+            "bgScrimAlpha" to prefs.getInt("bg_scrim_alpha", 102),
             "scheduleEnabled" to prefs.getBoolean("schedule_enabled", false),
             "scheduleCsv" to (prefs.getString("folder_schedule", "") ?: "")
         )

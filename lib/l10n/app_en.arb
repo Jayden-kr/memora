@@ -256,6 +256,12 @@
   "lockBgTextModeAuto": "Auto",
   "lockBgTextModeLight": "Light",
   "lockBgTextModeDark": "Dark",
+  "lockBgImage": "Background image",
+  "lockBgImagePick": "Choose image",
+  "lockBgImageRemove": "Remove",
+  "lockBgImageOpacity": "Image opacity",
+  "lockBgScrimOpacity": "Darken overlay",
+  "lockBgImagePickFail": "Couldn't load the image",
   "lockPreviewSampleQuestion": "What is the capital of France?",
   "lockPreviewSampleAnswer": "Paris",
 

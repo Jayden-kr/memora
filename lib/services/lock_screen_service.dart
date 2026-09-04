@@ -69,7 +69,7 @@ class LockScreenSchedule {
   static List<List<int>> _segments(LockScreenSlot s) {
     if (s.start < s.end) {
       return [
-        [s.start, s.end]
+        [s.start, s.end],
       ];
     }
     if (s.start > s.end) {
@@ -195,6 +195,9 @@ class LockScreenService {
     bool? scheduleEnabled,
     String? scheduleCsv,
     String? bgTextMode,
+    String? bgImagePath,
+    int? bgImageAlpha,
+    int? bgScrimAlpha,
   }) async {
     try {
       final args = <String, dynamic>{
@@ -205,14 +208,17 @@ class LockScreenService {
         'reversed': reversed,
         'bgColor': bgColor,
       };
-      // scheduleEnabled/scheduleCsv/bgTextMode 는 null이면 인자에 아예 넣지 않는다 —
-      // 네이티브가 기존 저장값을 그대로 보존하게 하려는 의도. main.dart의 앱 시작
-      // 복원 경로(_restoreLockScreenService)가 이 파라미터들을 생략하고 호출하므로,
-      // 여기 기본값을 주면 매 앱 실행마다 사용자의 시간대 스케줄/텍스트 모드가
-      // 조용히 사라진다.
+      // scheduleEnabled/scheduleCsv/bgTextMode/bg이미지 3종은 null이면 인자에 아예
+      // 넣지 않는다 — 네이티브가 기존 저장값을 그대로 보존하게 하려는 의도.
+      // main.dart의 앱 시작 복원 경로(_restoreLockScreenService)가 이 파라미터들을
+      // 생략하고 호출하므로, 여기 기본값을 주면 매 앱 실행마다 사용자의 시간대
+      // 스케줄/텍스트 모드/배경 이미지가 조용히 사라진다.
       if (scheduleEnabled != null) args['scheduleEnabled'] = scheduleEnabled;
       if (scheduleCsv != null) args['scheduleCsv'] = scheduleCsv;
       if (bgTextMode != null) args['bgTextMode'] = bgTextMode;
+      if (bgImagePath != null) args['bgImagePath'] = bgImagePath;
+      if (bgImageAlpha != null) args['bgImageAlpha'] = bgImageAlpha;
+      if (bgScrimAlpha != null) args['bgScrimAlpha'] = bgScrimAlpha;
       await _channel.invokeMethod('startService', args);
     } catch (e) {
       debugPrint('[LockScreenService] startService error: $e');
@@ -239,6 +245,9 @@ class LockScreenService {
     bool? scheduleEnabled,
     String? scheduleCsv,
     String? bgTextMode,
+    String? bgImagePath,
+    int? bgImageAlpha,
+    int? bgScrimAlpha,
   }) async {
     try {
       final args = <String, dynamic>{
@@ -253,6 +262,9 @@ class LockScreenService {
       if (scheduleEnabled != null) args['scheduleEnabled'] = scheduleEnabled;
       if (scheduleCsv != null) args['scheduleCsv'] = scheduleCsv;
       if (bgTextMode != null) args['bgTextMode'] = bgTextMode;
+      if (bgImagePath != null) args['bgImagePath'] = bgImagePath;
+      if (bgImageAlpha != null) args['bgImageAlpha'] = bgImageAlpha;
+      if (bgScrimAlpha != null) args['bgScrimAlpha'] = bgScrimAlpha;
       await _channel.invokeMethod('saveSettings', args);
     } catch (e) {
       debugPrint('[LockScreenService] saveSettings error: $e');
@@ -312,7 +324,8 @@ class LockScreenService {
   ///   않는다 — 사용자가 새 기본 폴더를 고르면 그대로 되살아난다)
   /// - 비활성화/미실행 상태면: 설정만 갱신
   static Future<void> removeFoldersFromSettingsBatch(
-      List<int> folderIdsToRemove) async {
+    List<int> folderIdsToRemove,
+  ) async {
     if (folderIdsToRemove.isEmpty) return;
     try {
       final settings = await getSettings();
@@ -329,15 +342,18 @@ class LockScreenService {
         }
       }
       final removeSet = folderIdsToRemove.toSet();
-      final newFolderIds =
-          folderIds.where((id) => !removeSet.contains(id)).toList();
+      final newFolderIds = folderIds
+          .where((id) => !removeSet.contains(id))
+          .toList();
 
       // 삭제 대상 폴더를 가리키는 시간대 슬롯도 함께 정리 — 그렇지 않으면 기본
       // 폴더 목록에서만 사라지고 슬롯엔 삭제된 폴더 id가 영구히 남는다.
-      final slots =
-          LockScreenSchedule.decode(settings['scheduleCsv'] as String?);
-      final prunedSlots =
-          slots.where((s) => !removeSet.contains(s.folderId)).toList();
+      final slots = LockScreenSchedule.decode(
+        settings['scheduleCsv'] as String?,
+      );
+      final prunedSlots = slots
+          .where((s) => !removeSet.contains(s.folderId))
+          .toList();
       final scheduleChanged = prunedSlots.length != slots.length;
 
       if (newFolderIds.length == folderIds.length && !scheduleChanged) {
@@ -354,11 +370,11 @@ class LockScreenService {
           : null;
 
       final enabled = settings['enabled'] as bool? ?? false;
-      final finishedFilter = (settings['finishedFilter'] as num?)?.toInt() ?? -1;
+      final finishedFilter =
+          (settings['finishedFilter'] as num?)?.toInt() ?? -1;
       final sortOrder = settings['sortOrder'] as String? ?? 'sequence';
       final reversed = settings['reversed'] as bool? ?? false;
-      final bgColor =
-          (settings['bgColor'] as num?)?.toInt() ?? 0xFF1A1A2E;
+      final bgColor = (settings['bgColor'] as num?)?.toInt() ?? 0xFF1A1A2E;
 
       final running = await isRunning();
 
@@ -399,7 +415,8 @@ class LockScreenService {
       }
     } catch (e) {
       debugPrint(
-          '[LockScreenService] removeFoldersFromSettingsBatch error: $e');
+        '[LockScreenService] removeFoldersFromSettingsBatch error: $e',
+      );
     }
   }
 }

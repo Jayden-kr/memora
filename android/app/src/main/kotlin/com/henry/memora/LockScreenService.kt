@@ -6,6 +6,9 @@ import android.content.*
 import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.*
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
 import android.media.MediaPlayer
 import android.os.*
 import android.provider.Settings
@@ -59,6 +62,15 @@ class LockScreenService : Service() {
     private var overlayVisualKey: String? = null
     private var windowManager: WindowManager? = null
 
+    // Stage 3: 배경 이미지 비트맵 캐시. "경로+화면크기"가 안 바뀌는 한 재디코딩하지
+    // 않는다 — 글랜스마다(화면 켜고 끌 때마다) 오버레이가 dismiss/재생성되므로,
+    // 캐시가 없으면 매번 다시 디코딩해야 해서 배터리/OOM 위험이 커진다. onDestroy()
+    // 에서만 recycle한다(dismissOverlay()는 건드리지 않음 — 글랜스 간 캐시 유지 목적).
+    @Volatile
+    private var bgBitmap: Bitmap? = null
+    @Volatile
+    private var bgBitmapCacheKey: String? = null
+
     // 서비스 활성 상태 (Handler 콜백에서 체크)
     @Volatile
     private var isServiceActive = false
@@ -103,6 +115,10 @@ class LockScreenService : Service() {
     private var bgColor: Int = 0xFF1A1A2E.toInt()
     // "auto"(기본, BgContrast로 자동 판정) | "light" | "dark" — 강제 오버라이드.
     private var bgTextMode: String = "auto"
+    // Stage 3: 배경 이미지. 빈 문자열 = 이미지 없음(오늘과 동일한 단색 배경).
+    private var bgImagePath: String = ""
+    private var bgImageAlpha: Int = 255
+    private var bgScrimAlpha: Int = 102
     // 현재 cards가 어느 폴더 조합으로 로드됐는지. null="한 번도 로드 안 됨" — 기본 폴더가
     // 빈 리스트인 사용자와 구분되게 일부러 non-null 기본값을 쓰지 않는다.
     @Volatile private var loadedFolderIds: List<Int>? = null
@@ -242,6 +258,11 @@ class LockScreenService : Service() {
         setServiceRunning(false)
         unregisterScreenReceiver()
         dismissOverlay()
+        // 배경 이미지 캐시는 글랜스 간(오버레이 dismiss/재생성) 재사용을 위해 dismissOverlay()
+        // 에서는 recycle하지 않는다 — 서비스가 완전히 죽는 지금만 해제한다.
+        bgBitmap?.let { if (!it.isRecycled) it.recycle() }
+        bgBitmap = null
+        bgBitmapCacheKey = null
         fontRegular = null
         fontBold = null
         // 대기 중인 콜백 제거 → 서비스 GC 지연 방지
@@ -368,6 +389,9 @@ class LockScreenService : Service() {
         reversed = prefs.getBoolean("reversed", false)
         bgColor = prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
         bgTextMode = prefs.getString("bg_text_mode", "auto") ?: "auto"
+        bgImagePath = prefs.getString("bg_image_path", "") ?: ""
+        bgImageAlpha = prefs.getInt("bg_image_alpha", 255)
+        bgScrimAlpha = prefs.getInt("bg_scrim_alpha", 102)
         applyPalette()
         // 과거 버전이 prefs에 박아둔 고정 random_seed를 제거한다. 이 값이 남아 있으면
         // 매번 동일한 순열로 셔플돼 "랜덤인데 항상 같은 카드"가 떴다(이번 버그의 핵심 원인).
@@ -429,8 +453,13 @@ class LockScreenService : Service() {
         }
     }
 
-    /** 지금 로드된 bgColor/bgTextMode를 하나의 문자열로 묶는다 — overlayVisualKey와 비교용. */
-    private fun currentVisualKey(): String = "$bgColor|$bgTextMode"
+    /**
+     * 지금 로드된 배경 관련 설정(색/텍스트모드/이미지/투명도/스크림)을 하나의 문자열로
+     * 묶는다 — overlayVisualKey와 비교용. Stage 3: 이미지 필드도 포함해야 오버레이가
+     * 떠 있는 동안 이미지/투명도/스크림이 바뀌면 즉시 재생성된다(showOverlay() 참고).
+     */
+    private fun currentVisualKey(): String =
+        "$bgColor|$bgTextMode|$bgImagePath|$bgImageAlpha|$bgScrimAlpha"
 
     /**
      * 자정 기준 경과 분(0~1439). minSdk 24라 java.time 대신 Calendar 사용
@@ -763,9 +792,8 @@ class LockScreenService : Service() {
     private fun createOverlayLayout(): View {
         val density = resources.displayMetrics.density
 
-        val root = SwipeRootLayout(this).apply {
-            setBackgroundColor(bgColor)
-        }
+        val root = SwipeRootLayout(this)
+        applyBackgroundDrawable(root)
 
         // ─── Coral 프로그레스 바 ───
         val progressBar = View(this).apply {
@@ -933,6 +961,176 @@ class LockScreenService : Service() {
         root.excludedView = bottomContainer
         setupGestures(root)
         return root
+    }
+
+    // ───────────────────────────────────────────────────────
+    // Stage 3: 잠금화면 배경 이미지
+    // ───────────────────────────────────────────────────────
+
+    /** bgImagePath+화면크기로 만든 캐시 키. bgBitmapCacheKey와 비교해 재디코딩 여부를 정한다. */
+    private fun bgCacheKeyFor(path: String, screenW: Int, screenH: Int): String =
+        "$path|${screenW}x$screenH"
+
+    /**
+     * root의 배경을 설정한다. 항상 먼저 ColorDrawable(bgColor)를 동기로 세팅한다
+     * (이미지가 없거나, 아직 디코딩 전이거나, 디코딩이 실패했을 때의 회귀 기준 —
+     * 오늘과 완전히 동일한 단색 배경). bgImagePath가 비어 있으면 여기서 끝난다.
+     *
+     * 이미지가 있으면:
+     *  - 캐시(bgBitmap+bgBitmapCacheKey)가 지금 경로/화면크기와 일치하면 즉시(동기)
+     *    LayerDrawable로 교체한다 — 글랜스마다 재디코딩하지 않기 위한 캐시.
+     *  - 아니면 bgHandler(백그라운드 스레드)에서 디코딩한 뒤 메인 스레드에 반영한다.
+     *    이 시점엔 이미 addView()로 창에 붙어 있을 수 있으므로(loadImages와 동일 패턴),
+     *    콜백에서 "이 root가 여전히 살아있는 오버레이인지"(overlayView === root &&
+     *    isAttachedToWindow()) 확인한 뒤에만 적용한다 — 그 사이 오버레이가
+     *    dismiss/재생성됐으면(설정이 또 바뀌었거나 화면이 닫혔거나) 디코딩 결과를
+     *    버리고 비트맵을 recycle한다.
+     *
+     * ⚠️ ImageView 자식으로 붙이지 않는다 — collectBitmaps()가 ImageView drawable을
+     *    무조건 recycle하므로, 배경 비트맵을 ImageView에 넣으면 오버레이가 닫힐 때
+     *    recycle되고 다음 글랜스에서 recycled bitmap을 그리다 크래시한다. root의
+     *    background로만 붙인다.
+     */
+    private fun applyBackgroundDrawable(root: View) {
+        root.background = ColorDrawable(bgColor)
+        val path = bgImagePath
+        if (path.isEmpty()) return
+
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+        if (screenW <= 0 || screenH <= 0) return
+        val key = bgCacheKeyFor(path, screenW, screenH)
+
+        val cached = bgBitmap
+        if (cached != null && !cached.isRecycled && bgBitmapCacheKey == key) {
+            try {
+                root.background = composeBackgroundLayers(cached)
+            } catch (_: Throwable) {
+                // 조립 실패해도 이미 세팅된 ColorDrawable(bgColor)가 남아있다 — 단색으로 강등.
+            }
+            return
+        }
+
+        ensureBgThread()
+        val handler = bgHandler ?: return
+        handler.post {
+            if (!isServiceActive) return@post
+            val decoded = decodeBackgroundBitmap(path, screenW, screenH)
+            mainHandler.post {
+                if (!isServiceActive || overlayView !== root || !root.isAttachedToWindow()) {
+                    // 그 사이 오버레이가 dismiss/재생성됐다 — 이 결과는 더 이상 유효하지 않다.
+                    decoded?.let { if (!it.isRecycled) it.recycle() }
+                    return@post
+                }
+                if (decoded == null) {
+                    // 디코딩 실패(OOM 포함) — 이미 세팅된 ColorDrawable(bgColor)를 그대로 둔다.
+                    // 크래시보다 "이미지 없이 단색만"이 훨씬 낫다.
+                    return@post
+                }
+                val old = bgBitmap
+                bgBitmap = decoded
+                bgBitmapCacheKey = key
+                try {
+                    root.background = composeBackgroundLayers(decoded)
+                } catch (_: Throwable) {
+                    // 조립 실패해도 ColorDrawable(bgColor)로 강등된 상태 유지.
+                }
+                // 지연 recycle — 그리기 파이프라인 완료 보장(loadImages와 동일 패턴).
+                if (old != null && old !== decoded && !old.isRecycled) {
+                    mainHandler.post { if (!old.isRecycled) old.recycle() }
+                }
+            }
+        }
+    }
+
+    /** ColorDrawable(bgColor) + BitmapDrawable(alpha=bgImageAlpha) + ColorDrawable(스크림) 3겹. */
+    private fun composeBackgroundLayers(bitmap: Bitmap): LayerDrawable {
+        val bmpDrawable = BitmapDrawable(resources, bitmap).apply {
+            alpha = bgImageAlpha.coerceIn(0, 255)
+        }
+        val scrimDrawable = ColorDrawable(Color.BLACK).apply {
+            alpha = bgScrimAlpha.coerceIn(0, 255)
+        }
+        return LayerDrawable(arrayOf(ColorDrawable(bgColor), bmpDrawable, scrimDrawable))
+    }
+
+    /**
+     * 배경 이미지를 화면 픽셀 크기(screenW x screenH)로 다운샘플 + cover 스케일 +
+     * center-crop해서 RGB_565 비트맵 한 장으로 만든다. 반드시 bgHandler(백그라운드
+     * 스레드)에서만 호출한다.
+     *
+     * 중간 비트맵을 최소화하기 위해(OOM 위험 축소) createScaledBitmap 등으로 여러 장을
+     * 만들지 않고, 목적지 크기의 빈 RGB_565 비트맵에 Matrix로 스케일+이동해 Canvas로
+     * 한 번에 그린다 — 최대 2장(디코딩 원본 1장 + 목적지 1장)만 동시에 존재한다.
+     *
+     * 실패(파일 없음/손상/OOM 등 Throwable 전부)하면 null을 반환한다 — 호출부가
+     * 단색으로 조용히 강등한다.
+     */
+    private fun decodeBackgroundBitmap(path: String, screenW: Int, screenH: Int): Bitmap? {
+        return try {
+            val file = java.io.File(path)
+            if (!file.exists()) return null
+
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, boundsOpts)
+            val srcW = boundsOpts.outWidth
+            val srcH = boundsOpts.outHeight
+            if (srcW <= 0 || srcH <= 0) return null
+
+            // cover(화면을 완전히 덮는) 스케일에 필요한 최소 배율까지만 다운샘플한다 —
+            // 업샘플은 하지 않는다(inSampleSize는 다운샘플 전용).
+            var sampleSize = 1
+            while (srcW / (sampleSize * 2) >= screenW && srcH / (sampleSize * 2) >= screenH) {
+                sampleSize *= 2
+            }
+            // 안전망: 위 루프는 "두 변 다 화면보다 커야 계속 줄인다"는 cover 제약 때문에,
+            // 한쪽 변이 극단적으로 긴 이미지(예: 파노라마)에서는 짧은 변이 이미 화면보다
+            // 작아 전혀 못 줄어들 수 있다 — 그러면 긴 변이 그대로 디코딩돼 OOM 위험이
+            // 크다. 총 디코딩 픽셀 수가 예산을 넘으면 cover 화질을 희생해서라도 더
+            // 줄인다 — 크래시보다 살짝 확대(흐림)된 배경이 훨씬 낫다.
+            val maxDecodedPixels = 4096L * 4096L
+            while ((srcW.toLong() / sampleSize) * (srcH.toLong() / sampleSize) > maxDecodedPixels &&
+                sampleSize < 1 shl 16
+            ) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            val decoded = BitmapFactory.decodeFile(path, decodeOpts) ?: return null
+            if (decoded.width <= 0 || decoded.height <= 0) {
+                decoded.recycle()
+                return null
+            }
+
+            // cover 스케일 + center-crop을 Matrix+Canvas로 한 번에: 목적지 비트맵(화면
+            // 크기, RGB_565)에 그대로 그려 넣는다.
+            val scale = maxOf(
+                screenW.toFloat() / decoded.width,
+                screenH.toFloat() / decoded.height
+            )
+            val scaledW = decoded.width * scale
+            val scaledH = decoded.height * scale
+            val dx = (screenW - scaledW) / 2f
+            val dy = (screenH - scaledH) / 2f
+
+            val target = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.RGB_565)
+            val canvas = Canvas(target)
+            val matrix = Matrix().apply {
+                setScale(scale, scale)
+                postTranslate(dx, dy)
+            }
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+            canvas.drawBitmap(decoded, matrix, paint)
+            decoded.recycle()
+            target
+        } catch (_: Throwable) {
+            // OutOfMemoryError는 Exception이 아니라 Error라 잡히지 않는다 — Throwable로
+            // 잡아 디코딩 실패 한 건만 조용히 강등시키고 서비스/프로세스는 죽지 않게 한다.
+            null
+        }
     }
 
     private fun dp(value: Int): Int {

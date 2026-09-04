@@ -16,6 +16,11 @@ class AppConstants {
   // 이미지 저장 디렉토리
   static const String imageDir = 'images';
 
+  // 잠금화면 배경 이미지 저장 디렉토리. images/와 완전히 분리 —
+  // DatabaseHelper.cleanupOrphanMediaFiles()가 imageDir만 스캔하므로 이 디렉토리 안의
+  // 파일은 앱 시작 시 고아 정리 대상이 되지 않는다(카드가 참조하지 않아도 안전).
+  static const String lockBgImageDir = 'lock_bg';
+
   // .memk 호환 이미지 경로 prefix (레거시)
   static const String legacyImagePrefix =
       '/data/user/0/com.metastudiolab.memorize/files/image/';

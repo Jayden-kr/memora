@@ -1,11 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/lock_screen_service.dart';
+import '../utils/constants.dart';
 import '../widgets/color_picker_dialog.dart';
 import '../widgets/lock_screen_preview.dart';
 
@@ -23,13 +28,21 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   List<Folder> _folders = [];
   Set<int> _selectedFolderIds = {};
   int _finishedFilter = -1; // -1=전체, 0=암기중, 1=완료
-  String _sortOrder = 'sequence'; // sequence | newest | oldest | name_asc | random
+  String _sortOrder =
+      'sequence'; // sequence | newest | oldest | name_asc | random
   bool _reversed = false;
   int _bgColor = 0xFF1A1A2E;
   // "auto" | "light" | "dark" — LockScreenService(네이티브)의 applyPalette()와 동일 의미.
   String _bgTextMode = 'auto';
+  // Stage 3: 배경 이미지. 빈 문자열 = 이미지 없음. 절대경로, lock_bg/ 안에 최대 1개만
+  // 유지한다(images/와 분리 — DatabaseHelper.cleanupOrphanMediaFiles()가 스캔하지 않음).
+  String _bgImagePath = '';
+  int _bgImageAlpha = 255;
+  int _bgScrimAlpha = 102;
+  bool _pickingBgImage = false;
   bool _loading = true;
   bool _checkingOverlay = false;
+  final _picker = ImagePicker();
 
   static const _bgTextModeOptions = <String>['auto', 'light', 'dark'];
 
@@ -88,6 +101,18 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     // 번들 폴더 제외 (카드를 직접 갖지 않으므로 잠금화면에 부적합)
     final folders = allFolders.where((f) => !f.isBundle).toList();
     final settings = await LockScreenService.getSettings();
+
+    // Stage 3: 배경 이미지 경로가 가리키는 파일이 실제로 있는지 확인. 없으면(수동
+    // 삭제 등) 없는 파일을 계속 가리키지 않고 "이미지 없음"으로 취급한다.
+    var bgImagePath = (settings['bgImagePath'] as String?) ?? '';
+    if (bgImagePath.isNotEmpty && !await File(bgImagePath).exists()) {
+      bgImagePath = '';
+    }
+    // 방어적 정리: lock_bg/ 디렉토리에 "최대 1개만 유지" 불변식을 이 화면을 열 때마다
+    // 다시 강제한다 — 강제종료 등으로 교체 도중 파일이 두 개 남는 극히 드문 경우를
+    // 스스로 회복시킨다. fire-and-forget, 실패해도 무시(다음 방문 때 재시도).
+    unawaited(_cleanupStaleBgImages(bgImagePath));
+
     if (!mounted) return;
 
     setState(() {
@@ -113,10 +138,13 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       _reversed = settings['reversed'] as bool? ?? false;
       _bgColor = settings['bgColor'] as int? ?? 0xFF1A1A2E;
       final rawTextMode = settings['bgTextMode'];
-      _bgTextMode = rawTextMode is String &&
-              _bgTextModeOptions.contains(rawTextMode)
+      _bgTextMode =
+          rawTextMode is String && _bgTextModeOptions.contains(rawTextMode)
           ? rawTextMode
           : 'auto';
+      _bgImagePath = bgImagePath;
+      _bgImageAlpha = (settings['bgImageAlpha'] as num?)?.toInt() ?? 255;
+      _bgScrimAlpha = (settings['bgScrimAlpha'] as num?)?.toInt() ?? 102;
       _scheduleEnabled = settings['scheduleEnabled'] as bool? ?? false;
       // NOTE: folderIds와 달리, 존재하지 않는 폴더를 가리키는 슬롯을 여기서 걸러
       // 내지 않는다 — getAllFolders()가 어떤 이유로든 일부만 반환하면 그 필터가
@@ -185,6 +213,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         scheduleEnabled: _scheduleEnabled,
         scheduleCsv: scheduleCsv,
         bgTextMode: _bgTextMode,
+        bgImagePath: _bgImagePath,
+        bgImageAlpha: _bgImageAlpha,
+        bgScrimAlpha: _bgScrimAlpha,
       );
     } else {
       // 설정만 저장하고 서비스 중지
@@ -198,6 +229,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         scheduleEnabled: _scheduleEnabled,
         scheduleCsv: scheduleCsv,
         bgTextMode: _bgTextMode,
+        bgImagePath: _bgImagePath,
+        bgImageAlpha: _bgImageAlpha,
+        bgScrimAlpha: _bgScrimAlpha,
       );
       await LockScreenService.stopService();
     }
@@ -212,9 +246,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       // 폴더가 아예 없으면 활성화 불가
       if (!mounted) return;
       final t = AppLocalizations.of(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t.homeNoFolderFirst)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(t.homeNoFolderFirst)));
       return;
     }
     setState(() => _enabled = value);
@@ -278,9 +312,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   Future<void> _onAddSlotTapped() async {
     if (_slots.length >= LockScreenSchedule.maxSlots) {
       final t = AppLocalizations.of(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(t.lockScheduleMaxReached)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(t.lockScheduleMaxReached)));
       return;
     }
     final result = await _showSlotDialog();
@@ -328,6 +362,91 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     _onSettingChanged();
   }
 
+  // ─── 배경 이미지 ───
+
+  Future<Directory> _bgImageDir() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return Directory(p.join(dir.path, AppConstants.lockBgImageDir));
+  }
+
+  /// lock_bg/ 디렉토리에서 [keepPath]가 아닌 파일을 전부 지운다("최대 1개만 유지"
+  /// 불변식 강제). keepPath가 빈 문자열이면 전부 지운다. 실패해도 조용히 무시한다 —
+  /// 다음에 이 화면을 열 때 다시 시도되므로 영구히 남지 않는다.
+  Future<void> _cleanupStaleBgImages(String keepPath) async {
+    try {
+      final bgDir = await _bgImageDir();
+      if (!await bgDir.exists()) return;
+      await for (final entity in bgDir.list(followLinks: false)) {
+        if (entity is! File) continue;
+        if (keepPath.isNotEmpty && p.equals(entity.path, keepPath)) continue;
+        try {
+          await entity.delete();
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  /// 갤러리에서 이미지를 골라 lock_bg/에 다운스케일 저장하고 이전 파일을 지운다.
+  /// 원본을 그대로 저장하지 않는다 — pickImage의 maxWidth/maxHeight/imageQuality가
+  /// 이미 디코딩 부담과 디스크 사용량을 줄여서 반환한다.
+  Future<void> _pickBackgroundImage() async {
+    if (_pickingBgImage) return;
+    _pickingBgImage = true;
+    try {
+      final XFile? picked = await _picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1440,
+        maxHeight: 2960,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
+
+      final bgDir = await _bgImageDir();
+      try {
+        if (!await bgDir.exists()) {
+          await bgDir.create(recursive: true);
+        }
+      } catch (e) {
+        if (!await bgDir.exists()) rethrow;
+      }
+
+      final ext = p.extension(picked.path);
+      final fileName =
+          'bg_${DateTime.now().millisecondsSinceEpoch}${ext.isNotEmpty ? ext : '.jpg'}';
+      final destPath = p.join(bgDir.path, fileName);
+      await File(picked.path).copy(destPath);
+
+      // 복사가 끝난 뒤에만 이전 파일을 지운다 — 복사가 실패해도 이전 배경을 잃지 않는다.
+      final previousPath = _bgImagePath;
+      if (!mounted) {
+        // 화면이 이미 닫혔다 — 새로 저장한 파일은 다음 방문 시 _cleanupStaleBgImages가 정리.
+        return;
+      }
+      setState(() => _bgImagePath = destPath);
+      _onSettingChanged();
+      if (previousPath.isNotEmpty && previousPath != destPath) {
+        File(previousPath).delete().ignore();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final t = AppLocalizations.of(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(t.lockBgImagePickFail)));
+    } finally {
+      _pickingBgImage = false;
+    }
+  }
+
+  void _removeBackgroundImage() {
+    final previousPath = _bgImagePath;
+    setState(() => _bgImagePath = '');
+    _onSettingChanged();
+    if (previousPath.isNotEmpty) {
+      File(previousPath).delete().ignore();
+    }
+  }
+
   /// 시간대 추가/편집 다이얼로그. 저장 버튼을 눌렀을 때만 검증(시작==종료, 폴더
   /// 미선택)하고 실패하면 다이얼로그를 닫지 않는다. 겹침은 여기서 막지 않음 —
   /// 자정 교차 슬롯을 편집하는 도중엔 일시적으로 겹치는 상태가 정상이라 목록
@@ -358,9 +477,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         return StatefulBuilder(
           builder: (dialogCtx, setDialogState) {
             return AlertDialog(
-              title: Text(initial == null
-                  ? t.lockScheduleAddTitle
-                  : t.lockScheduleEditTitle),
+              title: Text(
+                initial == null
+                    ? t.lockScheduleAddTitle
+                    : t.lockScheduleEditTitle,
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -402,14 +523,17 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                   ),
                   DropdownButtonFormField<int>(
                     initialValue: folderId,
-                    decoration:
-                        InputDecoration(labelText: t.lockScheduleFolder),
+                    decoration: InputDecoration(
+                      labelText: t.lockScheduleFolder,
+                    ),
                     items: _folders
                         .where((f) => f.id != null)
-                        .map((f) => DropdownMenuItem(
-                              value: f.id,
-                              child: Text(f.name),
-                            ))
+                        .map(
+                          (f) => DropdownMenuItem(
+                            value: f.id,
+                            child: Text(f.name),
+                          ),
+                        )
                         .toList(),
                     onChanged: (v) => setDialogState(() {
                       folderId = v;
@@ -441,13 +565,15 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                     final endMin = end.hour * 60 + end.minute;
                     if (startMin == endMin) {
                       setDialogState(
-                          () => errorText = t.lockScheduleSameTimeError);
+                        () => errorText = t.lockScheduleSameTimeError,
+                      );
                       return;
                     }
                     final pickedFolderId = folderId;
                     if (pickedFolderId == null) {
                       setDialogState(
-                          () => errorText = t.lockScheduleNoFolderError);
+                        () => errorText = t.lockScheduleNoFolderError,
+                      );
                       return;
                     }
                     Navigator.pop(
@@ -471,8 +597,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
   /// 스케줄이 켜져 있을 때만 보여줄 슬롯 목록 + 추가 버튼 + 안내 문구.
   List<Widget> _buildScheduleSection(AppLocalizations t) {
-    final hasOverlap =
-        LockScreenSchedule.overlappingIndices(_slots).isNotEmpty;
+    final hasOverlap = LockScreenSchedule.overlappingIndices(_slots).isNotEmpty;
     // 표시 전용 계산 — 이 화면 안에서 한 번만 구해 모든 타일이 나눠 쓴다(타일마다
     // 다시 1440분을 순회하지 않도록).
     final effectiveRanges = LockScreenSchedule.effectiveRanges(_slots);
@@ -481,14 +606,20 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       if (_slots.isEmpty)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(t.lockScheduleEmpty,
-              style: Theme.of(context).textTheme.bodySmall),
+          child: Text(
+            t.lockScheduleEmpty,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         )
       else
         ..._slots.asMap().entries.map(
-              (entry) => _buildSlotTile(
-                  t, entry.key, entry.value, effectiveRanges[entry.key]),
-            ),
+          (entry) => _buildSlotTile(
+            t,
+            entry.key,
+            entry.value,
+            effectiveRanges[entry.key],
+          ),
+        ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
         child: Align(
@@ -503,19 +634,27 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       if (hasOverlap)
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-          child: Text(t.lockScheduleOverlapHint,
-              style: Theme.of(context).textTheme.bodySmall),
+          child: Text(
+            t.lockScheduleOverlapHint,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
         ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-        child: Text(t.lockScheduleApplyNote,
-            style: Theme.of(context).textTheme.bodySmall),
+        child: Text(
+          t.lockScheduleApplyNote,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
       ),
     ];
   }
 
-  Widget _buildSlotTile(AppLocalizations t, int index, LockScreenSlot slot,
-      List<List<int>> ranges) {
+  Widget _buildSlotTile(
+    AppLocalizations t,
+    int index,
+    LockScreenSlot slot,
+    List<List<int>> ranges,
+  ) {
     final folder = _folderForId(slot.folderId);
     final errorColor = Theme.of(context).colorScheme.error;
     final startLabel = _timeOfDayFromMinutes(slot.start).format(context);
@@ -523,8 +662,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
     Widget folderLine;
     if (folder == null) {
-      folderLine = Text(t.lockScheduleFolderMissing,
-          style: TextStyle(color: errorColor));
+      folderLine = Text(
+        t.lockScheduleFolderMissing,
+        style: TextStyle(color: errorColor),
+      );
     } else if (folder.cardCount == 0) {
       // "카드 0개 · 카드 없음"은 같은 말을 두 번 하는 것이라 개수는 생략한다.
       folderLine = Text(
@@ -532,8 +673,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         style: TextStyle(color: errorColor),
       );
     } else {
-      folderLine =
-          Text('${folder.name} · ${t.cardCountSuffix(folder.cardCount)}');
+      folderLine = Text(
+        '${folder.name} · ${t.cardCountSuffix(folder.cardCount)}',
+      );
     }
 
     // 실제 적용 구간이 사용자가 적어 넣은 구간과 같으면(가장 흔한 경우) 아무것도
@@ -543,15 +685,16 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       if (ranges.isEmpty) {
         extraLine = Text(
           t.lockScheduleNeverApplies,
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: errorColor),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: errorColor),
         );
       } else {
         final rangesText = ranges
-            .map((r) =>
-                '${_timeOfDayFromMinutes(r[0]).format(context)} – ${_timeOfDayFromMinutes(r[1]).format(context)}')
+            .map(
+              (r) =>
+                  '${_timeOfDayFromMinutes(r[0]).format(context)} – ${_timeOfDayFromMinutes(r[1]).format(context)}',
+            )
             .join(', ');
         extraLine = Text(
           t.lockScheduleActualRange(rangesText),
@@ -600,10 +743,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             subtitle: Text(t.lockEnableSubtitle),
             trailing: Transform.scale(
               scale: 0.8,
-              child: Switch(
-                value: _enabled,
-                onChanged: _onEnabledChanged,
-              ),
+              child: Switch(value: _enabled, onChanged: _onEnabledChanged),
             ),
           ),
           const Divider(),
@@ -642,11 +782,16 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               _onSettingChanged();
             },
             child: Column(
-              children: _folders.where((f) => f.id != null).map((folder) => RadioListTile<int>(
-                    title: Text(folder.name),
-                    subtitle: Text(t.cardCountSuffix(folder.cardCount)),
-                    value: folder.id!,
-                  )).toList(),
+              children: _folders
+                  .where((f) => f.id != null)
+                  .map(
+                    (folder) => RadioListTile<int>(
+                      title: Text(folder.name),
+                      subtitle: Text(t.cardCountSuffix(folder.cardCount)),
+                      value: folder.id!,
+                    ),
+                  )
+                  .toList(),
             ),
           ),
 
@@ -668,8 +813,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           // 카드 순서
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(t.lockOrder,
-                style: Theme.of(context).textTheme.titleSmall),
+            child: Text(
+              t.lockOrder,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -694,8 +841,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           // 배경색
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(t.lockBgColor,
-                style: Theme.of(context).textTheme.titleSmall),
+            child: Text(
+              t.lockBgColor,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
           ),
 
           // 라이브 미리보기 — 실제 잠금화면 카드를 축소한 목업. _bgColor/_bgTextMode가
@@ -703,7 +852,13 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           // build()가 다시 불려 즉시 갱신된다.
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-            child: LockScreenPreview(bgColor: _bgColor, bgTextMode: _bgTextMode),
+            child: LockScreenPreview(
+              bgColor: _bgColor,
+              bgTextMode: _bgTextMode,
+              bgImagePath: _bgImagePath,
+              bgImageAlpha: _bgImageAlpha,
+              bgScrimAlpha: _bgScrimAlpha,
+            ),
           ),
 
           Padding(
@@ -730,7 +885,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                             width: 3,
                           ),
                         ),
-                        child: ColorSwatchPreview(color: Color(_bgColor), size: 36),
+                        child: ColorSwatchPreview(
+                          color: Color(_bgColor),
+                          size: 36,
+                        ),
                       ),
                     ),
                   ),
@@ -750,10 +908,12 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                         border: selected
                             ? Border.all(
                                 color: Theme.of(context).colorScheme.primary,
-                                width: 3)
+                                width: 3,
+                              )
                             : Border.all(
                                 color: Theme.of(context).colorScheme.outline,
-                                width: 1),
+                                width: 1,
+                              ),
                       ),
                     ),
                   );
@@ -783,11 +943,150 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             ),
           ),
 
+          const Divider(),
+
+          // 배경 이미지 — 단색 위에 얹는 선택 요소. 없으면 오늘까지와 동일한 단색 배경.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text(
+              t.lockBgImage,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _bgImagePath.isEmpty
+                      ? Container(
+                          width: 56,
+                          height: 56,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
+                          child: Icon(
+                            Icons.image_outlined,
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
+                        )
+                      : Image.file(
+                          File(_bgImagePath),
+                          width: 56,
+                          height: 56,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Container(
+                            width: 56,
+                            height: 56,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              color: Theme.of(context).colorScheme.outline,
+                            ),
+                          ),
+                        ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _pickingBgImage
+                            ? null
+                            : _pickBackgroundImage,
+                        child: Text(t.lockBgImagePick),
+                      ),
+                      if (_bgImagePath.isNotEmpty)
+                        OutlinedButton(
+                          onPressed: _removeBackgroundImage,
+                          child: Text(t.lockBgImageRemove),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_bgImagePath.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Text(
+                t.lockBgImageOpacity,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      value: _bgImageAlpha.toDouble(),
+                      min: 0,
+                      max: 255,
+                      onChanged: (v) {
+                        setState(() => _bgImageAlpha = v.round());
+                        _onSettingChanged();
+                      },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 44,
+                    child: Text(
+                      '${(_bgImageAlpha / 255 * 100).round()}%',
+                      textAlign: TextAlign.end,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Text(
+                t.lockBgScrimOpacity,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      value: _bgScrimAlpha.toDouble(),
+                      min: 0,
+                      max: 255,
+                      onChanged: (v) {
+                        setState(() => _bgScrimAlpha = v.round());
+                        _onSettingChanged();
+                      },
+                    ),
+                  ),
+                  SizedBox(
+                    width: 44,
+                    child: Text(
+                      '${(_bgScrimAlpha / 255 * 100).round()}%',
+                      textAlign: TextAlign.end,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const Divider(),
+
           // 텍스트 색상: auto(BgContrast 자동 판정)/light/dark 강제
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-            child: Text(t.lockBgTextMode,
-                style: Theme.of(context).textTheme.titleSmall),
+            child: Text(
+              t.lockBgTextMode,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
