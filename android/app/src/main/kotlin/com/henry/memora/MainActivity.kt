@@ -572,6 +572,10 @@ class MainActivity : FlutterActivity() {
         // as? 안전 캐스트가 "키 없음 / 값이 null / 타입 틀림" 셋을 전부 '보존'으로 접는다.
         (settings["scheduleEnabled"] as? Boolean)?.let { editor.putBoolean("schedule_enabled", it) }
         (settings["scheduleCsv"] as? String)?.let { editor.putString("folder_schedule", it) }
+        // bgTextMode도 같은 이유(위 주석)로 "인자가 있을 때만 기록" — 없으면 기존 값
+        // 보존. main.dart의 _restoreLockScreenService()가 이 인자를 안 실어 보내므로
+        // 무조건 기록하면 앱을 켤 때마다 사용자가 고른 텍스트 모드가 "auto"로 되돌아간다.
+        (settings["bgTextMode"] as? String)?.let { editor.putString("bg_text_mode", it) }
 
         // 서비스 kill 전 데이터 보존 보장 — apply() 대신 commit()
         // (LockScreenService.setServiceRunning():236, PushNotificationService와 동일 이유).
@@ -601,6 +605,7 @@ class MainActivity : FlutterActivity() {
             "sortOrder" to sortOrder,
             "reversed" to prefs.getBoolean("reversed", false),
             "bgColor" to prefs.getInt("bg_color", 0xFF1A1A2E.toInt()),
+            "bgTextMode" to (prefs.getString("bg_text_mode", "auto") ?: "auto"),
             "scheduleEnabled" to prefs.getBoolean("schedule_enabled", false),
             "scheduleCsv" to (prefs.getString("folder_schedule", "") ?: "")
         )

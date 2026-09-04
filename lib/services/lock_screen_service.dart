@@ -194,6 +194,7 @@ class LockScreenService {
     int bgColor = 0xFF1A1A2E,
     bool? scheduleEnabled,
     String? scheduleCsv,
+    String? bgTextMode,
   }) async {
     try {
       final args = <String, dynamic>{
@@ -204,12 +205,14 @@ class LockScreenService {
         'reversed': reversed,
         'bgColor': bgColor,
       };
-      // scheduleEnabled/scheduleCsv 는 null이면 인자에 아예 넣지 않는다 — 네이티브가
-      // 기존 저장값을 그대로 보존하게 하려는 의도. main.dart의 앱 시작 복원 경로
-      // (_restoreLockScreenService)가 이 두 파라미터를 생략하고 호출하므로, 여기
-      // 기본값을 주면 매 앱 실행마다 사용자의 시간대 스케줄이 조용히 사라진다.
+      // scheduleEnabled/scheduleCsv/bgTextMode 는 null이면 인자에 아예 넣지 않는다 —
+      // 네이티브가 기존 저장값을 그대로 보존하게 하려는 의도. main.dart의 앱 시작
+      // 복원 경로(_restoreLockScreenService)가 이 파라미터들을 생략하고 호출하므로,
+      // 여기 기본값을 주면 매 앱 실행마다 사용자의 시간대 스케줄/텍스트 모드가
+      // 조용히 사라진다.
       if (scheduleEnabled != null) args['scheduleEnabled'] = scheduleEnabled;
       if (scheduleCsv != null) args['scheduleCsv'] = scheduleCsv;
+      if (bgTextMode != null) args['bgTextMode'] = bgTextMode;
       await _channel.invokeMethod('startService', args);
     } catch (e) {
       debugPrint('[LockScreenService] startService error: $e');
@@ -235,6 +238,7 @@ class LockScreenService {
     int bgColor = 0xFF1A1A2E,
     bool? scheduleEnabled,
     String? scheduleCsv,
+    String? bgTextMode,
   }) async {
     try {
       final args = <String, dynamic>{
@@ -248,6 +252,7 @@ class LockScreenService {
       // startService와 동일한 이유로 null 키는 생략한다.
       if (scheduleEnabled != null) args['scheduleEnabled'] = scheduleEnabled;
       if (scheduleCsv != null) args['scheduleCsv'] = scheduleCsv;
+      if (bgTextMode != null) args['bgTextMode'] = bgTextMode;
       await _channel.invokeMethod('saveSettings', args);
     } catch (e) {
       debugPrint('[LockScreenService] saveSettings error: $e');

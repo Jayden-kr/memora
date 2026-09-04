@@ -53,6 +53,10 @@ class LockScreenService : Service() {
     private var screenReceiver: ScreenReceiver? = null
     @Volatile
     private var overlayView: View? = null
+    // overlayView가 마지막으로 생성됐을 때의 "$bgColor|$bgTextMode"(currentVisualKey()).
+    // showOverlay()가 오버레이 살아있는 동안 이 값이 바뀐 걸 감지하면 뷰를 재생성한다.
+    @Volatile
+    private var overlayVisualKey: String? = null
     private var windowManager: WindowManager? = null
 
     // 서비스 활성 상태 (Handler 콜백에서 체크)
@@ -97,16 +101,27 @@ class LockScreenService : Service() {
     private var sortOrder: String = "sequence"
     private var reversed: Boolean = false
     private var bgColor: Int = 0xFF1A1A2E.toInt()
+    // "auto"(기본, BgContrast로 자동 판정) | "light" | "dark" — 강제 오버라이드.
+    private var bgTextMode: String = "auto"
     // 현재 cards가 어느 폴더 조합으로 로드됐는지. null="한 번도 로드 안 됨" — 기본 폴더가
     // 빈 리스트인 사용자와 구분되게 일부러 non-null 기본값을 쓰지 않는다.
     @Volatile private var loadedFolderIds: List<Int>? = null
 
-    // Coral Orange 테마 색상
-    private val coralPrimary = Color.parseColor("#FF6B6B")
-    private val coralLight = Color.parseColor("#FFA8A8")
-    private val textWhite = Color.parseColor("#F5F5F5")
-    private val textGray = Color.parseColor("#AAAAAA")
-    private val textDimGray = Color.parseColor("#666666")
+    // Coral Orange 테마 색상 + 텍스트/장식 팔레트. 예전엔 전부 하드코딩 val이었지만,
+    // 이제 loadSettings() → applyPalette()가 bgColor/bgTextMode에 맞춰 매번 다시
+    // 채운다. "auto" + 기본 배경색(0xFF1A1A2E)에서는 반드시 아래 다크 팔레트 값과
+    // 완전히 동일해야 한다 — 이걸 깨면 기존 사용자 전원의 잠금화면이 조용히 바뀐다
+    // (회귀 기준, BgContrastTest.kt / applyPalette() 참고).
+    private var coralPrimary = Color.parseColor("#FF6B6B")
+    private var coralLight = Color.parseColor("#FFA8A8")
+    private var textWhite = Color.parseColor("#F5F5F5")
+    private var textGray = Color.parseColor("#AAAAAA")
+    private var textDimGray = Color.parseColor("#666666")
+    // 구분선/보이스 버튼 배경. 예전엔 #33FFFFFF/#22FFFFFF 리터럴이 createOverlayLayout()
+    // 3곳에 직접 하드코딩돼 있었다 — applyPalette()가 다크 팔레트에서는 흰색 계열(오늘과
+    // 동일), 라이트 팔레트에서는 검정 계열 반투명으로 채운다.
+    private var overlayFaint = Color.parseColor("#33FFFFFF")
+    private var overlaySoft = Color.parseColor("#22FFFFFF")
 
     // 하단 막대: 지렁이 울렁임 + 슬라이드 압축 모션
     @Volatile
@@ -352,6 +367,8 @@ class LockScreenService : Service() {
         }
         reversed = prefs.getBoolean("reversed", false)
         bgColor = prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
+        bgTextMode = prefs.getString("bg_text_mode", "auto") ?: "auto"
+        applyPalette()
         // 과거 버전이 prefs에 박아둔 고정 random_seed를 제거한다. 이 값이 남아 있으면
         // 매번 동일한 순열로 셔플돼 "랜덤인데 항상 같은 카드"가 떴다(이번 버그의 핵심 원인).
         // 이제 랜덤은 잠금마다 새로 섞고(loadCardsFromDb), 글랜스마다 다음 카드로 넘긴다(advanceCard).
@@ -372,8 +389,48 @@ class LockScreenService : Service() {
             if (matchedSlot != null) " matched=[${matchedSlot.start}-${matchedSlot.end})->${matchedSlot.folderId}" else ""
         ))
 
-        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, sort=$sortOrder, bg=$bgColor")
+        Log.d(TAG, "Settings loaded: folders=$folderIds, filter=$finishedFilter, sort=$sortOrder, bg=$bgColor mode=$bgTextMode")
     }
+
+    /**
+     * bgColor/bgTextMode에 맞춰 coralPrimary~overlaySoft를 계산해 채운다.
+     * "auto"면 BgContrast.isDarkPalette(bgColor)로 판정하고, "light"/"dark"는
+     * 강제 오버라이드다. 그 외 알 수 없는 값은 "auto"로 취급 — 강제 모드 문자열
+     * 하나가 오염됐다고 자동판정 자체가 죽어서는 안 된다.
+     *
+     * ⚠️ 회귀 기준: bgTextMode="auto" & bgColor=기본값(0xFF1A1A2E)이면 이 결과는
+     * 오늘 하드코딩돼 있던 다크 팔레트 값과 완전히 동일해야 한다(BgContrastTest.kt,
+     * lock_screen_native_contract_test.dart가 함께 지킨다).
+     */
+    private fun applyPalette() {
+        val dark = when (bgTextMode) {
+            "light" -> false
+            "dark" -> true
+            else -> BgContrast.isDarkPalette(bgColor)
+        }
+        if (dark) {
+            coralPrimary = Color.parseColor("#FF6B6B")
+            coralLight = Color.parseColor("#FFA8A8")
+            textWhite = Color.parseColor("#F5F5F5")
+            textGray = Color.parseColor("#AAAAAA")
+            textDimGray = Color.parseColor("#666666")
+            overlayFaint = Color.parseColor("#33FFFFFF")
+            overlaySoft = Color.parseColor("#22FFFFFF")
+        } else {
+            // 코랄 액센트(coralPrimary/coralLight)는 브랜드 색이라 배경 밝기와
+            // 무관하게 유지한다 — 대비가 필요한 건 본문 텍스트와 반투명 장식뿐.
+            coralPrimary = Color.parseColor("#FF6B6B")
+            coralLight = Color.parseColor("#FFA8A8")
+            textWhite = Color.parseColor("#1A1A1A")
+            textGray = Color.parseColor("#555555")
+            textDimGray = Color.parseColor("#888888")
+            overlayFaint = Color.parseColor("#33000000")
+            overlaySoft = Color.parseColor("#22000000")
+        }
+    }
+
+    /** 지금 로드된 bgColor/bgTextMode를 하나의 문자열로 묶는다 — overlayVisualKey와 비교용. */
+    private fun currentVisualKey(): String = "$bgColor|$bgTextMode"
 
     /**
      * 자정 기준 경과 분(0~1439). minSdk 24라 java.time 대신 Calendar 사용
@@ -571,6 +628,19 @@ class LockScreenService : Service() {
         // → 오버레이를 재생성하지 않고 "다음 카드"로 진행시킨다. 화면이 꺼진 동안
         //   갱신하므로 다시 켜면 새 카드가 보인다.
         if (overlayView != null) {
+            if (overlayVisualKey != currentVisualKey()) {
+                // 배경색/텍스트모드가 (설정 화면에서) 바뀌었다 → 뷰를 완전히 재생성해서
+                // 새 팔레트를 즉시 반영한다. currentIndex/cards는 절대 건드리지 않는다 —
+                // 배경 변경은 지금 어느 카드를 보고 있었는지와 무관하다. v1.3.7 시간대
+                // 전환 기능에서 "재로드가 카드 진행을 무너뜨린" 회귀와 정확히 같은 함정이라
+                // 반드시 피해야 한다.
+                // 이 글랜스에서 폴더도 동시에 바뀌었다면(loadedFolderIds != folderIds) 그
+                // 처리는 다음 글랜스로 미룬다 — 뷰 재생성과 덱 재쿼리를 한 글랜스에 섞으면
+                // 위 회귀를 재현할 여지가 늘어난다.
+                dismissOverlay()
+                showOverlayOnMainThread(resetIndex = false)
+                return
+            }
             if (loadedFolderIds != folderIds) {
                 // 시간대가 바뀌어 보여줄 폴더가 달라졌다 → 오버레이는 유지한 채 덱만 갈아끼운다.
                 // DB 접근은 반드시 bgHandler에서 — 여기는 mainHandler.post 콜백 안이라, SQLite를
@@ -640,12 +710,18 @@ class LockScreenService : Service() {
         }
     }
 
-    private fun showOverlayOnMainThread() {
+    /**
+     * @param resetIndex 새 뷰를 만들 때 currentIndex를 0으로 되돌릴지. 기본 true(신규
+     * 덱 로드 후 최초 표시). showOverlay()의 배경/텍스트모드 변경 재생성 경로만 false를
+     * 넘겨 지금 보고 있던 카드를 그대로 유지한다 — 절대 카드 진행을 건드리면 안 된다.
+     */
+    private fun showOverlayOnMainThread(resetIndex: Boolean = true) {
         if (overlayView != null) return
 
-        currentIndex = 0
+        if (resetIndex) currentIndex = 0
 
         overlayView = createOverlayLayout()
+        overlayVisualKey = currentVisualKey()
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -672,6 +748,7 @@ class LockScreenService : Service() {
             // (안 그러면 owner 없는 ValueAnimator가 계속 프레임마다 돌아감 — #43)
             stopBottomBarIdleAnimation()
             overlayView = null
+            overlayVisualKey = null
             return
         }
         try {
@@ -697,7 +774,7 @@ class LockScreenService : Service() {
         }
         val progressBarBg = FrameLayout(this).apply {
             tag = "progressBarBg"
-            setBackgroundColor(Color.parseColor("#33FFFFFF"))
+            setBackgroundColor(overlayFaint)
             addView(progressBar, FrameLayout.LayoutParams(0, dp(2)))
         }
 
@@ -752,13 +829,13 @@ class LockScreenService : Service() {
             visibility = View.GONE
             background = android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = dp(20).toFloat()
-                setColor(Color.parseColor("#22FFFFFF"))
+                setColor(overlaySoft)
             }
         }
 
         // ─── Answer 구분선 ───
         val answerDivider = View(this).apply {
-            setBackgroundColor(Color.parseColor("#33FFFFFF"))
+            setBackgroundColor(overlayFaint)
         }
 
         // ANSWER 라벨
@@ -1435,6 +1512,7 @@ class LockScreenService : Service() {
                 windowManager?.removeView(view)
             } catch (_: Exception) {}
             overlayView = null
+            overlayVisualKey = null
             // removeView 후 다음 프레임에서 bitmap recycle (draw pipeline 완료 보장)
             mainHandler.post {
                 bitmapsToRecycle.forEach { bmp ->

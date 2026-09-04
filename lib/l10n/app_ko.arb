@@ -413,6 +413,13 @@
   "lockBgHexLabel": "Hex 코드",
   "lockBgOpacity": "투명도",
   "lockBgApply": "적용",
+  "lockBgPreview": "미리보기",
+  "lockBgTextMode": "텍스트 색상",
+  "lockBgTextModeAuto": "자동",
+  "lockBgTextModeLight": "밝게",
+  "lockBgTextModeDark": "어둡게",
+  "lockPreviewSampleQuestion": "프랑스의 수도는?",
+  "lockPreviewSampleAnswer": "파리",
 
   "lockScheduleEnable": "시간대별 폴더 자동 전환",
   "lockScheduleEnableSubtitle": "시간대에 따라 다른 폴더를 보여줍니다",

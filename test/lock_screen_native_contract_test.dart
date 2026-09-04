@@ -1,9 +1,14 @@
 // 논리 테스트가 볼 수 없는 "구조적" 회귀만 막는 트립와이어.
 //
-// 여기 있는 두 불변식은 값이 아니라 코드의 모양에 관한 것이라, 어떤 단위 테스트로도
-// 잡히지 않는다. 둘 다 실제로 이 기능을 망가뜨릴 수 있는, 그럴듯한 "정리/단순화"가
-// 원인이 된다. 그래서 소스를 텍스트로 읽어 확인한다.
+// 여기 있는 불변식들은 값이 아니라 코드의 모양(또는 두 언어 간 상수 동기화)에
+// 관한 것이라, 어떤 단위 테스트로도 잡히지 않는다. 실제로 이 기능을 망가뜨릴 수
+// 있는, 그럴듯한 "정리/단순화"가 원인이 된다. 그래서 소스를 텍스트로 읽어 확인한다.
 // (자매 프로젝트 Moneta의 native_capture_contract_test 와 같은 방식)
+//
+// Stage 2(자동 대비 팔레트) 추가분: BgContrast.kt(Kotlin)와
+// lock_screen_contrast.dart(Dart)가 같은 임계값/가중치를 쓰는지 확인한다 — 각
+// 파일 자체의 로직 정확성은 BgContrastTest.kt / lock_screen_contrast_test.dart가
+// 이미 검증하므로, 여기서는 "둘이 갈라지지 않았는가"만 본다.
 
 import 'dart:io';
 
@@ -119,6 +124,38 @@ saveSettings 가 $key 를 조건 없이 기록하고 있다:
       }
     });
 
+    test(
+        'MainActivity.saveSettings 는 bg_text_mode를 "인자가 있을 때만" 기록해야 한다',
+        () {
+      final source =
+          _read('android/app/src/main/kotlin/com/henry/memora/MainActivity.kt');
+      final body = _kotlinFunctionBody(source, 'saveSettings');
+
+      final lines = body
+          .split('\n')
+          .where((l) => l.contains('"bg_text_mode"'))
+          .toList();
+
+      expect(lines, isNotEmpty,
+          reason: 'saveSettings 가 bg_text_mode 를 더 이상 기록하지 않는다. '
+              '설정 화면에서 텍스트 모드를 바꿔도 저장되지 않는다.');
+
+      for (final line in lines) {
+        expect(line.contains('?.let'), isTrue, reason: '''
+saveSettings 가 bg_text_mode 를 조건 없이 기록하고 있다:
+  ${line.trim()}
+
+scheduleEnabled/scheduleCsv와 정확히 같은 이유로 위험하다 — lib/main.dart의
+_restoreLockScreenService()는 앱을 켤 때마다 startService를 태우면서 bgTextMode를
+싣지 않는다. 조건 없이 기록하면 앱을 껐다 켤 때마다 사용자가 고른 텍스트 모드가
+"auto"로 조용히 되돌아간다.
+
+`(settings["bgTextMode"] as? String)?.let { editor.putString("bg_text_mode", it) }`
+형태를 유지할 것.
+''');
+      }
+    });
+
     test('LockScreenService 는 폴더가 바뀐 경우에만 덱을 다시 읽어야 한다', () {
       final source = _read(
           'android/app/src/main/kotlin/com/henry/memora/LockScreenService.kt');
@@ -186,6 +223,70 @@ scheduleEnabled 파라미터가 nullable 이 아니다(또는 개수가 2가 아
               .length,
           2,
           reason: 'null 인 scheduleCsv 를 인자 맵에서 빼는 가드가 사라졌다.');
+    });
+
+    test('Dart 쪽 bgTextMode 인자도 nullable 이어야 하고 null 이면 생략돼야 한다', () {
+      final source = _read('lib/services/lock_screen_service.dart');
+
+      // startService / saveSettings 두 곳
+      expect('String? bgTextMode,'.allMatches(source).length, 2,
+          reason: '''
+bgTextMode 파라미터가 nullable 이 아니다(또는 개수가 2가 아니다).
+
+scheduleEnabled/scheduleCsv와 같은 이유로 위험하다 — 기본값을 가진 non-nullable
+파라미터로 바꾸면 컴파일은 통과하지만, 이 인자를 넘기지 않는 호출자
+(_restoreLockScreenService)가 조용히 기본값("auto")을 저장해 사용자가 고른
+텍스트 모드를 지운다.
+''');
+      expect(
+          "if (bgTextMode != null) args['bgTextMode'] = bgTextMode;"
+              .allMatches(source)
+              .length,
+          2,
+          reason: 'null 인 bgTextMode 를 인자 맵에서 빼는 가드가 사라졌다.');
+    });
+
+    test('BgContrast 대비 임계값이 Kotlin/Dart 양쪽에서 같은 값이어야 한다', () {
+      final kotlinSource = _read(
+          'android/app/src/main/kotlin/com/henry/memora/BgContrast.kt');
+      final dartSource = _read('lib/services/lock_screen_contrast.dart');
+
+      final kotlinMatch =
+          RegExp(r'LUMINANCE_THRESHOLD\s*=\s*([0-9]+(?:\.[0-9]+)?)')
+              .firstMatch(kotlinSource);
+      expect(kotlinMatch, isNotNull,
+          reason:
+              'Kotlin BgContrast.LUMINANCE_THRESHOLD 상수를 찾지 못했다. 이름이 바뀌었다면 '
+              '이 테스트도 함께 고칠 것.');
+
+      final dartMatch = RegExp(
+              r'kLockScreenLuminanceThreshold\s*=\s*([0-9]+(?:\.[0-9]+)?)')
+          .firstMatch(dartSource);
+      expect(dartMatch, isNotNull,
+          reason: 'Dart kLockScreenLuminanceThreshold 상수를 찾지 못했다. 이름이 '
+              '바뀌었다면 이 테스트도 함께 고칠 것.');
+
+      expect(dartMatch!.group(1), kotlinMatch!.group(1), reason: '''
+Kotlin BgContrast.LUMINANCE_THRESHOLD(${kotlinMatch.group(1)})와
+Dart kLockScreenLuminanceThreshold(${dartMatch.group(1)})가 다른 값이다.
+
+두 값이 갈라지면 설정 화면의 라이브 미리보기(Dart)가 보여주는 텍스트 색과 실제
+잠금화면(Kotlin, 네이티브 오버레이)에 뜨는 텍스트 색이 특정 배경색 구간에서
+서로 어긋난다.
+''');
+    });
+
+    test('BgContrast/lock_screen_contrast 공식이 동일한 가중치를 써야 한다', () {
+      final kotlinSource = _read(
+          'android/app/src/main/kotlin/com/henry/memora/BgContrast.kt');
+      final dartSource = _read('lib/services/lock_screen_contrast.dart');
+      const weights = ['0.2126', '0.7152', '0.0722'];
+      for (final w in weights) {
+        expect(kotlinSource.contains(w), isTrue,
+            reason: 'BgContrast.kt에서 WCAG 가중치 $w 를 찾지 못했다.');
+        expect(dartSource.contains(w), isTrue,
+            reason: 'lock_screen_contrast.dart에서 WCAG 가중치 $w 를 찾지 못했다.');
+      }
     });
   });
 }

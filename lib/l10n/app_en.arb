@@ -251,6 +251,13 @@
   "lockBgHexLabel": "Hex code",
   "lockBgOpacity": "Opacity",
   "lockBgApply": "Apply",
+  "lockBgPreview": "Preview",
+  "lockBgTextMode": "Text color",
+  "lockBgTextModeAuto": "Auto",
+  "lockBgTextModeLight": "Light",
+  "lockBgTextModeDark": "Dark",
+  "lockPreviewSampleQuestion": "What is the capital of France?",
+  "lockPreviewSampleAnswer": "Paris",
 
   "lockScheduleEnable": "Time-based folder switching",
   "lockScheduleEnableSubtitle": "Show a different folder depending on the time of day",

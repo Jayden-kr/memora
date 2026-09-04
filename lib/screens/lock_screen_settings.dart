@@ -7,6 +7,7 @@ import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../services/lock_screen_service.dart';
 import '../widgets/color_picker_dialog.dart';
+import '../widgets/lock_screen_preview.dart';
 
 class LockScreenSettingsScreen extends StatefulWidget {
   const LockScreenSettingsScreen({super.key});
@@ -25,8 +26,12 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   String _sortOrder = 'sequence'; // sequence | newest | oldest | name_asc | random
   bool _reversed = false;
   int _bgColor = 0xFF1A1A2E;
+  // "auto" | "light" | "dark" — LockScreenService(네이티브)의 applyPalette()와 동일 의미.
+  String _bgTextMode = 'auto';
   bool _loading = true;
   bool _checkingOverlay = false;
+
+  static const _bgTextModeOptions = <String>['auto', 'light', 'dark'];
 
   // 시간대별 폴더 자동 전환
   bool _scheduleEnabled = false;
@@ -107,6 +112,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       }
       _reversed = settings['reversed'] as bool? ?? false;
       _bgColor = settings['bgColor'] as int? ?? 0xFF1A1A2E;
+      final rawTextMode = settings['bgTextMode'];
+      _bgTextMode = rawTextMode is String &&
+              _bgTextModeOptions.contains(rawTextMode)
+          ? rawTextMode
+          : 'auto';
       _scheduleEnabled = settings['scheduleEnabled'] as bool? ?? false;
       // NOTE: folderIds와 달리, 존재하지 않는 폴더를 가리키는 슬롯을 여기서 걸러
       // 내지 않는다 — getAllFolders()가 어떤 이유로든 일부만 반환하면 그 필터가
@@ -174,6 +184,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         bgColor: _bgColor,
         scheduleEnabled: _scheduleEnabled,
         scheduleCsv: scheduleCsv,
+        bgTextMode: _bgTextMode,
       );
     } else {
       // 설정만 저장하고 서비스 중지
@@ -186,6 +197,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         bgColor: _bgColor,
         scheduleEnabled: _scheduleEnabled,
         scheduleCsv: scheduleCsv,
+        bgTextMode: _bgTextMode,
       );
       await LockScreenService.stopService();
     }
@@ -226,6 +238,18 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       case 'sequence':
       default:
         return t.cardListSortDefault;
+    }
+  }
+
+  String _bgTextModeLabel(AppLocalizations t, String opt) {
+    switch (opt) {
+      case 'light':
+        return t.lockBgTextModeLight;
+      case 'dark':
+        return t.lockBgTextModeDark;
+      case 'auto':
+      default:
+        return t.lockBgTextModeAuto;
     }
   }
 
@@ -673,6 +697,15 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             child: Text(t.lockBgColor,
                 style: Theme.of(context).textTheme.titleSmall),
           ),
+
+          // 라이브 미리보기 — 실제 잠금화면 카드를 축소한 목업. _bgColor/_bgTextMode가
+          // 바뀌면(스와치 탭, 커스텀 색상 다이얼로그 적용, 텍스트 모드 칩 선택) 이
+          // build()가 다시 불려 즉시 갱신된다.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: LockScreenPreview(bgColor: _bgColor, bgTextMode: _bgTextMode),
+          ),
+
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Wrap(
@@ -747,6 +780,31 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                   ),
                 ),
               ],
+            ),
+          ),
+
+          // 텍스트 색상: auto(BgContrast 자동 판정)/light/dark 강제
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: Text(t.lockBgTextMode,
+                style: Theme.of(context).textTheme.titleSmall),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: _bgTextModeOptions.map((opt) {
+                return ChoiceChip(
+                  label: Text(_bgTextModeLabel(t, opt)),
+                  selected: _bgTextMode == opt,
+                  onSelected: (s) {
+                    if (!s) return;
+                    setState(() => _bgTextMode = opt);
+                    _onSettingChanged();
+                  },
+                );
+              }).toList(),
             ),
           ),
           const SizedBox(height: 32),
