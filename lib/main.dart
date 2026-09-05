@@ -22,11 +22,15 @@ void main() async {
   await NotificationService.initialize();
   await LocaleService.load();
 
-  // 이전 실행에서 남은 stale 상태 정리 (앱 강제 종료 시 foreground 알림 잔류 방지)
-  ImportExportController.instance.cleanupStaleState();
+  // 이전 실행에서 남은 stale 상태 정리(import_in_progress 마커 등). 반드시 아래 GC보다
+  // 먼저 끝나야 한다 — 둘 다 fire-and-forget이면 마커를 지우는 쪽과 검사하는 쪽의 순서가
+  // 실행마다 달라져 "import 중이면 GC 스킵" 가드가 랜덤으로 켜졌다 꺼졌다 했다.
+  await ImportExportController.instance.cleanupStaleState();
 
-  // 앱 시작 시 1회 (fire-and-forget): ①파일 없는 카드의 깨진 경로 blank 처리 +
-  //   ②어느 카드도 참조하지 않는 고아 미디어 파일 정리("흔적 0").
+  // 앱 시작 시 1회 (fire-and-forget — 첫 프레임을 막지 않는다): ①파일 없는 카드의 깨진
+  //   경로 복구/blank 처리 + ②어느 카드도 참조하지 않는 고아 미디어 파일 정리("흔적 0").
+  //   UI와 동시에 돌므로 GC 쪽에 최근 파일 보호·마커 배치별 재검사·스캔 시점 id 상한
+  //   안전장치가 있다(database_helper 참고).
   _startupMediaCleanupOnce();
 
   // 저장된 테마 모드 로드

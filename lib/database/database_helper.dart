@@ -1477,6 +1477,11 @@ class DatabaseHelper {
         limit: batchSize,
       );
       if (rows.isEmpty) break;
+      // 스캔은 수천 장이면 수 초짜리다 — 그 사이 import가 시작됐으면 여기서 물러난다.
+      if (await _importInProgress()) {
+        debugPrint('[GC] import 시작 감지 — 고아 정리 중단');
+        return 0;
+      }
       lastMaxId = rows.last['id'] as int;
       for (final row in rows) {
         for (final col in _pathColumns) {
@@ -1492,14 +1497,33 @@ class DatabaseHelper {
     final mediaDir = Directory(p.join(docDir.path, AppConstants.imageDir));
     if (!await mediaDir.exists()) return 0;
 
-    int deleted = 0;
+    final candidates = <File>[];
     await for (final entity in mediaDir.list(followLinks: false)) {
       if (entity is! File) continue;
       final base = p.basename(entity.path);
       if (base.startsWith('.')) continue; // .nomedia 등 숨김/시스템 파일 보호
       if (referenced.contains(base)) continue; // 참조됨 → 보존
+      candidates.add(entity);
+    }
+    // 안전장치 ①: 참조가 0건인데 지울 파일이 많다 = 경로 접두사 변화·DB 손상 등으로
+    //   "전부 고아"로 보이는 상황일 가능성이 크다(cleanupBrokenImagePaths가 참조를 전부
+    //   비운 직후가 전형). 그럴 땐 이번 실행을 건너뛴다 — 지우는 건 되돌릴 수 없다.
+    if (referenced.isEmpty && candidates.length >= 20) {
+      debugPrint('[GC] 참조 0건인데 후보 ${candidates.length}개 — 안전장치로 건너뜀');
+      return 0;
+    }
+    if (await _importInProgress()) return 0;
+
+    // 안전장치 ②: 최근 10분 내 생성/수정된 파일은 보호 — 편집 중 복사본, 녹음 진행 중
+    //   파일, import가 방금 추출한 파일은 아직 DB 참조가 없을 수 있다. 이 GC는 runApp과
+    //   동시에 돌므로 "시작 시점이라 동시 쓰기가 없다"는 가정은 성립하지 않는다.
+    final now = DateTime.now();
+    int deleted = 0;
+    for (final f in candidates) {
       try {
-        await entity.delete();
+        final modified = (await f.stat()).modified;
+        if (now.difference(modified) < const Duration(minutes: 10)) continue;
+        await f.delete();
         deleted++;
       } catch (_) {
         // 잠금·권한 등 — 다음 시작 때 재시도
@@ -1508,8 +1532,30 @@ class DatabaseHelper {
     return deleted;
   }
 
+  /// import가 진행 중인가(`import_in_progress` 마커). 시작 GC가 배치마다 다시 묻는다.
+  Future<bool> _importInProgress() async {
+    final db = await database;
+    final rows = await db.query(
+      AppConstants.tableSettings,
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: ['import_in_progress'],
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final v = rows.first['value'] as String?;
+    return v != null && v.isNotEmpty;
+  }
+
   Future<int> cleanupBrokenImagePaths() async {
     final db = await database;
+    // 스캔 시작 시점의 최대 id — 스캔 도중 import된 카드(더 큰 id)는 건드리지 않는다.
+    // import는 카드 insert 뒤에 이미지를 추출하므로 그 사이에 보면 "파일 없음"처럼 보인다.
+    final maxRow = await db.rawQuery(
+        'SELECT MAX(id) AS m FROM ${AppConstants.tableCards}');
+    final maxIdAtStart = (maxRow.first['m'] as int?) ?? 0;
+    final docDir = await getApplicationDocumentsDirectory();
+    final mediaDirPath = p.join(docDir.path, AppConstants.imageDir);
 
     // 이미지/음성 경로를 포함하는 모든 컬럼
     const pathColumns = [
@@ -1550,12 +1596,18 @@ class DatabaseHelper {
       final rows = await db.query(
         AppConstants.tableCards,
         columns: ['id', ...pathColumns],
-        where: 'id > ? AND ($whereClauses)',
-        whereArgs: [lastMaxId],
+        where: 'id > ? AND id <= ? AND ($whereClauses)',
+        whereArgs: [lastMaxId, maxIdAtStart],
         orderBy: 'id ASC',
         limit: batchSize,
       );
       if (rows.isEmpty) break;
+      // 배치마다 import 마커를 다시 본다 — 진입 시 1회 검사로는 스캔 중 시작된 import의
+      // 미추출 이미지 경로를 blank해 버린다(추출이 성공해도 카드는 영구히 이미지를 잃음).
+      if (await _importInProgress()) {
+        debugPrint('[GC] import 시작 감지 — 깨진 경로 정리 중단');
+        break;
+      }
 
       // 이 배치의 최대 ID 기록 (다음 배치의 시작점)
       lastMaxId = rows.last['id'] as int;
@@ -1568,7 +1620,16 @@ class DatabaseHelper {
           final path = row[col] as String?;
           if (path == null || path.isEmpty) continue;
           if (!await File(path).exists()) {
-            updates[col] = '';
+            // 자가치유: 같은 파일명이 현재 앱의 images/ 에 있으면 경로 접두사만 바뀐
+            // 것이다(백업 복원·프로필 이동 등으로 앱 데이터 디렉토리가 달라진 경우).
+            // 참조를 비워버리면 바로 다음 단계인 고아 정리가 멀쩡한 파일까지 지우는
+            // 연쇄가 되므로, 지우지 않고 경로를 고쳐 쓴다.
+            final healed = p.join(mediaDirPath, p.basename(path));
+            if (healed != path && await File(healed).exists()) {
+              updates[col] = healed;
+            } else {
+              updates[col] = '';
+            }
             cleaned++;
           }
         }

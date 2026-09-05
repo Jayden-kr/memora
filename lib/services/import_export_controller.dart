@@ -62,16 +62,21 @@ class ImportExportController {
     _notify();
   }
 
-  /// 앱 시작 시 잔여 상태 정리
-  void cleanupStaleState() {
+  /// 앱 시작 시 잔여 상태 정리. main()이 await한다 — 시작 GC의 "import 중이면 스킵"
+  /// 가드가 이 마커 정리와 순서가 고정돼야 하기 때문(둘 다 fire-and-forget이던 시절엔
+  /// 가드가 실행마다 랜덤으로 켜졌다 꺼졌다 했다).
+  Future<void> cleanupStaleState() async {
     if (isRunning) forceCancel();
-    _cancel(); // 잔여 foreground service 알림 제거
     // OOM-recovery: 이전 import가 중간에 죽었으면 stale marker 살아있음.
     // 현재는 marker만 clear (실제 부분 폴더 cleanup은 추후 라운드).
-    _clearStaleImportMarker();
+    final hadStaleMarker = await _clearStaleImportMarker();
+    // 잔여 foreground service 알림 제거는 지난 실행이 도중에 죽은 흔적(마커)이 있을 때만.
+    // 무조건 보내면 앱을 켤 때마다 ImportExportService를 콜드 생성하고 알림 채널을 만든다.
+    if (hadStaleMarker) await _cancel();
   }
 
-  Future<void> _clearStaleImportMarker() async {
+  /// 반환: stale 마커가 있어서 지웠으면 true.
+  Future<bool> _clearStaleImportMarker() async {
     try {
       final settings = await DatabaseHelper.instance.getAllSettings();
       final stale = settings['import_in_progress'];
@@ -79,8 +84,10 @@ class ImportExportController {
         debugPrint(
             '[ImportExportController] stale import marker detected: $stale (likely OOM kill, marker cleared)');
         await DatabaseHelper.instance.deleteSetting('import_in_progress');
+        return true;
       }
     } catch (_) {}
+    return false;
   }
 
   // 리스너 (UI 갱신용)
