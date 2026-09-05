@@ -11,6 +11,8 @@
     <string name="restore_channel_desc">부팅 후 잠금화면 서비스 복원 안내</string>
     <string name="restore_notif_title">Memora 잠금화면</string>
     <string name="restore_notif_text">잠금화면 카드를 복원하려면 앱을 열어주세요.</string>
+    <string name="restore_push_notif_title">Memora 알림</string>
+    <string name="restore_push_notif_text">카드 알림을 복원하려면 앱을 열어주세요.</string>
 
     <!-- Import/Export 진행 알림 -->
     <string name="ie_channel_name">Import/Export 진행</string>

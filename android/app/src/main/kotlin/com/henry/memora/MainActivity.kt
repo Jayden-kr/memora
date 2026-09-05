@@ -42,13 +42,29 @@ class MainActivity : FlutterActivity() {
                 NativeEditTextFactory(flutterEngine.dartExecutor.binaryMessenger)
             )
 
+        // Recents(최근 앱)에서 되살아난 경우 시스템이 원본 인텐트를 그대로 재전달한다 —
+        // removeExtra는 인프로세스 Intent만 바꾸므로 프로세스 사망 후엔 옛 딥링크(푸시 카드·
+        // 편집·공유 import 완료 알림)가 다시 열렸다. 히스토리 기동이면 extras를 전부 무시한다.
+        val fromHistory =
+            ((intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (fromHistory) Log.d(TAG, "Launched from history — ignoring deep-link extras")
+
         // Cold start: 알림 탭으로 앱이 시작된 경우 payload를 Flutter에 전달하기 위해 저장
-        val initialPayload = intent?.getStringExtra("notification_payload")
+        val initialPayload = if (fromHistory) null else intent?.getStringExtra("notification_payload")
         intent?.removeExtra("notification_payload")
-        val initialNavigateTo = intent?.getStringExtra("navigate_to")
+        // Import/Export 완료 알림 탭(콜드스타트) — 예전엔 onNewIntent에서만 읽어 프로세스가
+        // 죽은 뒤 탭하면 홈만 떴다. 설정 네비게이션과 같은 pending 경로로 태운다.
+        val initialNavigateTo = if (fromHistory) null else when {
+            intent?.getBooleanExtra("navigate_to_import", false) == true -> "import"
+            intent?.getBooleanExtra("navigate_to_export", false) == true -> "export"
+            else -> intent?.getStringExtra("navigate_to")
+        }
         intent?.removeExtra("navigate_to")
+        intent?.removeExtra("navigate_to_import")
+        intent?.removeExtra("navigate_to_export")
         // Cold start: 잠금화면에서 좌측 슬라이드로 카드 편집 진입한 경우
-        val initialEditCard = if (intent?.getBooleanExtra("navigate_to_edit_card", false) == true) {
+        val initialEditCard = if (!fromHistory &&
+            intent?.getBooleanExtra("navigate_to_edit_card", false) == true) {
             val cId = intent.getIntExtra("card_id", -1)
             val fId = intent.getIntExtra("folder_id", -1)
             intent.removeExtra("navigate_to_edit_card")
@@ -652,6 +668,8 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // Recents 복귀는 딥링크가 아니다(configureFlutterEngine의 fromHistory와 동일 이유).
+        if ((intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0) return
         handleImportNavigationIntent(intent)
         handleSettingsNavigationIntent(intent)
         handlePushNotificationIntent(intent)
@@ -797,6 +815,9 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun isServiceRunning(): Boolean {
+        // 같은 프로세스라 서비스 인스턴스 생존을 직접 안다 — 알림 존재로만 판정하면 Android 13+
+        // 알림 권한 거부 시 살아있는 FGS를 false로 보고 service_running까지 되돌렸다.
+        if (LockScreenService.isAlive) return true
         // SharedPreferences 플래그는 OS kill 시 스테일해질 수 있으므로
         // 실제 알림 존재 여부로 서비스 실행 상태 확인
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

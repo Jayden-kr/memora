@@ -16,6 +16,8 @@
     <string name="restore_channel_desc">Notice for restoring the lock screen service after a reboot</string>
     <string name="restore_notif_title">Memora lock screen</string>
     <string name="restore_notif_text">Open the app to restore lock screen cards.</string>
+    <string name="restore_push_notif_title">Memora notifications</string>
+    <string name="restore_push_notif_text">Open the app to restore card notifications.</string>
 
     <!-- Import/Export 진행 알림 -->
     <string name="ie_channel_name">Import/Export progress</string>

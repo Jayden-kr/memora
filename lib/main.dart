@@ -341,6 +341,13 @@ void _handleSettingsNavigation(String target) {
       screen = const LockScreenSettingsScreen();
     case 'push_notification_settings':
       screen = const PushNotificationSettingsScreen();
+    // Import/Export 완료 알림 탭(콜드스타트) — MainActivity가 같은 pending 경로로 넘긴다.
+    case 'import':
+      _handleImportNotificationTap();
+      return;
+    case 'export':
+      _handleExportNotificationTap();
+      return;
     default:
       return;
   }

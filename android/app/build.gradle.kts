@@ -29,6 +29,16 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    // 앱 안에 언어 선택(한국어/English)이 있으므로 AAB 언어 분할을 끈다 — 켜져 있으면 Play가
+    // 시스템 로케일에 없는 언어 리소스(values-ko)를 설치하지 않아, 영어 폰에서 앱 언어를
+    // 한국어로 골라도 네이티브 문자열(알림·채널명·PDF 머리말)만 영어로 남는다. 두 언어뿐이라
+    // 용량 영향은 미미하다.
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
+
     defaultConfig {
         applicationId = "com.henry.memora"
         minSdk = flutter.minSdkVersion

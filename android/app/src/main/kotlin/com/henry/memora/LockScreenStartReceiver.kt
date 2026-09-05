@@ -67,12 +67,13 @@ class LockScreenStartReceiver : BroadcastReceiver() {
             Log.i(TAG, "Push notification service restored after boot")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to restore push service: ${e.message}")
-            // 서비스 시작 실패 시 사용자에게 알림 (수동 재시작 유도)
-            showRestoreNotification(context)
+            // 서비스 시작 실패 시 사용자에게 알림 (수동 재시작 유도). 잠금화면 복원과 문구를
+            // 분리한다 — 잠금화면을 안 쓰는 사용자에게 "잠금화면 카드 복원" 알림이 뜨던 결함.
+            showRestoreNotification(context, forPush = true)
         }
     }
 
-    private fun showRestoreNotification(context: Context) {
+    private fun showRestoreNotification(context: Context, forPush: Boolean = false) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         // 부팅 직후라 Flutter는 아직 안 떴지만, 언어는 prefs에 남아 있으므로 그대로 따른다.
         val res = AppLang.wrap(context)
@@ -93,15 +94,19 @@ class LockScreenStartReceiver : BroadcastReceiver() {
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
+        // requestCode는 이 알림 고유값 — 예전엔 0이라 ImportExportService의 진행 알림 PI(같은
+        // MainActivity 컴포넌트, requestCode 0)와 FLAG_UPDATE_CURRENT로 서로의 extras를 덮어썼다.
         val pendingIntent = PendingIntent.getActivity(
-            context, 0, openIntent,
+            context, RESTORE_NOTIFICATION_ID, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(res.getString(R.string.restore_notif_title))
-            .setContentText(res.getString(R.string.restore_notif_text))
+            .setContentTitle(res.getString(
+                if (forPush) R.string.restore_push_notif_title else R.string.restore_notif_title))
+            .setContentText(res.getString(
+                if (forPush) R.string.restore_push_notif_text else R.string.restore_notif_text))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

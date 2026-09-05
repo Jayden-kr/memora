@@ -67,6 +67,11 @@
                       android:host="*"
                       android:mimeType="*/*"
                       android:pathPattern=".*\\.memk" />
+                <!-- pathPattern은 SIMPLE_GLOB이라 ".*"가 첫 "."에서 멈춘다 — 파일명에 점이 더
+                     있으면(앱 자신의 export명 "3.화학공학.memk" 포함) 매칭 실패. 표준 우회. -->
+                <data android:pathPattern=".*\\..*\\.memk" />
+                <data android:pathPattern=".*\\..*\\..*\\.memk" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.memk" />
             </intent-filter>
             <!-- .memk 파일 확장자로 열기 (file:// URI) -->
             <intent-filter>
@@ -76,6 +81,9 @@
                       android:host="*"
                       android:mimeType="*/*"
                       android:pathPattern=".*\\.memk" />
+                <data android:pathPattern=".*\\..*\\.memk" />
+                <data android:pathPattern=".*\\..*\\..*\\.memk" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.memk" />
             </intent-filter>
             <!-- .mra 파일 열기 (외부 앱에서 공유/열기) -->
             <intent-filter>
@@ -95,6 +103,9 @@
                       android:host="*"
                       android:mimeType="*/*"
                       android:pathPattern=".*\\.mra" />
+                <data android:pathPattern=".*\\..*\\.mra" />
+                <data android:pathPattern=".*\\..*\\..*\\.mra" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mra" />
             </intent-filter>
             <!-- .mra 파일 확장자로 열기 (file:// URI) -->
             <intent-filter>
@@ -104,6 +115,9 @@
                       android:host="*"
                       android:mimeType="*/*"
                       android:pathPattern=".*\\.mra" />
+                <data android:pathPattern=".*\\..*\\.mra" />
+                <data android:pathPattern=".*\\..*\\..*\\.mra" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.mra" />
             </intent-filter>
         </activity>
         <!-- 잠금화면 Foreground Service -->

@@ -70,8 +70,10 @@ class ImportExportService : Service() {
                     putExtra("navigate_to_export", true)
                 }
             }
+            // requestCode 0은 부팅 복원 알림(LockScreenStartReceiver)과 공유돼 PI extras가
+            // 서로 덮였다 — 이 알림 고유의 ID를 쓴다.
             val pendingIntent = PendingIntent.getActivity(
-                appContext, 0, intent,
+                appContext, PROGRESS_NOTIFICATION_ID, intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 

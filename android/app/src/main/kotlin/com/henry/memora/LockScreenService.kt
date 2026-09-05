@@ -26,6 +26,9 @@ class LockScreenService : Service() {
     companion object {
         const val CHANNEL_ID = "lock_screen_channel"
         const val NOTIFICATION_ID = 1
+        /** 서비스 인스턴스 생존 여부(같은 프로세스의 MainActivity가 실행 판정에 쓴다). 알림 존재로
+         *  판정하면 Android 13+ 알림 권한 거부 시 살아있는 FGS를 죽었다고 보고 prefs까지 되돌렸다. */
+        @Volatile var isAlive: Boolean = false
         const val TAG = "LockScreenService"
 
         /**
@@ -184,6 +187,7 @@ class LockScreenService : Service() {
         super.onCreate()
         Log.d(TAG, "onCreate")
         isServiceActive = true
+        isAlive = true
         windowManager = getSystemService(WINDOW_SERVICE) as? WindowManager
         createNotificationChannel()
         loadFonts()
@@ -298,6 +302,7 @@ class LockScreenService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
         isServiceActive = false
+        isAlive = false
         setServiceRunning(false)
         unregisterScreenReceiver()
         dismissOverlay()
