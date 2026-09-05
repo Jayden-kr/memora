@@ -57,12 +57,15 @@ object BgContrast {
         imageAlpha: Int,
         scrimAlpha: Int
     ): Double {
-        val blended = if (imageLuminance != null) {
-            val a = imageAlpha.coerceIn(0, 255) / 255.0
-            bgColorLuminance * (1 - a) + imageLuminance * a
-        } else {
-            bgColorLuminance
-        }
+        // 이미지가 없으면 스크림도 없다 — LockScreenService.applyBackgroundDrawable은
+        // bgImagePath가 비어 있으면 스크림 레이어를 그리지 않고 즉시 return한다. 그런데 예전엔
+        // 여기서 scrimAlpha(기본 102 = 40%)를 그대로 곱해 판정 기준이 실제 렌더와 어긋났다:
+        // 실효 임계가 0.55/0.6 = 0.917이 되어 휘도 0.55~0.92의 밝은 단색 배경(회색·연두·
+        // 파스텔)에 흰 글씨를 올렸다(대비 ~1:1). 아래 no-image 분기는 isDarkPalette와
+        // 정확히 같아야 한다(회귀 기준, BgContrastTest).
+        if (imageLuminance == null) return bgColorLuminance
+        val a = imageAlpha.coerceIn(0, 255) / 255.0
+        val blended = bgColorLuminance * (1 - a) + imageLuminance * a
         val scrim = scrimAlpha.coerceIn(0, 255) / 255.0
         return blended * (1 - scrim)
     }

@@ -25,6 +25,8 @@ class LockScreenSettingsScreen extends StatefulWidget {
 class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     with WidgetsBindingObserver {
   bool _enabled = false;
+  /// '다른 앱 위에 표시' 권한 보유 여부(진입 시·resumed 시 갱신). false면 경고 타일.
+  bool _canDrawOverlays = true;
   List<Folder> _folders = [];
   Set<int> _selectedFolderIds = {};
   int _finishedFilter = -1; // -1=전체, 0=암기중, 1=완료
@@ -90,17 +92,43 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // 시스템 설정에서 돌아왔으면 경고 타일 상태를 갱신한다.
+    LockScreenService.canDrawOverlays().then((v) {
+      if (mounted && v != _canDrawOverlays) setState(() => _canDrawOverlays = v);
+    });
     // 오버레이 권한 설정 화면에서 돌아왔을 때 재확인
-    if (state == AppLifecycleState.resumed && _enabled && !_checkingOverlay) {
+    if (_enabled && !_checkingOverlay) {
       _checkOverlayAndStart();
     }
   }
 
   Future<void> _loadData() async {
-    final allFolders = await DatabaseHelper.instance.getAllFolders();
+    final List<Folder> allFolders;
+    final Map settings;
+    final bool canDraw;
+    try {
+      allFolders = await DatabaseHelper.instance.getAllFolders();
+      settings = await LockScreenService.getSettings();
+      // 진입 시에도 권한을 본다 — 권한이 나중에 회수되면 스위치는 ON, 알림은 켜짐, 잠금화면은
+      // 안 뜨는 침묵 실패가 됐고 이 화면은 resumed/재토글에서만 권한을 다시 봤다.
+      canDraw = await LockScreenService.canDrawOverlays();
+    } catch (e) {
+      // 예전엔 try/catch가 없어 DB/채널 실패 시 스피너가 영원히 돌았다.
+      debugPrint('[LOCK_SETTINGS] load failed: $e');
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLocalizations.of(context).settingsLoadFailed(e.toString()),
+          ),
+        ),
+      );
+      return;
+    }
     // 번들 폴더 제외 (카드를 직접 갖지 않으므로 잠금화면에 부적합)
     final folders = allFolders.where((f) => !f.isBundle).toList();
-    final settings = await LockScreenService.getSettings();
 
     // Stage 3: 배경 이미지 경로가 가리키는 파일이 실제로 있는지 확인. 없으면(수동
     // 삭제 등) 없는 파일을 계속 가리키지 않고 "이미지 없음"으로 취급한다.
@@ -117,6 +145,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
 
     setState(() {
       _folders = folders;
+      _canDrawOverlays = canDraw;
       _enabled = settings['enabled'] as bool? ?? false;
       final folderIds = settings['folderIds'];
       if (folderIds is List) {
@@ -194,6 +223,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       } else {
         if (!mounted) return;
         setState(() => _enabled = false);
+        // 화면만 되돌리지 않고 저장도 한다 — 디바운스 저장이 다이얼로그 사이에 _enabled=true로
+        // 발화했을 수 있어, 안 그러면 "화면은 OFF, 저장값은 ON"으로 갈린다.
+        await _applySettings();
         return;
       }
     }
@@ -201,6 +233,13 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _applySettings() async {
+    // 스위치 ON인데 선택 폴더가 비었으면(저장된 id의 폴더가 삭제된 뒤 다른 설정을 바꾼 경우
+    // 등) ON 토글과 같은 규칙으로 첫 폴더를 자동 선택한다 — 빈 목록은 네이티브 사양상
+    // "전체 카드"라 화면("폴더 선택" 힌트)과 실제 동작이 갈렸다.
+    if (_enabled && _selectedFolderIds.isEmpty && _folders.isNotEmpty) {
+      _selectedFolderIds.add(_folders.first.id!);
+      if (mounted) setState(() {});
+    }
     final scheduleCsv = LockScreenSchedule.encode(_slots);
     if (_enabled) {
       await LockScreenService.startService(
@@ -530,6 +569,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                   ),
                   DropdownButtonFormField<int>(
                     initialValue: folderId,
+                    // 형제 드롭다운(기본 폴더·편집 화면)과 같게 — 없으면 긴 폴더명이
+                    // 다이얼로그 폭을 밀어 가로로 넘친다.
+                    isExpanded: true,
                     decoration: InputDecoration(
                       labelText: t.lockScheduleFolder,
                     ),
@@ -538,7 +580,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                         .map(
                           (f) => DropdownMenuItem(
                             value: f.id,
-                            child: Text(f.name),
+                            child: Text(f.name, overflow: TextOverflow.ellipsis),
                           ),
                         )
                         .toList(),
@@ -665,6 +707,13 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     return _folders.any((f) => f.id == id) ? id : null;
   }
 
+  /// 드롭다운이 가리키는 기본 폴더(없으면 null).
+  Folder? get _selectedBaseFolder {
+    final id = _dropdownFolderValue();
+    if (id == null) return null;
+    return _folders.cast<Folder?>().firstWhere((f) => f!.id == id, orElse: () => null);
+  }
+
   /// Background 섹션 안의 소제목. 섹션 제목(titleSmall)보다 한 단계 작고 흐리게 —
   /// 색상/이미지/텍스트 색상이 각각 다른 설정처럼 보이지 않게 한다.
   Widget _bgSubLabel(BuildContext context, String text) {
@@ -777,6 +826,29 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               child: Switch(value: _enabled, onChanged: _onEnabledChanged),
             ),
           ),
+          // 권한이 회수된 상태를 화면에서 드러낸다(푸시 설정의 정확한 알림 안내 카드와 같은 역할).
+          if (_enabled && !_canDrawOverlays)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Material(
+                color: Theme.of(context).colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(12),
+                child: ListTile(
+                  leading: Icon(Icons.warning_amber_rounded,
+                      color: Theme.of(context).colorScheme.onErrorContainer),
+                  title: Text(t.lockOverlayPermissionTitle,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onErrorContainer)),
+                  subtitle: Text(t.lockOverlayPermissionBody,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.onErrorContainer)),
+                  trailing: TextButton(
+                    onPressed: () => LockScreenService.requestOverlayPermission(),
+                    child: Text(t.lockOpenSystemSettings),
+                  ),
+                ),
+              ),
+            ),
           const Divider(),
 
           // 폴더 선택 (단일 선택) — 스케줄이 켜지면 "폴더 선택" 대신 "기본 폴더"로 표기
@@ -838,6 +910,17 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               },
             ),
           ),
+          // 선택한 기본 폴더가 비었으면 알린다 — 슬롯·푸시 규칙은 빨간 "카드 없음"을 보이는데
+          // 기본 폴더만 없어서, ON 토글이 자동 선택한 첫 폴더가 빈 폴더면 상주 알림만 켜진 채
+          // 오버레이가 영영 안 뜨는 침묵 실패였다.
+          if (_selectedBaseFolder?.cardCount == 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                t.lockBaseFolderEmpty,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ),
 
           const Divider(),
 

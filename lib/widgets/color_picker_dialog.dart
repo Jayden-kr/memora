@@ -272,8 +272,17 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
     // "LayoutBuilder does not support returning intrinsic dimensions" 예외가
     // 난다. CustomPaint는 고정 size를 그대로 자기 intrinsic 크기로 보고하므로
     // 이 경로에서 안전하다.
-    const svSize = Size(_pickerWidth, 180);
-    const hueSize = Size(_pickerWidth, 28);
+    //
+    // 단, 폭은 화면에 맞춘다: AlertDialog의 insetPadding 40×2 + contentPadding 24×2 =
+    // 128dp를 뺀 값보다 크면 CustomPaint가 constraints에 눌려 232dp 등으로 그려지는데
+    // 제스처 계산은 260으로 나눠 hue 최대 321°·채도 0.89로 잘렸다(388dp 미만 폰 — 빨강/
+    // 마젠타 계열을 아예 못 고름). 그리는 폭과 나누는 폭을 같은 값으로 묶는다.
+    final available = MediaQuery.sizeOf(context).width - 128;
+    final pickerWidth = available < _pickerWidth
+        ? available.clamp(120.0, _pickerWidth)
+        : _pickerWidth;
+    final svSize = Size(pickerWidth, 180);
+    final hueSize = Size(pickerWidth, 28);
 
     return AlertDialog(
       title: Text(t.lockBgCustomColor),

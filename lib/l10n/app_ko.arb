@@ -445,6 +445,7 @@
   "lockScheduleApplyNote": "다음에 화면이 꺼질 때부터 적용됩니다.",
   "lockBaseFolder": "기본 폴더",
   "lockBaseFolderHint": "어느 시간대에도 해당하지 않을 때 보여줄 폴더",
+  "lockBaseFolderEmpty": "이 폴더엔 카드가 없어 잠금화면에 보여줄 카드가 없습니다.",
   "lockScheduleActualRange": "실제 적용 {ranges}",
   "@lockScheduleActualRange": {
     "placeholders": {

@@ -122,6 +122,31 @@ class BgContrastTest {
     }
 
     @Test
+    fun `no image ignores scrim — default scrimAlpha 102 must not darken a bright solid background`() {
+        // 감사(2026-09-05 D5-01): 이미지가 없으면 스크림 레이어가 그려지지 않는데 판정만 스크림을
+        // 곱해 휘도 0.55~0.917의 밝은 단색이 "어두운 배경"으로 오판됐다. 기존 회귀 테스트는
+        // scrimAlpha=0만 넣어 이 구멍을 못 봤다 — 실제 기본값 102와 극단값 255로 고정한다.
+        val brightGray = 0xFFE0E0E0.toInt()   // 휘도 ≈ 0.878: 밝다
+        assertFalse(BgContrast.isDarkPalette(brightGray))
+        for (scrim in listOf(0, 102, 255)) {
+            assertEquals(
+                "scrimAlpha=$scrim",
+                BgContrast.isDarkPalette(brightGray),
+                BgContrast.isDarkPaletteEffective(
+                    brightGray, imageLuminance = null, imageAlpha = 255, scrimAlpha = scrim
+                )
+            )
+            assertEquals(
+                "scrimAlpha=$scrim",
+                BgContrast.isDarkPalette(darkDefault),
+                BgContrast.isDarkPaletteEffective(
+                    darkDefault, imageLuminance = null, imageAlpha = 255, scrimAlpha = scrim
+                )
+            )
+        }
+    }
+
+    @Test
     fun `bright full-opacity image over dark background flips to light palette`() {
         // 어두운 기본 배경(휘도 ~0.03) + 완전 불투명한 새하얀 이미지(휘도 1.0) +
         // 스크림 없음 → 실제로 보이는 건 거의 흰 이미지다. dark 팔레트(흰 텍스트)를
