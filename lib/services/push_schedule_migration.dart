@@ -168,7 +168,18 @@ class PushScheduleMigration {
     final alreadyMigrated =
         (settings[migratedKey] ?? '').toLowerCase() == 'true';
     final currentRulesCsv = settings[PushSchedule.settingRulesKey] ?? '';
-    if (alreadyMigrated || currentRulesCsv.isNotEmpty) return;
+    if (alreadyMigrated) return;
+    if (currentRulesCsv.isNotEmpty) {
+      // 규칙이 이미 있다 = 마이그레이션할 게 없다. 그래도 플래그는 지금 굳혀 둔다 —
+      // 안 그러면 나중에 마지막 규칙을 지워 CSV가 비는 순간 이 함수가 다시 돌아
+      // 구버전 설정(push_alarms/push_schedule)이 규칙으로 부활한다.
+      try {
+        await DatabaseHelper.instance.upsertSetting(migratedKey, 'true');
+      } catch (e) {
+        debugPrint('[PUSH_MIGRATION] 플래그 저장 실패: $e');
+      }
+      return;
+    }
 
     List<Map<String, dynamic>> alarms;
     try {

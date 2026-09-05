@@ -109,9 +109,14 @@ class PushNotificationService : Service() {
             // :push가 기록한 스케줄을 되돌릴 위험) 메인이 직접 쓰지 않고 여기로 넘겨준다.
             val running = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
                 .getBoolean("running", false)
-            lang = AppLang.normalize(intent.getStringExtra(AppLang.EXTRA_LANG))
-            getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-                .edit().putString("lang", lang).commit()
+            // 메인이 넘긴 코드가 null이면 "시스템 언어 따라가기". 해석된 코드를 박아두면
+            // 나중에 폰 언어를 바꿔도 :push만 옛 언어에 남는다 — 키를 지워서 읽을 때마다
+            // 시스템을 다시 보게 한다(AppLang.save와 같은 규약).
+            val requested = intent.getStringExtra(AppLang.EXTRA_LANG)
+            lang = AppLang.normalize(requested)
+            getSharedPreferences("push_notif_prefs", MODE_PRIVATE).edit().apply {
+                if (requested.isNullOrEmpty()) remove("lang") else putString("lang", lang)
+            }.commit()
             // 채널 이름은 서비스가 꺼져 있어도 시스템 설정에 남으므로 먼저 갱신한다.
             // (이미 있는 채널만 — 안 쓰던 사용자에게 채널을 새로 만들지 않는다)
             val nm = getSystemService(NotificationManager::class.java)
@@ -183,6 +188,24 @@ class PushNotificationService : Service() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "TICK startForeground 실패", e)
+                // 체인 유지: 여기서 그냥 물러나면 다음 알람이 영영 예약되지 않아 앱을 다시
+                // 열기 전까지 푸시가 죽는다(다음 예약 코드는 이 아래에 있어 도달 불가였다).
+                // 실패가 일시적(배경 시작 제한 등)일 수 있으니 다음 발화만이라도 예약해 두고
+                // 물러난다. 이미 STOP된 상태(tombstone)면 예약하지 않는다.
+                try {
+                    val p = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                    if (p.getBoolean("running", false) && p.contains("nextFireTime")) {
+                        val now = nowMinutes()
+                        val next = computeNextFireTime(p, now, PushSchedule.activeRule(now, rules))
+                        saveNextFireTime(next)
+                        scheduleNextAlarm(next - System.currentTimeMillis())
+                    }
+                } catch (t: Exception) {
+                    Log.e(TAG, "복구 알람 예약 실패", t)
+                }
+                // startForegroundService로 시작됐는데 startForeground를 못 했으니 5초 안에
+                // 스스로 멈춰야 ForegroundServiceDidNotStartInTime 크래시가 안 난다.
+                stopSelf()
                 return START_NOT_STICKY
             }
 
@@ -216,22 +239,9 @@ class PushNotificationService : Service() {
             ))
 
             // 다음 알람을 먼저 예약 (프로세스가 발화 도중 죽어도 체인 유지)
-            if (rule != null) {
-                // 핵심: 예정시각(savedNextFireTime) 기준으로 다음 계산 → 드리프트 누적 방지
-                val intervalMs = rule.intervalMin * 60_000L
-                val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
-                var nextFireTime = savedFireTime + intervalMs
-                while (nextFireTime <= System.currentTimeMillis()) {
-                    nextFireTime += intervalMs
-                }
-                saveNextFireTime(nextFireTime)
-                scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
-            } else {
-                val gapMin = minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN)
-                val nextFireTime = System.currentTimeMillis() + gapMin * 60_000L
-                saveNextFireTime(nextFireTime)
-                scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
-            }
+            val nextFireTime = computeNextFireTime(prefs, now, rule)
+            saveNextFireTime(nextFireTime)
+            scheduleNextAlarm(nextFireTime - System.currentTimeMillis())
 
             // 예약 완료 후 발화 (프로세스 사망 시 이번 알림만 유실, 체인은 유지). 규칙이
             // 없으면(gap) 발화하지 않는다 — 이게 이 재설계의 핵심 동작 변경이다.
@@ -498,11 +508,32 @@ class PushNotificationService : Service() {
      */
     private fun loadSettingsFromPrefs() {
         val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
-        lang = prefs.getString("lang", "ko") ?: "ko"
+        // 키가 없으면 "시스템 언어 따라가기" — 예전엔 "ko"로 굳혀 영어 폰에서도 프로세스가
+        // 재생성될 때마다 한국어로 돌아갔다. 다른 두 읽기 경로(SET_LANG·메인 분기)와 동일 규약.
+        lang = AppLang.normalize(prefs.getString("lang", null))
         rules = PushSchedule.parse(prefs.getString("scheduleCsv", null))
         if (rules.isEmpty()) {
             val fallback = legacyFallbackRules(prefs)
             if (fallback.isNotEmpty()) rules = fallback
+        }
+    }
+
+    /**
+     * TICK의 다음 발화 시각. 규칙이 있으면 예정시각(savedNextFireTime)+간격 — 실제 발화
+     * 시각이 아니라 예정시각 기준이라 드리프트가 누적되지 않는다. 규칙이 없으면(gap) 다음
+     * 규칙 시작까지(최대 MAX_GAP_POLL_MIN분). 정상 TICK과 startForeground 실패 경로가
+     * 같은 계산을 쓰도록 분리했다.
+     */
+    private fun computeNextFireTime(prefs: SharedPreferences, now: Int, rule: PushSchedule.Rule?): Long {
+        return if (rule != null) {
+            val intervalMs = rule.intervalMin * 60_000L
+            val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
+            var next = savedFireTime + intervalMs
+            while (next <= System.currentTimeMillis()) next += intervalMs
+            next
+        } else {
+            val gapMin = minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN)
+            System.currentTimeMillis() + gapMin * 60_000L
         }
     }
 
@@ -579,6 +610,19 @@ class PushNotificationService : Service() {
         return Triple(-1, -1, "")
     }
 
+    /** 최근 카드 알림 [keepIds]만 남기고 나머지 카드 알림(ID ≥ CARD_NOTIF_BASE)을 지운다. */
+    private fun pruneCardNotifications(nm: NotificationManager?, keepIds: Set<Int>) {
+        if (nm == null) return
+        try {
+            for (sbn in nm.activeNotifications) {
+                val id = sbn.id
+                if (id >= CARD_NOTIF_BASE && id !in keepIds) nm.cancel(id)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "카드 알림 정리 실패", e)
+        }
+    }
+
     private fun showCardNotification(targetFolderId: Int?) {
         val dbFile = findDbFile() ?: return
         var db: SQLiteDatabase? = null
@@ -589,6 +633,12 @@ class PushNotificationService : Service() {
             // 직전에 뜬 카드 재출현 방지용 최근 카드 ID 목록. push_notif_prefs는
             // :push 프로세스(이 서비스)만 읽고 쓴다.
             val pushPrefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+            // STOP 이후에도 fire()가 띄운 이 스레드는 살아 있다(tombstone은 새 TICK만 막는다).
+            // 여기서 한 번, notify 직전에 한 번 더 확인해 "방금 껐는데 한 장 더"를 막는다.
+            if (!pushPrefs.getBoolean("running", false)) {
+                Log.d(TAG, "STOP 이후 발화 취소")
+                return
+            }
             val recentCardIds = parseRecentIds(pushPrefs.getString("recentCardIds", null))
 
             // 랜덤 카드 조회 (규칙이 지정한 폴더 우선, 직전 카드들 제외)
@@ -651,14 +701,25 @@ class PushNotificationService : Service() {
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
 
+            if (!pushPrefs.getBoolean("running", false)) {
+                Log.d(TAG, "STOP 이후 발화 취소(notify 직전)")
+                return
+            }
             nm?.notify(notifId, builder.build())
-            Log.d(TAG, "알림 표시 완료: cardId=$cardId, payload=$payload, body=$question")
+            // 카드 본문은 로그에 남기지 않는다(릴리스 빌드에서도 Log가 제거되지 않음).
+            Log.d(TAG, "알림 표시 완료: cardId=$cardId, payload=$payload")
 
             // 발화 성공 후 recentCardIds 갱신: 새 카드를 맨 앞에 추가, 5개 초과분은 버림.
             // 이 prefs는 :push 프로세스(이 서비스 자신)만 읽고 쓴다.
             val updatedRecent = (listOf(cardId) + recentCardIds.filter { it != cardId })
                 .take(RECENT_CARD_LIMIT)
             pushPrefs.edit().putString("recentCardIds", encodeRecentIds(updatedRecent)).apply()
+
+            // 카드 알림은 카드마다 ID가 달라 아무도 지우지 않으면 무한 누적된다. Android는
+            // 패키지당 동시 알림 상한(AOSP 25)을 넘기면 notify()를 예외 없이 무시하므로 알림함을
+            // 안 비우는 사용자는 며칠 만에 푸시가 조용히 전멸했다. 최근 N장(재출현 방지 목록과
+            // 같은 5장)만 남기고 그 밖의 카드 알림은 걷어낸다 — 예전 버전이 쌓아둔 것도 함께.
+            pruneCardNotifications(nm, updatedRecent.map { CARD_NOTIF_BASE + it }.toSet())
         } catch (e: Exception) {
             Log.e(TAG, "알림 표시 실패", e)
         } finally {

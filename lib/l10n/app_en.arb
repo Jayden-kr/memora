@@ -295,6 +295,7 @@
   "pushAllFolders": "All folders",
   "pushSendTest": "Send test notification",
   "pushTestSent": "Test notification sent.",
+  "pushTestNoPermission": "Notifications are turned off for this app, so the test notification could not be shown.",
   "pushIntervalLabel": "Interval",
   "pushIntervalMinutes": "min",
   "pushExactAlarmTitle": "Exact alarm permission needed",

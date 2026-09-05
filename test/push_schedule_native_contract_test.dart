@@ -157,18 +157,40 @@ canonicalCsv를 만드는 "encode(parse(rulesCsvRaw))" 정규화 파이프라인
           _ifBlockBody(_pushService(), 'if (intent?.action == ACTION_TICK)');
       expect(tickBody.contains('PushSchedule.activeRule(now, rules)'), isTrue,
           reason: 'TICK 분기가 PushSchedule.activeRule(now, rules)로 활성 규칙을 구하지 않는다.');
-      expect(tickBody.contains('rule.intervalMin'), isTrue, reason: '''
-TICK 분기의 간격 계산이 rule.intervalMin을 쓰지 않는다.
+      // 다음 발화 시각 계산은 computeNextFireTime() 한 곳에 모여 있다 — 정상 TICK과
+      // startForeground 실패 복구 경로가 같은 계산을 써야 하기 때문(감사 X1-04).
+      // 그래서 간격/gap 규칙은 TICK 본문이 아니라 그 함수 본문에서 확인한다.
+      expect(tickBody.contains('computeNextFireTime(prefs, now, rule)'), isTrue,
+          reason: 'TICK 분기가 computeNextFireTime(prefs, now, rule)로 다음 발화 시각을 계산하지 않는다.');
+      final src = _pushService();
+      final calcStart = src.indexOf('private fun computeNextFireTime');
+      expect(calcStart, greaterThanOrEqualTo(0),
+          reason: 'computeNextFireTime 함수를 찾지 못했다. 리팩터됐다면 이 테스트도 함께 고칠 것.');
+      final calcBody = _braceBalancedBodyFrom(src, calcStart);
+      expect(calcBody.contains('rule.intervalMin'), isTrue, reason: '''
+다음 발화 시각 계산(computeNextFireTime)이 rule.intervalMin을 쓰지 않는다.
 
 전역 intervalMin으로 되돌아가면 규칙별 간격 오버라이드가 조용히 무시된다.
 ''');
       expect(tickBody.contains('fire(rule)'), isTrue, reason: '''
 TICK 분기가 fire(rule) 형태로 판정된 규칙을 발화 경로에 넘기지 않는다.
 ''');
-      expect(tickBody.contains('minutesUntilNextStart'), isTrue, reason: '''
-TICK 분기가 활성 규칙이 없을 때(gap) minutesUntilNextStart로 다음 재평가 시각을
+      expect(calcBody.contains('minutesUntilNextStart'), isTrue, reason: '''
+다음 발화 시각 계산이 활성 규칙이 없을 때(gap) minutesUntilNextStart로 다음 재평가 시각을
 계산하지 않는다 — 이게 없으면 gap 진입 후 다음 규칙 시작을 영영 놓칠 수 있다.
 ''');
+      // startForeground 실패 경로도 체인을 유지해야 한다(X1-04): catch 안에서 같은 계산으로
+      // 다음 알람을 예약한 뒤 물러나야 한다. 이게 빠지면 한 번의 실패로 푸시가 영구 정지한다.
+      final catchIdx = tickBody.indexOf('"TICK startForeground 실패"');
+      expect(catchIdx, greaterThanOrEqualTo(0),
+          reason: 'TICK startForeground 실패 catch 블록을 찾지 못했다.');
+      final afterCatch = tickBody.substring(catchIdx);
+      final recoveryIdx = afterCatch.indexOf('computeNextFireTime(');
+      final returnIdx = afterCatch.indexOf('return START_NOT_STICKY');
+      expect(recoveryIdx, greaterThanOrEqualTo(0),
+          reason: 'startForeground 실패 catch가 computeNextFireTime으로 복구 알람을 예약하지 않는다.');
+      expect(recoveryIdx < returnIdx, isTrue,
+          reason: '복구 알람 예약이 return START_NOT_STICKY 뒤에 있어 도달 불가다.');
     });
 
     test('rule이 null이면(gap) TICK이 fire를 호출하지 않아야 한다(무음 동작 보증)', () {

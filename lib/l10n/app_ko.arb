@@ -462,6 +462,7 @@
   "pushAllFolders": "전체 폴더",
   "pushSendTest": "테스트 알림 보내기",
   "pushTestSent": "테스트 알림을 보냈습니다.",
+  "pushTestNoPermission": "앱 알림이 꺼져 있어 테스트 알림을 보낼 수 없습니다.",
   "pushIntervalLabel": "간격",
   "pushIntervalMinutes": "분",
   "pushExactAlarmTitle": "정확한 시간 알림 권한이 필요합니다",

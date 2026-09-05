@@ -64,8 +64,11 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "setLanguage" -> {
                         // lang=null → 시스템 언어 따라가기
-                        AppLang.save(this, call.argument<String>("lang"))
-                        applyLanguageToRunningServices(AppLang.current(this))
+                        val requested = call.argument<String>("lang")
+                        AppLang.save(this, requested)
+                        // 해석된 코드(AppLang.current)가 아니라 요청값 그대로 넘긴다 — null이면
+                        // :push도 "시스템 따라가기"로 기록해야 폰 언어 변경을 따라간다.
+                        applyLanguageToRunningServices(requested)
                         result.success(true)
                     }
                     else -> result.notImplemented()
@@ -511,7 +514,7 @@ class MainActivity : FlutterActivity() {
      * 푸시는 :push 별도 프로세스여서 이 프로세스의 prefs 캐시가 뒤처져 있을 수 있으므로,
      * 판단을 서비스 쪽에 맡긴다 — 꺼져 있으면 서비스가 스스로 즉시 종료한다.
      */
-    private fun applyLanguageToRunningServices(code: String) {
+    private fun applyLanguageToRunningServices(code: String?) {
         try {
             // 서비스가 안 돌고 있어도 채널 이름은 남아 있으므로 여기서 갱신해 둔다.
             ImportExportService.refreshChannelLanguage(this)

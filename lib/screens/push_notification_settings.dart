@@ -458,6 +458,10 @@ class _PushNotificationSettingsScreenState
                                   PushSchedule.settingRulesKey,
                                   PushSchedule.encode(_rules));
                             }
+                            // 재스케줄(=서비스 STOP/START)은 화면 생존과 무관하다 — mounted
+                            // 검사 뒤에 두면 OFF 직후 화면을 벗어났을 때 DB는 false인데
+                            // 서비스는 계속 알림을 보낸다(과거 #3 "끈 뒤에도 알림" 재발 경로).
+                            await NotificationService.rescheduleAll();
                             if (!mounted) return;
                             if (needsDefaultRule) {
                               messenger.showSnackBar(
@@ -466,7 +470,6 @@ class _PushNotificationSettingsScreenState
                                         Text(t.pushRulesDefaultCreated)),
                               );
                             }
-                            await NotificationService.rescheduleAll();
                           } catch (e) {
                             debugPrint('[PUSH_SETTINGS] toggle failed: $e');
                             if (!mounted) return;
@@ -506,10 +509,15 @@ class _PushNotificationSettingsScreenState
                   onTap: _enabled
                       ? () async {
                           final messenger = ScaffoldMessenger.of(context);
-                          await NotificationService.showTestNotification();
+                          final shown =
+                              await NotificationService.showTestNotification();
                           if (!mounted) return;
                           messenger.showSnackBar(
-                            SnackBar(content: Text(t.pushTestSent)),
+                            SnackBar(
+                              content: Text(shown
+                                  ? t.pushTestSent
+                                  : t.pushTestNoPermission),
+                            ),
                           );
                         }
                       : null,

@@ -141,7 +141,10 @@ class NotificationService {
   /// 즉시 테스트 알림 전송. 지금 이 순간의 활성 규칙(없으면 목록의 첫 규칙, 그마저도
   /// 없으면 전체 폴더)의 폴더에서 카드를 뽑는다 — gap 시간대에 테스트를 눌러도
   /// "규칙이 하나라도 있으면 그중 대표를 쓴다"는 정의된 동작을 갖는다(무동작이 아님).
-  static Future<void> showTestNotification() async {
+  /// 반환: 실제로 알림을 띄웠으면 true. 알림 권한이 꺼져 있으면(Android 13+ 거부 또는
+  /// 앱 알림 OFF) `show()`가 예외 없이 무시되므로 먼저 확인하고 false를 돌려준다 —
+  /// 예전엔 void라 화면이 무조건 "보냈습니다"를 띄웠다.
+  static Future<bool> showTestNotification() async {
     final isEn = LocaleService.currentLanguageCode() == 'en';
     String body = isEn ? 'Time to review your cards!' : '카드를 복습할 시간입니다!';
     String? payload;
@@ -183,11 +186,21 @@ class NotificationService {
       ),
     );
 
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final enabled = await android?.areNotificationsEnabled() ?? true;
+    if (!enabled) {
+      debugPrint('[NOTIF] 알림 권한 꺼짐 — 테스트 알림 스킵');
+      return false;
+    }
+
     try {
       await _plugin.show(99999, null, body, notificationDetails,
           payload: payload);
+      return true;
     } catch (e) {
       debugPrint('[NOTIF] 테스트 알림 표시 실패: $e');
+      return false;
     }
   }
 
