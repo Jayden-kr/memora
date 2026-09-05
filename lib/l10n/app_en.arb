@@ -346,6 +346,7 @@
   "cardDeleteSingleConfirm": "Delete this card?",
   "cardDeleteMultiConfirm": "Delete {count} card(s)?",
   "cardDeleteFail": "Failed to delete card.",
+  "cardMoveFail": "Failed to move cards.",
   "cardDuplicateFail": "Failed to duplicate card.",
   "cardPickFolderTitle": "Pick folder",
   "cardMoveTargetTitle": "Pick destination folder",

@@ -889,11 +889,16 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   Future<void> _deleteSelected() async {
     if (_isBatchActioning) return; // 재진입 차단 (delete/move 동시 시작 방지)
     final t = AppLocalizations.of(context);
+    // 진입 즉시 대상을 스냅샷한다 — 확인 다이얼로그가 떠 있는 동안 진행 중인 검색이
+    // _pruneSelection으로 선택을 줄이면 "20개 삭제"를 확인했는데 3개만 지워지고 통보도
+    // 없었다. 사용자가 확인한 집합 = 이 스냅샷.
+    final targetIds = _selectedCardIds.toList();
+    if (targetIds.isEmpty) return;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(t.cardDeleteTitle),
-        content: Text(t.cardDeleteMultiConfirm(_selectedCardIds.length)),
+        content: Text(t.cardDeleteMultiConfirm(targetIds.length)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -911,17 +916,16 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
     _isBatchActioning = true;
     try {
-      // 삭제 전 파일 경로 수집 (메모리 상의 _cards에서만, 빠름)
-      final selectedCards = _cards
-          .where((c) => _selectedCardIds.contains(c.id))
-          .toList();
+      // 삭제 전 파일 경로 수집 — 메모리 _cards가 아니라 DB에서: 다이얼로그 사이 검색으로
+      // 화면을 떠난 카드도 대상이고, 그 카드의 파일도 함께 지워야 고아가 안 남는다.
+      final byId = await DatabaseHelper.instance.getCardsByIdsBatch(targetIds);
       final allFilePaths = <String>[];
-      for (final card in selectedCards) {
+      for (final card in byId.values) {
         allFilePaths.addAll(_collectCardFilePaths(card));
       }
 
       // ⚡ atomic transaction (folder card_count 자동 갱신 포함). 수백 ms 안에 commit.
-      final deletedIds = _selectedCardIds.toList();
+      final deletedIds = targetIds;
       await DatabaseHelper.instance.deleteCardsBatch(deletedIds);
       if (!mounted) return;
 
@@ -950,6 +954,10 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   Future<void> _moveSelected() async {
     if (_isBatchActioning) return; // 재진입 차단
     final t = AppLocalizations.of(context);
+    // 스냅샷은 폴더 목록 조회·폴더 선택·중복 확인 다이얼로그보다 먼저 — 그 사이 검색이
+    // 선택을 줄이면 사용자가 고른 카드 일부만 이동하고 통보도 없었다(_deleteSelected와 동일).
+    final allIds = _selectedCardIds.toList();
+    if (allIds.isEmpty) return;
     var folders = await DatabaseHelper.instance.getNonBundleFolders();
     if (!mounted) return;
     if (!widget.allCards) {
@@ -961,7 +969,6 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     );
     if (target == null || !mounted) return;
 
-    final allIds = _selectedCardIds.toList();
     final duplicates = await DatabaseHelper.instance
         .findDuplicateCardIdsInFolder(allIds, target.id!);
     if (!mounted) return;
@@ -1002,11 +1009,19 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         _removeCardsLocally(idsToMove);
       }
 
-      if (skipped > 0 && mounted) {
+      // 결과는 항상 알린다 — 스냅샷 밖에서 선택이 줄었어도 "몇 장이 옮겨졌는지"를 사용자가 안다.
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(t.cardMoveResult(idsToMove.length, skipped))),
         );
       }
+    } catch (e) {
+      // 삭제 쪽엔 있던 실패 통보가 이동엔 없어 실패가 무음으로 사라졌다.
+      debugPrint('[CARD_LIST] batch card move failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.cardMoveFail)),
+      );
     } finally {
       _isBatchActioning = false;
     }
@@ -1067,8 +1082,11 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       isHighlighted: isHighlighted,
       cardNumber: _showCardNumber ? index + 1 : null,
       searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
-      onQuestionTap: () => _toggleQuestionFold(card),
-      onAnswerTap: () => _toggleAnswerReveal(card),
+      // 선택모드에선 접기/보이기 제스처를 끊는다 — 안쪽 GestureDetector(opaque)가 제스처
+      // 아레나에서 이겨 카드 본문 탭이 선택을 토글하지 못하고 왼쪽 동그라미만 반응했다
+      // (실기기 확인). 콜백이 null이면 인식기가 만들어지지 않아 InkWell.onTap이 받는다.
+      onQuestionTap: _isSelectionMode ? null : () => _toggleQuestionFold(card),
+      onAnswerTap: _isSelectionMode ? null : () => _toggleAnswerReveal(card),
       onTap: _isSelectionMode
           ? () => _toggleCardSelection(card)
           : () => _editCard(card),

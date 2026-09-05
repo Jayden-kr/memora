@@ -538,6 +538,7 @@
     }
   },
   "cardDeleteFail": "카드 삭제에 실패했습니다.",
+  "cardMoveFail": "카드 이동에 실패했습니다.",
   "cardDuplicateFail": "카드 복제에 실패했습니다.",
   "cardPickFolderTitle": "폴더 선택",
   "cardMoveTargetTitle": "이동할 폴더 선택",

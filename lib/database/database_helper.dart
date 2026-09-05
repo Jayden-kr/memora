@@ -937,33 +937,43 @@ class DatabaseHelper {
       .replaceAll('_', '\\_');
 
   /// 검색 (Question 매치 우선, 단일 쿼리, 대소문자 무시)
+  /// 폴더 내 검색. id만 먼저 고른 뒤 [getCardsByIdsBatch]로 청크 로드한다 — 100+ 컬럼
+  /// SELECT *를 무제한으로 하면 Android Binder(1MB) 한계에 row가 조용히 손상된다(이 파일의
+  /// 다른 모든 카드 로드 경로가 청크를 쓰는 이유). 검색만 그 규약의 유일한 구멍이었다.
   Future<List<CardModel>> searchCards(int folderId, String query) async {
     final db = await database;
     final escaped = _escapeLike(query);
     final pattern = '%$escaped%';
-    final results = await db.rawQuery(
-      "SELECT * FROM ${AppConstants.tableCards} "
+    final idRows = await db.rawQuery(
+      "SELECT id FROM ${AppConstants.tableCards} "
       "WHERE folder_id = ? AND (question LIKE ? ESCAPE '\\' COLLATE NOCASE OR answer LIKE ? ESCAPE '\\' COLLATE NOCASE) "
       "ORDER BY CASE WHEN question LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, sequence ASC",
       [folderId, pattern, pattern, pattern],
     );
-    return results.map((m) => CardModel.fromDb(m)).toList();
+    return _loadCardsInOrder(idRows.map((r) => r['id'] as int).toList());
   }
 
-  /// 전체 카드 검색 (allCards 모드, 단일 쿼리, 대소문자 무시)
-  /// 결과를 1000개로 제한하여 대량 카드에서 OOM 방지
+  /// 전체 카드 검색 (allCards 모드, 대소문자 무시). 결과를 1000개로 제한하여 대량 카드에서
+  /// OOM 방지. 로드는 [searchCards]와 같은 id-only + 청크 규약.
   Future<List<CardModel>> searchAllCards(String query) async {
     final db = await database;
     final escaped = _escapeLike(query);
     final pattern = '%$escaped%';
-    final results = await db.rawQuery(
-      "SELECT * FROM ${AppConstants.tableCards} "
+    final idRows = await db.rawQuery(
+      "SELECT id FROM ${AppConstants.tableCards} "
       "WHERE question LIKE ? ESCAPE '\\' COLLATE NOCASE OR answer LIKE ? ESCAPE '\\' COLLATE NOCASE "
       "ORDER BY CASE WHEN question LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END, folder_id, sequence ASC "
       "LIMIT 1000",
       [pattern, pattern, pattern],
     );
-    return results.map((m) => CardModel.fromDb(m)).toList();
+    return _loadCardsInOrder(idRows.map((r) => r['id'] as int).toList());
+  }
+
+  /// id 순서를 보존하며 청크 로드. 조회 사이에 삭제된 id는 조용히 빠진다.
+  Future<List<CardModel>> _loadCardsInOrder(List<int> orderedIds) async {
+    if (orderedIds.isEmpty) return const [];
+    final byId = await getCardsByIdsBatch(orderedIds);
+    return orderedIds.map((id) => byId[id]).whereType<CardModel>().toList();
   }
 
   /// 배치 삭제 (영향받는 폴더 card_count 자동 갱신)
