@@ -656,6 +656,30 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     ];
   }
 
+  /// 폴더 드롭다운에 표시할 값 — 정확히 하나가 선택돼 있고 그 폴더가 목록에 있을 때만.
+  /// (삭제된 폴더 id가 prefs에 남아 있으면 DropdownButton의 "값은 items 중 하나" 단언에
+  /// 걸리므로 그 경우엔 null=힌트로 떨어뜨린다)
+  int? _dropdownFolderValue() {
+    if (_selectedFolderIds.length != 1) return null;
+    final id = _selectedFolderIds.first;
+    return _folders.any((f) => f.id == id) ? id : null;
+  }
+
+  /// Background 섹션 안의 소제목. 섹션 제목(titleSmall)보다 한 단계 작고 흐리게 —
+  /// 색상/이미지/텍스트 색상이 각각 다른 설정처럼 보이지 않게 한다.
+  Widget _bgSubLabel(BuildContext context, String text) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Text(
+        text,
+        style: theme.textTheme.labelLarge?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
   Widget _buildSlotTile(
     AppLocalizations t,
     int index,
@@ -775,30 +799,43 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               ],
             ),
           ),
-          RadioGroup<int>(
-            groupValue: _selectedFolderIds.length == 1
-                ? _selectedFolderIds.first
-                : -1,
-            onChanged: (id) {
-              if (id == null || id == -1) return;
-              setState(() {
-                _selectedFolderIds
-                  ..clear()
-                  ..add(id);
-              });
-              _onSettingChanged();
-            },
-            child: Column(
-              children: _folders
+          // 폴더가 많아져도 화면을 세로로 길게 차지하지 않도록 라디오 목록 대신 드롭다운
+          // (시간대 슬롯 다이얼로그의 폴더 선택과 같은 위젯). 값은 "정확히 하나가 선택돼
+          // 있고 그 폴더가 실재할 때"만 표시하고, 아니면 힌트만 보인다.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: DropdownButtonFormField<int>(
+              initialValue: _dropdownFolderValue(),
+              isExpanded: true,
+              decoration: InputDecoration(
+                hintText: t.lockSelectFolder,
+                border: const OutlineInputBorder(),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+              ),
+              items: _folders
                   .where((f) => f.id != null)
                   .map(
-                    (folder) => RadioListTile<int>(
-                      title: Text(folder.name),
-                      subtitle: Text(t.cardCountSuffix(folder.cardCount)),
+                    (folder) => DropdownMenuItem<int>(
                       value: folder.id!,
+                      child: Text(
+                        '${folder.name}  ·  ${t.cardCountSuffix(folder.cardCount)}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   )
                   .toList(),
+              onChanged: (id) {
+                if (id == null) return;
+                setState(() {
+                  _selectedFolderIds
+                    ..clear()
+                    ..add(id);
+                });
+                _onSettingChanged();
+              },
             ),
           ),
 
@@ -868,6 +905,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             ),
           ),
 
+          _bgSubLabel(context, t.lockBgColorLabel),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Wrap(
@@ -950,16 +988,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             ),
           ),
 
-          const Divider(),
-
           // 배경 이미지 — 단색 위에 얹는 선택 요소. 없으면 오늘까지와 동일한 단색 배경.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Text(
-              t.lockBgImage,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ),
+          // 구분선 없이 소제목으로만 나눈다: 색상·이미지·텍스트 색상은 별개 설정이 아니라
+          // 하나의 배경 설정을 이루는 항목들이다.
+          _bgSubLabel(context, t.lockBgImage),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -1085,16 +1117,8 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               ),
             ),
           ],
-          const Divider(),
-
           // 텍스트 색상: auto(BgContrast 자동 판정)/light/dark 강제
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-            child: Text(
-              t.lockBgTextMode,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ),
+          _bgSubLabel(context, t.lockBgTextMode),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Wrap(

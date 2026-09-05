@@ -247,6 +247,7 @@
   "lockOrderSequential": "Sequential",
   "lockOrderRandom": "Random",
   "lockBgColor": "Background",
+  "lockBgColorLabel": "Color",
   "lockBgCustomColor": "Custom color",
   "lockBgHexLabel": "Hex code",
   "lockBgOpacity": "Opacity",
