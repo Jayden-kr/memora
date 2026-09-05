@@ -4,9 +4,11 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
+import android.media.ExifInterface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.TextUtils
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -70,7 +72,7 @@ class PdfGenerator(private val context: Context) {
 
                 cv = next()
                 // Header
-                y = txt(cv, name, M, y, 22f, fontB)
+                y = txt(cv, name, M, y, 22f, fontB, maxWidth = CW)
                 y += 2f
                 y = txt(cv, res.getString(R.string.pdf_card_count, n), M, y, 11f, fontR, Color.GRAY)
                 y += 4f
@@ -167,15 +169,23 @@ class PdfGenerator(private val context: Context) {
             y = imgs(canvas, c.aImages, M + PAD, y)
         }
 
-        return canvas to y
+        // 호출자는 이 y에 카드 간격(10f)을 더한다. 페이지를 안 넘겼으면 테두리 박스 바닥(sy+h)을
+        // 돌려줘야 다음 카드가 이 박스와 겹치지 않는다 — 내용 끝 y는 박스 바닥보다 PAD*2 위라서
+        // 그대로 돌려주면 다음 박스가 6pt 겹친다(#26 수정 때 반환값을 바꾸며 생긴 회귀).
+        // 페이지를 넘겼으면 박스는 첫 페이지에만 그려져 있으니 새 페이지의 내용 끝 + PAD.
+        return canvas to (if (canvas === cv) sy + h else y + PAD)
     }
 
     private fun imgs(cv: Canvas, paths: List<String>, x: Float, y: Float): Float {
         var dx = x
         for (p in paths) {
             val bm = thumb(p) ?: continue
-            val rh = (IMG * bm.height.toFloat() / bm.width.toFloat()).coerceAtMost(IMG)
-            cv.drawBitmap(bm, null, RectF(dx, y, dx + IMG, y + rh), null)
+            // IMG×IMG 셀 안에 비율을 유지해 맞춘다(contain). 예전엔 폭을 IMG로 고정하고 높이만
+            // 클램프해서 세로(portrait) 사진이 정사각형으로 찌그러졌다. 셀 전진 폭은 그대로.
+            val scale = minOf(IMG / bm.width.toFloat(), IMG / bm.height.toFloat())
+            val rw = bm.width * scale
+            val rh = bm.height * scale
+            cv.drawBitmap(bm, null, RectF(dx, y, dx + rw, y + rh), null)
             bm.recycle()
             dx += IMG + 6f
             if (dx + IMG > PW - M) break
@@ -194,7 +204,8 @@ class PdfGenerator(private val context: Context) {
             while (o.outWidth / ss > 140) ss *= 2
             o.inJustDecodeBounds = false
             o.inSampleSize = ss
-            BitmapFactory.decodeFile(f.path, o)
+            val raw = BitmapFactory.decodeFile(f.path, o) ?: return null
+            applyExifOrientation(f.path, raw)
         } catch (e: OutOfMemoryError) {
             Log.w(TAG, "OOM decoding image: $path", e)
             null
@@ -241,9 +252,42 @@ class PdfGenerator(private val context: Context) {
         return canvas to y
     }
 
-    private fun txt(cv: Canvas, t: String, x: Float, y: Float, s: Float, tf: Typeface, col: Int = Color.BLACK): Float {
+    /** 카메라 사진의 EXIF 회전을 적용한다. Flutter(Image.file)는 디코더가 EXIF를 존중하지만
+     *  BitmapFactory는 무시하므로, 이걸 안 하면 앱에선 똑바로 보이는 사진이 PDF에서만 눕는다.
+     *  회전에 실패(OOM)하면 원본을 그대로 쓴다 — 없는 것보다 눕는 게 낫다. */
+    private fun applyExifOrientation(path: String, bm: Bitmap): Bitmap {
+        val orientation = try {
+            ExifInterface(path).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } catch (_: Exception) { ExifInterface.ORIENTATION_NORMAL }
+        val m = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> m.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> m.preScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> m.preScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.preScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(270f); m.preScale(-1f, 1f) }
+            else -> return bm
+        }
+        return try {
+            val rotated = Bitmap.createBitmap(bm, 0, 0, bm.width, bm.height, m, true)
+            if (rotated !== bm) bm.recycle()
+            rotated
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "OOM rotating image: $path", e)
+            bm
+        }
+    }
+
+    private fun txt(cv: Canvas, t: String, x: Float, y: Float, s: Float, tf: Typeface, col: Int = Color.BLACK, maxWidth: Float? = null): Float {
         textPaint.textSize = s; textPaint.typeface = tf; textPaint.color = col
-        cv.drawText(t, x, y + s, textPaint)
+        // 폴더 이름처럼 길이 제한이 없는 문자열은 페이지 밖으로 잘려 나가지 않게 말줄임(…).
+        val shown = if (maxWidth != null)
+            TextUtils.ellipsize(t, textPaint, maxWidth, TextUtils.TruncateAt.END).toString()
+        else t
+        cv.drawText(shown, x, y + s, textPaint)
         return y + s + 4f
     }
 
