@@ -11,6 +11,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.LayerDrawable
 import android.media.MediaPlayer
 import android.os.*
+import android.net.Uri
 import android.provider.Settings
 import android.util.Log
 import android.view.*
@@ -134,6 +135,13 @@ class LockScreenService : Service() {
     // 현재 cards가 어느 폴더 조합으로 로드됐는지. null="한 번도 로드 안 됨" — 기본 폴더가
     // 빈 리스트인 사용자와 구분되게 일부러 non-null 기본값을 쓰지 않는다.
     @Volatile private var loadedFolderIds: List<Int>? = null
+    // 첫 덱 로드가 bg 스레드에서 진행 중. SCREEN_OFF가 겹치면 두 번째 로드가 이미 그려진
+    // 오버레이 밑에서 덱을 통째로(random이면 다른 순열로) 갈아끼워 "화면 카드 ≠ cards[currentIndex]"
+    // 가 되고 잠금화면 편집이 다른 카드를 열었다 — 로드가 끝나기 전의 글랜스는 합친다.
+    @Volatile private var deckLoadInFlight = false
+    // startForeground가 한 번이라도 성공했나. onStartCommand catch에서 "FGS 승격 전 실패"만
+    // stopSelf하기 위해(승격 후 showOverlay 예외로 건강한 FGS를 죽이지 않게).
+    private var foregroundStarted = false
 
     // Coral Orange 테마 색상 + 텍스트/장식 팔레트. 예전엔 전부 하드코딩 val이었지만,
     // 이제 loadSettings() → applyPalette()가 bgColor/bgTextMode에 맞춰 매번 다시
@@ -199,29 +207,21 @@ class LockScreenService : Service() {
             when (intent?.action) {
                 "SHOW_OVERLAY" -> {
                     // startForegroundService로 시작된 경우 반드시 startForeground 호출 필요 (Android 12+ 크래시 방지)
-                    val notification = createNotification()
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-                    } else {
-                        startForeground(NOTIFICATION_ID, notification)
-                    }
+                    promoteToForeground()
                     showOverlay()
                     // START_STICKY 유지: SHOW_OVERLAY가 마지막 onStartCommand일 때도
                     // OS kill 후 서비스가 자동 재시작되어야 함 (START_NOT_STICKY면 영구 중단)
                     return START_STICKY
                 }
                 "RECREATE_NOTIFICATION" -> {
-                    // 알림이 스와이프로 제거된 경우 → 다시 표시
-                    val notification = createNotification()
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        startForeground(
-                            NOTIFICATION_ID,
-                            notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                        )
-                    } else {
-                        startForeground(NOTIFICATION_ID, notification)
+                    // 알림이 스와이프로 제거된 경우 → 다시 표시. 이 인텐트가 서비스를 새로 만든
+                    // 경우(옛 알림의 deleteIntent가 죽은 프로세스를 깨움)엔 리시버 없는 좀비가
+                    // 되므로 정식 시작 경로로 자가치유한다.
+                    if (screenReceiver == null) {
+                        startNormally()
+                        return START_STICKY
                     }
+                    promoteToForeground()
                     return START_STICKY
                 }
                 AppLang.ACTION_SET_LANG -> {
@@ -235,6 +235,15 @@ class LockScreenService : Service() {
                         return START_NOT_STICKY
                     }
                     createNotificationChannel()
+                    if (screenReceiver == null) {
+                        // prefs는 running=true인데 인스턴스는 방금 콜드 생성됐다(OS kill·백업
+                        // 복원 등). LocaleService.load()가 앱 실행마다 이 인텐트를 보내므로 여기서
+                        // notify만 하면 "알림은 켜졌는데 리시버가 없어 잠금화면은 죽은" 좀비가 매 실행
+                        // 생기고, isServiceRunning()이 그 알림을 보고 true를 돌려 자가정정도 못 했다.
+                        // → 정식 시작 경로로 자가치유(설정 로드·FGS 승격·리시버 등록).
+                        startNormally()
+                        return START_STICKY
+                    }
                     getSystemService(NotificationManager::class.java)
                         ?.notify(NOTIFICATION_ID, createNotification())
                     return START_STICKY
@@ -250,28 +259,40 @@ class LockScreenService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                else -> {
-                    loadSettings()
-                    val notification = createNotification()
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                        startForeground(
-                            NOTIFICATION_ID,
-                            notification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                        )
-                    } else {
-                        startForeground(NOTIFICATION_ID, notification)
-                    }
-                    Log.d(TAG, "startForeground OK")
-                    setServiceRunning(true)
-                    registerScreenReceiver()
-                }
+                else -> startNormally()
             }
         } catch (e: Exception) {
             Log.e(TAG, "onStartCommand error", e)
+            // FGS 승격 전에 실패했으면 5초 안에 스스로 멈춰야 ForegroundServiceDidNotStartInTime
+            // 크래시가 안 난다. 승격 후의 실패(showOverlay 등)는 건강한 FGS를 유지한다.
+            if (!foregroundStarted) stopSelf()
             return START_NOT_STICKY
         }
         return START_STICKY
+    }
+
+    /** FGS 승격(startForeground). 성공하면 [foregroundStarted]를 기록한다. */
+    private fun promoteToForeground() {
+        val notification = createNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        foregroundStarted = true
+    }
+
+    /** 정식 시작 경로 — 설정 로드 → FGS 승격 → running 기록 → SCREEN_OFF 리시버 등록. */
+    private fun startNormally() {
+        loadSettings()
+        promoteToForeground()
+        Log.d(TAG, "startForeground OK")
+        setServiceRunning(true)
+        registerScreenReceiver()
     }
 
     override fun onDestroy() {
@@ -318,10 +339,30 @@ class LockScreenService : Service() {
         }
     }
 
-    private fun createNotification(): Notification {
-        val launchIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra("navigate_to", "lock_screen_settings")
+    /**
+     * 오버레이 권한이 회수돼 잠금화면을 못 띄우는 상태를 상주 알림으로 표면화한다. 예전엔
+     * showOverlay가 로그만 남기고 return해 "스위치 ON·알림 켜짐·잠금화면은 영원히 안 뜸"이
+     * 침묵 실패로 남았다. 알림 탭 → 시스템의 '다른 앱 위에 표시' 설정.
+     */
+    private fun notifyPermissionMissing() {
+        try {
+            getSystemService(NotificationManager::class.java)
+                ?.notify(NOTIFICATION_ID, createNotification(permissionMissing = true))
+        } catch (e: Exception) {
+            Log.w(TAG, "permission-missing notification failed", e)
+        }
+    }
+
+    private fun createNotification(permissionMissing: Boolean = false): Notification {
+        val launchIntent = if (permissionMissing) {
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        } else {
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("navigate_to", "lock_screen_settings")
+            }
         }
         val pendingIntent = PendingIntent.getActivity(
             this, 1, launchIntent,
@@ -350,7 +391,8 @@ class LockScreenService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Memora")
-            .setContentText(AppLang.wrap(this).getString(R.string.lock_notif_text))
+            .setContentText(AppLang.wrap(this).getString(
+                if (permissionMissing) R.string.lock_notif_permission_missing else R.string.lock_notif_text))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setDeleteIntent(deletePendingIntent)
@@ -400,7 +442,13 @@ class LockScreenService : Service() {
             ?.filter { it.isNotEmpty() }
             ?.mapNotNull { it.toIntOrNull() }
             ?: emptyList()
-        finishedFilter = prefs.getInt("finished_filter", -1)
+        // 구버전(1.0.0대)에만 UI가 있던 완료필터/뒤집기 설정은 무시하고 기본값으로 굳힌다 —
+        // 값이 남아 있으면 "완료 카드만"인데 완료 카드가 0장인 사용자는 잠금화면이 영원히 안 뜨고
+        // 앱 UI로는 복구할 수 없었다(2026-09-05 사용자 결정: UI 부활 대신 리셋).
+        finishedFilter = -1
+        if (prefs.contains("finished_filter") || prefs.contains("reversed")) {
+            prefs.edit().remove("finished_filter").remove("reversed").apply()
+        }
         sortOrder = prefs.getString("sort_order", null) ?: run {
             // 구버전 prefs(random_order bool) 호환
             if (prefs.contains("random_order")) {
@@ -409,7 +457,7 @@ class LockScreenService : Service() {
                 "sequence"
             }
         }
-        reversed = prefs.getBoolean("reversed", false)
+        reversed = false // 위 finished_filter와 같은 이유로 리셋
         bgColor = prefs.getInt("bg_color", 0xFF1A1A2E.toInt())
         bgTextMode = prefs.getString("bg_text_mode", "auto") ?: "auto"
         bgImagePath = prefs.getString("bg_image_path", "") ?: ""
@@ -552,7 +600,9 @@ class LockScreenService : Service() {
     private fun loadCardsFromDb() {
         val requested = folderIds
         queryCardsInto(requested)
-        if (cards.isEmpty() && requested != baseFolderIds && baseFolderIds.isNotEmpty()) {
+        // 빈 base 리스트는 queryCardsInto 사양상 "전체 카드"라 폴백 대상으로 유효하다 —
+        // 예전엔 isNotEmpty()를 요구해 base=""인 사용자만 빈 슬롯 시간대에 오버레이가 아예 안 떴다.
+        if (cards.isEmpty() && requested != baseFolderIds) {
             // 시간대 폴더가 비었거나 삭제됐다 → 기본 폴더로 1회 폴백.
             Log.w(TAG, "Scheduled folder $requested has no cards -> falling back to base $baseFolderIds")
             queryCardsInto(baseFolderIds)
@@ -692,6 +742,7 @@ class LockScreenService : Service() {
     private fun showOverlay() {
         if (!Settings.canDrawOverlays(this)) {
             Log.w(TAG, "No overlay permission")
+            notifyPermissionMissing()
             return
         }
 
@@ -735,6 +786,19 @@ class LockScreenService : Service() {
                             cards = previous
                             loadedFolderIds = null   // 다음 글랜스에 다시 시도
                             Log.w(TAG, "Folder switch produced no cards -> keeping previous deck, will retry")
+                            // 재시도 대기 중에도 글랜스마다 다음 카드로 넘긴다 — 예전엔 여기서 그냥
+                            // return해 아래 advanceCard 경로를 영영 건너뛰었고, 슬롯·base 폴더가 둘 다
+                            // 0장인 시간대 내내 화면이 같은 카드 한 장에 고정됐다.
+                            mainHandler.post {
+                                if (!isServiceActive || overlayView == null) return@post
+                                if (cards.isEmpty()) return@post
+                                advanceCard()
+                                try {
+                                    updateCardDisplay()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to advance after failed folder switch", e)
+                                }
+                            }
                             return@post
                         }
                         mainHandler.post {
@@ -769,12 +833,29 @@ class LockScreenService : Service() {
             return
         }
 
+        // 첫 덱 로드가 아직 진행 중이면 이 글랜스는 합친다(위 deckLoadInFlight 주석).
+        // 플래그는 메인 스레드에서만 세우고 내리므로(onStartCommand ↔ mainHandler.post) 경합 없음.
+        if (deckLoadInFlight) {
+            Log.d(TAG, "Deck load already in flight — coalescing glance")
+            return
+        }
+        deckLoadInFlight = true
+
         // DB 쿼리를 백그라운드 스레드에서 실행하여 ANR 방지
         ensureBgThread()
-        bgHandler?.post {
-            if (!isServiceActive) return@post
+        val handler = bgHandler
+        if (handler == null) {
+            deckLoadInFlight = false
+            return
+        }
+        handler.post {
+            if (!isServiceActive) {
+                deckLoadInFlight = false
+                return@post
+            }
             loadCardsFromDb()
             mainHandler.post {
+                deckLoadInFlight = false
                 if (!isServiceActive) return@post
                 if (cards.isEmpty()) {
                     Log.w(TAG, "No cards to show")

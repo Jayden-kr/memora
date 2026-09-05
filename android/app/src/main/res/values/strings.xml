@@ -9,6 +9,7 @@
     <string name="lock_channel_name">Lock screen study</string>
     <string name="lock_channel_desc">Shows flashcards on the lock screen</string>
     <string name="lock_notif_text">Lock screen study active</string>
+    <string name="lock_notif_permission_missing">Lock screen study is paused. Tap to allow \"Display over other apps\".</string>
 
     <!-- 부팅 후 잠금화면 복원 안내 -->
     <string name="restore_channel_name">Lock screen restore</string>

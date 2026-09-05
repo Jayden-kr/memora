@@ -559,12 +559,10 @@ class MainActivity : FlutterActivity() {
         }
         editor.putString("folder_ids", folderIdsStr)
 
-        editor.putInt("finished_filter",
-            (settings["finishedFilter"] as? Number)?.toInt() ?: -1)
+        // finished_filter / reversed 는 더 이상 기록하지 않는다 — 구버전 UI의 잔존 설정을
+        // 리셋하기로 확정(LockScreenService.loadSettings가 기본값으로 굳히고 키를 지운다).
         editor.putString("sort_order",
             (settings["sortOrder"] as? String) ?: "sequence")
-        editor.putBoolean("reversed",
-            settings["reversed"] as? Boolean ?: false)
         editor.putInt("bg_color",
             (settings["bgColor"] as? Number)?.toInt() ?: 0xFF1A1A2E.toInt())
 
@@ -609,10 +607,14 @@ class MainActivity : FlutterActivity() {
                 ?.split(",")
                 ?.filter { it.isNotEmpty() }
                 ?.mapNotNull { it.toIntOrNull() } ?: emptyList<Int>()),
-            "finishedFilter" to prefs.getInt("finished_filter", -1),
+            // 구버전 UI 잔존 설정은 항상 기본값(리셋 결정) — Dart 쪽에도 UI가 없다.
+            "finishedFilter" to -1,
             "sortOrder" to sortOrder,
-            "reversed" to prefs.getBoolean("reversed", false),
-            "bgColor" to prefs.getInt("bg_color", 0xFF1A1A2E.toInt()),
+            "reversed" to false,
+            // Dart는 0xFF1A1A2E 같은 양수 int64를 보내는데 prefs Int는 부호 있는 32비트라 음수로
+            // 절단된다. 그대로 돌려주면 Dart의 프리셋 비교(contains/==)가 절대 맞지 않아 선택 링이
+            // 안 보이고 "커스텀 색상" 스와치가 상시 노출됐다 — 부호 없는 32비트로 되돌려 준다.
+            "bgColor" to (prefs.getInt("bg_color", 0xFF1A1A2E.toInt()).toLong() and 0xFFFFFFFFL),
             "bgTextMode" to (prefs.getString("bg_text_mode", "auto") ?: "auto"),
             "bgImagePath" to (prefs.getString("bg_image_path", "") ?: ""),
             "bgImageAlpha" to prefs.getInt("bg_image_alpha", 255),
