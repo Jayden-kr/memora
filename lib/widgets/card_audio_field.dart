@@ -241,8 +241,11 @@ class CardAudioFieldState extends State<CardAudioField> {
   @override
   void initState() {
     super.initState();
-    _path = widget.initialPath;
-    _durationMs = widget.initialDurationMs;
+    // ''(파일 없음을 빈 문자열로 기록한 DB 값)는 null과 같다 — 이걸 그대로 받으면
+    // 재생 버튼도 안 먹는 "유령 재생기"가 뜨고 녹음/첨부 버튼이 사라진다.
+    final initial = widget.initialPath;
+    _path = (initial == null || initial.isEmpty) ? null : initial;
+    _durationMs = _path == null ? null : widget.initialDurationMs;
   }
 
   @override
@@ -390,6 +393,12 @@ class CardAudioFieldState extends State<CardAudioField> {
       final dest = p.join(
           media.path, _newFileName(ext.isEmpty ? 'm4a' : ext));
       await File(picked).copy(dest);
+      if (!mounted) {
+        // 큰 오디오를 복사하는 동안 화면이 닫혔다 — 이 복사본은 아무도 참조하지 않으니
+        // 지운다(_commit의 setState가 죽은 State에 걸려 예외를 삼키던 경로).
+        File(dest).delete().ignore();
+        return;
+      }
       _created.add(dest);
       _disposeSupersededFile(_path, dest);
       _commit(dest, null); // 첨부 파일 길이는 재생 시 audioplayers가 산출

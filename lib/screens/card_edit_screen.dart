@@ -80,6 +80,13 @@ class _CardEditScreenState extends State<CardEditScreen>
 
   bool _finished = false;
   bool _saving = false;
+  /// 삭제 진행 중 — 저장과 마찬가지로 본문 입력·뒤로가기를 막는다.
+  bool _deleting = false;
+  /// 이번 세션의 저장이 DB에 커밋됐다. 이 뒤로는 "새 파일 정리"(_cleanupNewImages)가
+  /// 절대 돌면 안 된다 — 그 파일들은 이제 DB가 참조한다. 저장 직후 뒤로가기→'버리기'가
+  /// 방금 커밋된 첨부 파일을 지우던 사고의 차단선.
+  bool _committed = false;
+  int? _committedResult;
   int _currentFolderId = 0;
   List<Folder> _folders = [];
 
@@ -107,12 +114,15 @@ class _CardEditScreenState extends State<CardEditScreen>
       _answerController.text = c.answer;
       _finished = c.finished;
       _currentFolderId = c.folderId;
+      // DB에는 "파일 없음"이 null과 ''(cleanupBrokenImagePaths·import가 만드는 값) 두
+      // 형태로 존재한다. 이 화면은 null만 "빈 슬롯"으로 보므로 진입 시 통일한다 — 안 하면
+      // ''가 유령 썸네일/유령 재생기로 자리를 차지하고 5칸이 차면 '+'가 사라진다.
       _questionImages = [
-        c.questionImagePath,
-        c.questionImagePath2,
-        c.questionImagePath3,
-        c.questionImagePath4,
-        c.questionImagePath5,
+        _normPath(c.questionImagePath),
+        _normPath(c.questionImagePath2),
+        _normPath(c.questionImagePath3),
+        _normPath(c.questionImagePath4),
+        _normPath(c.questionImagePath5),
       ];
       _questionImageRatios = [
         c.questionImageRatio,
@@ -122,11 +132,11 @@ class _CardEditScreenState extends State<CardEditScreen>
         c.questionImageRatio5,
       ];
       _answerImages = [
-        c.answerImagePath,
-        c.answerImagePath2,
-        c.answerImagePath3,
-        c.answerImagePath4,
-        c.answerImagePath5,
+        _normPath(c.answerImagePath),
+        _normPath(c.answerImagePath2),
+        _normPath(c.answerImagePath3),
+        _normPath(c.answerImagePath4),
+        _normPath(c.answerImagePath5),
       ];
       _answerImageRatios = [
         c.answerImageRatio,
@@ -135,10 +145,26 @@ class _CardEditScreenState extends State<CardEditScreen>
         c.answerImageRatio4,
         c.answerImageRatio5,
       ];
-      _voicePath = c.questionVoiceRecordPath;
-      _voiceLenMs = c.questionVoiceRecordLength;
+      _voicePath = _normPath(c.questionVoiceRecordPath);
+      // 파일 참조가 비었으면 길이도 버린다 — 길이만 남으면 "00:00 / 00:45"짜리 유령 재생기가 뜬다.
+      _voiceLenMs = _voicePath == null ? null : c.questionVoiceRecordLength;
     }
     _loadFolders();
+  }
+
+  static String? _normPath(String? p) => (p == null || p.isEmpty) ? null : p;
+
+  /// 이 화면 자신을 결과와 함께 pop. 위에 다른 라우트(폐기 다이얼로그·이미지 뷰어)가
+  /// 떠 있으면 Navigator.pop이 그것을 대신 pop해 결과 타입이 어긋나거나(TypeError →
+  /// "저장 실패" 오보) 화면이 남아 재저장·중복 insert로 이어진다 — 먼저 내 라우트까지 걷어낸다.
+  void _popSelf(Object? result) {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    final nav = Navigator.of(context);
+    if (route != null && !route.isCurrent) {
+      nav.popUntil((r) => r == route);
+    }
+    nav.pop(result);
   }
 
   @override
@@ -315,14 +341,25 @@ class _CardEditScreenState extends State<CardEditScreen>
     String? savedPath;
     try {
       savedPath = await _copyImageToAppDir(picked.path);
+      if (!mounted) {
+        // 복사가 끝난 순간 화면이 닫혔다 — 이 복사본은 아무 카드도 참조하지 않으니 지운다
+        // (안 그러면 다음 시작 GC까지 고아로 남는다).
+        File(savedPath).delete().ignore();
+        return;
+      }
 
       final bytes = await File(savedPath).readAsBytes();
       final decoded = await decodeImageFromList(bytes);
       final ratio = (decoded.width > 0 && decoded.height > 0)
           ? decoded.width / decoded.height
           : 1.0;
+      // 비율만 필요했다 — 원본 해상도 비트맵을 네이티브 힙에 남겨두지 않는다.
+      decoded.dispose();
 
-      if (!mounted) return;
+      if (!mounted) {
+        File(savedPath).delete().ignore();
+        return;
+      }
       setState(() {
         images[emptyIndex] = savedPath;
         ratios[emptyIndex] = ratio;
@@ -355,6 +392,9 @@ class _CardEditScreenState extends State<CardEditScreen>
 
   void _removeImage(
       List<String?> images, List<double?> ratios, int index) {
+    // 저장이 경로 스냅샷을 뜬 뒤 DB 쓰기를 기다리는 사이에 ✕를 누르면 DB엔 경로가
+    // 남고 파일만 사라진다 — 진행 중엔 무시(본문 AbsorbPointer의 이중 안전장치).
+    if (_saving || _deleting) return;
     final path = images[index];
     setState(() {
       images[index] = null;
@@ -368,6 +408,8 @@ class _CardEditScreenState extends State<CardEditScreen>
 
   /// 변경사항 폐기 시 새로 추가된 이미지/음성 파일을 디스크에서 삭제 (orphan 방지)
   void _cleanupNewImages() {
+    // 저장이 커밋된 뒤라면 "새 파일"은 더 이상 새 파일이 아니다 — DB가 참조한다.
+    if (_committed) return;
     for (final path in [..._questionImages, ..._answerImages, _voicePath]) {
       if (path != null && path.isNotEmpty && !_isOriginalPath(path)) {
         File(path).delete().ignore();
@@ -423,6 +465,10 @@ class _CardEditScreenState extends State<CardEditScreen>
       ),
     );
     if (confirm != true || !mounted) return;
+    // 삭제 중엔 저장과 똑같이 뒤로가기·본문 입력을 막는다 — 안 막으면 삭제 도중
+    // 뒤로가기가 결과(-1)를 유실시키거나(호출자가 삭제된 카드를 계속 표시) 위에 뜬
+    // 폐기 다이얼로그를 대신 pop해 미처리 예외가 된다.
+    setState(() => _deleting = true);
     try {
       await DatabaseHelper.instance.deleteCard(card.id!);
       await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
@@ -435,6 +481,7 @@ class _CardEditScreenState extends State<CardEditScreen>
     } catch (e) {
       debugPrint('[CARD_EDIT] delete failed: $e');
       if (!mounted) return;
+      setState(() => _deleting = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.cardDeleteFail)),
       );
@@ -444,8 +491,7 @@ class _CardEditScreenState extends State<CardEditScreen>
     // 바로 return하고 폐기 다이얼로그 경로의 _cleanupNewImages()를 못 탄다 —
     // 이번 세션에서 새로 추가된(원본에 없던) 이미지/음성 파일은 여기서 직접 정리.
     _cleanupNewImages();
-    if (!mounted) return;
-    Navigator.pop(context, -1);
+    _popSelf(-1);
   }
 
   Future<void> _save() async {
@@ -455,7 +501,15 @@ class _CardEditScreenState extends State<CardEditScreen>
       debugPrint('[CARD_SAVE] re-entry blocked (already saving)');
       return;
     }
+    if (_committed) {
+      // 이미 커밋됐는데 화면이 남아 있다(pop이 다른 라우트에 먹힌 경우) — 다시 insert
+      // 하면 같은 카드가 두 장 생긴다. 결과만 다시 돌려주고 나간다.
+      _popSelf(_committedResult);
+      return;
+    }
     _saving = true;
+    // 즉시 반영: 아래 await(녹음 정지·IME 커밋 200ms) 동안 삭제 버튼·본문이 살아있지 않게.
+    if (mounted) setState(() {});
 
     try {
       // 녹음 중이면 저장 전에 정지+커밋 — 안 그러면 정지 버튼을 안 누르고 저장
@@ -610,6 +664,10 @@ class _CardEditScreenState extends State<CardEditScreen>
         debugPrint('[CARD_SAVE] insert done: newId=$resultCardId');
       }
 
+      // 여기부터 이 세션의 새 파일은 DB가 참조한다 — 어떤 경로로도 정리 대상이 아니다.
+      _committed = true;
+      _committedResult = resultCardId;
+
       if (!mounted) {
         // 화면 dispose됐어도 DB 작업은 위에서 이미 완료됨.
         // 호출자(card_list_screen._editCard)가 push 후 _refreshCardInList()로
@@ -617,7 +675,7 @@ class _CardEditScreenState extends State<CardEditScreen>
         debugPrint('[CARD_SAVE] dispose during save (DB committed); skip pop');
         return;
       }
-      Navigator.pop(context, resultCardId);
+      _popSelf(resultCardId);
     } catch (e, st) {
       debugPrint('[CARD_SAVE] FAILED: $e\n$st');
       if (!mounted) return;
@@ -655,20 +713,23 @@ class _CardEditScreenState extends State<CardEditScreen>
     if (_audioFieldKey.currentState?.isRecording ?? false) return true;
     if (_isEditing) {
       final c = widget.existingCard!;
-      return q != c.question || a != c.answer ||
+      // 좌변(q/a)은 trim된 라이브 값이므로 저장값도 trim해서 비교 — 안 그러면 앞뒤
+      // 공백이 있는 카드는 아무것도 안 건드려도 나갈 때마다 폐기 다이얼로그가 뜬다.
+      // 경로는 initState와 같은 ''→null 정규화를 거쳐 비교한다.
+      return q != c.question.trim() || a != c.answer.trim() ||
           _currentFolderId != c.folderId ||
           _finished != c.finished ||
           _listChanged(_questionImages, [
-            c.questionImagePath, c.questionImagePath2,
-            c.questionImagePath3, c.questionImagePath4,
-            c.questionImagePath5,
+            _normPath(c.questionImagePath), _normPath(c.questionImagePath2),
+            _normPath(c.questionImagePath3), _normPath(c.questionImagePath4),
+            _normPath(c.questionImagePath5),
           ]) ||
           _listChanged(_answerImages, [
-            c.answerImagePath, c.answerImagePath2,
-            c.answerImagePath3, c.answerImagePath4,
-            c.answerImagePath5,
+            _normPath(c.answerImagePath), _normPath(c.answerImagePath2),
+            _normPath(c.answerImagePath3), _normPath(c.answerImagePath4),
+            _normPath(c.answerImagePath5),
           ]) ||
-          _voicePath != c.questionVoiceRecordPath;
+          _voicePath != _normPath(c.questionVoiceRecordPath);
     }
     return q.isNotEmpty || a.isNotEmpty ||
         _questionImages.any((img) => img != null) ||
@@ -686,6 +747,10 @@ class _CardEditScreenState extends State<CardEditScreen>
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
+        // 저장/삭제가 진행 중이면 뒤로가기를 무시한다. 여기서 폐기 다이얼로그를 띄우면
+        // 저장이 끝난 뒤 '버리기'가 커밋된 첨부 파일을 지우고, 저장의 pop이 다이얼로그를
+        // 대신 pop해 "저장 실패" 오보까지 났다.
+        if (_saving || _deleting) return;
         // 변경 없음: 즉시 프로그램적으로 pop (폐기 다이얼로그 불필요)
         if (!_hasChanges) {
           if (context.mounted) Navigator.pop(context);
@@ -715,7 +780,12 @@ class _CardEditScreenState extends State<CardEditScreen>
           Navigator.pop(context);
         }
       },
-      child: Scaffold(
+      // 저장/삭제 중엔 화면 전체(썸네일·✕·＋·오디오·폴더 드롭다운·네이티브 입력·앱바)를
+      // 잠근다. 예전엔 가드가 AppBar 버튼 2개뿐이라, 저장이 경로 스냅샷을 뜬 뒤 DB 쓰기를
+      // 기다리는 사이에도 나머지 컨트롤이 살아 있었다(파일 삭제·중복 insert·유령 다이얼로그).
+      child: AbsorbPointer(
+        absorbing: _saving || _deleting,
+        child: Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? t.cardEditTitleEdit : t.cardEditTitleNew),
         actions: [
@@ -724,10 +794,10 @@ class _CardEditScreenState extends State<CardEditScreen>
               icon: Icon(Icons.delete_outline,
                   color: Theme.of(context).colorScheme.error),
               tooltip: t.commonDelete,
-              onPressed: _saving ? null : _deleteCard,
+              onPressed: (_saving || _deleting) ? null : _deleteCard,
             ),
           TextButton(
-            onPressed: (_saving || _folders.isEmpty) ? null : _save,
+            onPressed: (_saving || _deleting || _folders.isEmpty) ? null : _save,
             child: Text(t.commonSave),
           ),
         ],
@@ -842,6 +912,7 @@ class _CardEditScreenState extends State<CardEditScreen>
         ),
       ),
     ),
+      ),
     );
   }
 
@@ -910,6 +981,9 @@ class _CardEditScreenState extends State<CardEditScreen>
                         File(path),
                         height: 80,
                         width: 80,
+                        // 80dp 썸네일에 원본 해상도를 디코드하지 않는다(리스트 타일의
+                        // cacheWidth:600과 같은 규약). 3x 밀도까지 240px면 충분.
+                        cacheWidth: 240,
                         fit: BoxFit.cover,
                         errorBuilder: (_, _, _) => Container(
                           height: 80,
