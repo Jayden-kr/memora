@@ -34,6 +34,10 @@ class ImportExportController {
 
   // Import 상태
   ImportResult? lastImportResult;
+  /// 지금 돌고 있는 import의 파일 경로(없으면 null) / 마지막으로 돌린 import의 파일 경로.
+  /// ImportScreen이 "내 파일의 진행/완료인가"를 판정하는 데 쓴다.
+  String? currentImportFilePath;
+  String? lastImportFilePath;
   ImportProgress currentImportProgress = const ImportProgress();
 
   // Export 상태
@@ -161,6 +165,8 @@ class ImportExportController {
 
     isRunning = true;
     currentOperation = 'import';
+    currentImportFilePath = filePath;
+    lastImportFilePath = filePath;
     lastImportResult = null;
     currentImportProgress = const ImportProgress();
     _notify();
@@ -217,6 +223,7 @@ class ImportExportController {
       lastImportResult = result;
       isRunning = false;
       currentOperation = null;
+      currentImportFilePath = null;
       _operationLock?.complete();
       _notify();
 
@@ -235,6 +242,7 @@ class ImportExportController {
     } catch (e) {
       isRunning = false;
       currentOperation = null;
+      currentImportFilePath = null;
       _operationLock?.complete();
       _notify();
       // 실패도 마커 clear (실패는 사용자가 인지하고 재시도 가능, OOM kill 아니라)

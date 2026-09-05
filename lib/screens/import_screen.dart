@@ -58,6 +58,15 @@ class _ImportScreenState extends State<ImportScreen> {
 
   void _onControllerUpdate() {
     if (!mounted) return;
+    // 이 화면의 파일이 아닌 import(뒤에서 돌고 있는 다른 파일)의 진행/완료는 무시한다.
+    // 예전엔 어떤 import든 실행 중이면 importing→done으로 넘어가, 파일 B 화면이 A의
+    // 결과를 "N장 가져옴"으로 보고했다(B는 한 줄도 안 읽혔는데). 알림 탭으로 열린
+    // progressOnly 화면은 파일이 없으니 어떤 import든 따라간다.
+    final current = _controller.currentImportFilePath;
+    final mine = widget.progressOnly ||
+        current == widget.filePath ||
+        (current == null && _controller.lastImportFilePath == widget.filePath);
+    if (!mine) return;
     setState(() {
       if (_controller.isRunning && _controller.currentOperation == 'import') {
         _stage = _ImportStage.importing;
@@ -136,7 +145,10 @@ class _ImportScreenState extends State<ImportScreen> {
       if (memkId != null && mapping != null && mapping[memkId] != null) {
         continue;
       }
-      final existing = await DatabaseHelper.instance.getFolderByName(name);
+      // 충돌 후보는 일반 폴더만 — 묶음과 이름이 겹치는 경우엔 병합/새이름 선택지를 보이지
+      // 않고, 서비스가 자동으로 새 이름(_1…)의 일반 폴더로 가져온다.
+      final existing =
+          await DatabaseHelper.instance.getNonBundleFolderByName(name);
       if (existing != null) conflictNames.add(name);
     }
 

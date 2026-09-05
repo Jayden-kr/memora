@@ -311,6 +311,21 @@ class DatabaseHelper {
     return Folder.fromDb(maps.first);
   }
 
+  /// [getFolderByName]의 비번들 변형 — import 병합 대상은 카드를 직접 갖는 일반 폴더만.
+  /// 이름이 같은 '묶음(bundle)'은 병합 대상이 아니다(묶음에 들어간 카드는 홈에 안 보이고,
+  /// 묶음 화면에서 도달 불가, export 불가, 묶음 삭제 시 CASCADE로 경고 없이 전멸).
+  Future<Folder?> getNonBundleFolderByName(String name) async {
+    final db = await database;
+    final maps = await db.query(
+      AppConstants.tableFolders,
+      where: 'name = ? AND is_bundle = 0',
+      whereArgs: [name],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return Folder.fromDb(maps.first);
+  }
+
   Future<int> updateFolder(Folder folder) async {
     final db = await database;
     final map = folder.toDb();

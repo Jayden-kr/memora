@@ -107,15 +107,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         break;
       }
     }
+    final t = AppLocalizations.of(context);
     if (importFile != null) {
+      // 편집 화면이나 다른 import 화면이 열려 있으면 그 위에 import를 얹지 않는다 — 다른
+      // 진입점(알림 탭·잠금화면 딥링크)은 전부 isOpen 가드가 있는데 공유 수신만 없었다.
+      // (열린 ImportScreen 위에 두 번째가 서면 static isOpen이 오염되고 공용 ZIP 캐시가
+      // 지워져 바깥 화면이 재디코딩한다.)
+      if (ImportScreen.isOpen || CardEditScreen.isOpen) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.importBusy)),
+        );
+        return;
+      }
       _navigateToImport(importFile.path);
     } else {
-      if (mounted) {
-        final t = AppLocalizations.of(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t.homeOnlyMemkSnack)),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.homeOnlyMemkSnack)),
+      );
     }
   }
 

@@ -100,7 +100,22 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
   List<_FileEntry> get _customEntries =>
       _files.where((e) => !_checked.contains(e.filePath) && e.error == null).toList();
 
+  /// '시작' 연타 가드. 아래 _startImpl의 isRunning 검사는 폴더 스캔·충돌 다이얼로그를
+  /// 지나서야 startImport가 락을 잡으므로(check-then-act) 두 번째 탭을 못 막았다 —
+  /// 2차 startImport가 락에서 무음 no-op하고 lastImportResult 없이 "완료 0장"을 띄웠다.
+  bool _starting = false;
+
   Future<void> _start() async {
+    if (_starting) return;
+    setState(() => _starting = true);
+    try {
+      await _startImpl();
+    } finally {
+      if (mounted) setState(() => _starting = false);
+    }
+  }
+
+  Future<void> _startImpl() async {
     final t = AppLocalizations.of(context);
 
     // 다른 import/export가 이미 실행 중이면 (백그라운드 계속 진행 설계상)
@@ -129,7 +144,7 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
           final name = (f['name'] as String?) ?? '';
           if (name.isEmpty) continue;
           final existing =
-              await DatabaseHelper.instance.getFolderByName(name);
+              await DatabaseHelper.instance.getNonBundleFolderByName(name);
           if (existing != null) conflictNames.add(name);
         }
       }
@@ -216,9 +231,9 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
         );
       }
     }
-
-    if (!mounted) return;
-    Navigator.pop(context);
+    // 여기서 바로 pop하지 않는다 — 예전엔 setState(done) 직후 await 없이 pop해 완료 요약
+    // 화면(_buildDone: 새 카드/폴더/병합 수)이 한 프레임도 그려지지 않았다. 사용자가
+    // 요약을 보고 '확인'으로 나간다.
   }
 
   @override
@@ -373,7 +388,7 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
             child: SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: canStart ? _start : null,
+                onPressed: (canStart && !_starting) ? _start : null,
                 child: Text(label),
               ),
             ),
@@ -473,6 +488,11 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),
+            const SizedBox(height: 24),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(t.commonOk),
+            ),
           ],
         ),
       ),

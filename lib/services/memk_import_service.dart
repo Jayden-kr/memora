@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:archive/archive.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 import '../database/database_helper.dart';
 import '../models/card.dart';
@@ -181,6 +182,9 @@ class MemkImportService {
     // 선택된 폴더만 필터 + 폴더 ID 매핑
     final selectedFolderSet = selectedFolderNames.toSet();
     final folderIdMap = <int, int>{}; // memk folderId → local DB folderId
+    // 이름 충돌 때문에 새 이름(_1, _2…)으로 만들어진 '복사본' 폴더의 로컬 id. 여기 들어가는
+    // 카드는 원본과 uuid가 같으면 UNIQUE+ignore로 전부 건너뛰어 빈 폴더만 남으므로 새 uuid를 받는다.
+    final renamedFolderIds = <int>{};
     int newFolders = 0;
     int mergedFolders = 0;
 
@@ -204,17 +208,30 @@ class MemkImportService {
       }
 
       final existingFolder = await db.getFolderByName(name);
+      // 이름이 같은 폴더가 '묶음(bundle)'이면 병합 대상이 아니다 — 묶음은 카드를 직접 갖지
+      // 않아 홈 타일에 카드 수가 안 뜨고, 묶음 화면에선 카드에 도달할 수 없고, export
+      // 목록에도 안 잡히며, 묶음을 지우면 CASCADE로 그 카드가 경고 없이 전멸한다.
+      // 이 경우 정책과 무관하게 새 이름(_1, _2…)의 일반 폴더로 가져온다.
+      final collidesWithBundle =
+          existingFolder != null && existingFolder.isBundle;
+      final mergeTarget = (existingFolder != null &&
+              !existingFolder.isBundle &&
+              conflictPolicy != 'rename')
+          ? existingFolder
+          : null;
 
-      if (existingFolder != null && conflictPolicy != 'rename') {
+      if (mergeTarget != null) {
         // 기존 폴더에 병합
-        folderIdMap[memkFolderId] = existingFolder.id!;
+        folderIdMap[memkFolderId] = mergeTarget.id!;
         mergedFolders++;
       } else {
         // 새 폴더 생성 (id를 제거하여 autoincrement 사용)
-        // conflictPolicy == 'rename'이면 이름 충돌 시 _1, _2 등 unique suffix 부여
+        // 이름 충돌(rename 정책 또는 묶음과 충돌) 시 _1, _2 등 unique suffix 부여
         final folder = Folder.fromJson(folderData);
         String targetName = folder.name;
-        if (existingFolder != null && conflictPolicy == 'rename') {
+        final renamed = existingFolder != null &&
+            (conflictPolicy == 'rename' || collidesWithBundle);
+        if (renamed) {
           int suffix = 1;
           while (await db.getFolderByName('${folder.name}_$suffix') != null) {
             suffix++;
@@ -237,9 +254,11 @@ class MemkImportService {
           );
           folderIdMap[memkFolderId] = newId;
           newFolders++;
+          if (renamed) renamedFolderIds.add(newId);
         } catch (_) {
-          // UNIQUE 제약 충돌 (동시 import 등) — 이미 존재하는 폴더 사용
-          final retryFolder = await db.getFolderByName(targetName);
+          // UNIQUE 제약 충돌 (동시 import 등) — 이미 존재하는 '일반' 폴더만 병합 대상
+          // (여기서 묶음을 잡으면 위에서 막은 경로가 되살아난다)
+          final retryFolder = await db.getNonBundleFolderByName(targetName);
           if (retryFolder != null) {
             folderIdMap[memkFolderId] = retryFolder.id!;
             mergedFolders++;
@@ -319,6 +338,13 @@ class MemkImportService {
         if ((cardJson['uuid'] as String).isEmpty) {
           skippedCards++;
           continue;
+        }
+        // '새 이름으로 가져오기'(또는 묶음과 이름 충돌)로 만들어진 복사본 폴더의 카드는
+        // 새 uuid를 받는다. 원본과 같은 uuid면 insertCardsBatch의 UNIQUE+ignore가 전부
+        // 건너뛰어 "카드 0장짜리 빈 폴더"만 남고, uuid 복구 분기는 원본 폴더의 카드를 건드렸다.
+        if (renamedFolderIds.contains(cardJson['folderId'] as int)) {
+          cardJson['uuid'] =
+              '${const Uuid().v4()}-import-${DateTime.now().microsecondsSinceEpoch}';
         }
 
         // 이미지 경로 변환: memk 경로 → 로컬 경로 (ZIP에 있는 것만)
