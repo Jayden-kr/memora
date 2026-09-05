@@ -85,22 +85,9 @@ void main() {
     });
   });
 
-  group('counter.json 포맷', () {
-    test('배열 형태 [{...}]로 출력', () {
-      final counter = {
-        'id': 1,
-        'card_sequence': 2,
-        'card_minus_sequence': 0,
-        'folder_sequence': 2,
-        'folder_minus_sequence': 0,
-      };
-
-      final jsonStr = jsonEncode([counter]);
-      final parsed = jsonDecode(jsonStr) as List<dynamic>;
-      expect(parsed.length, 1);
-      expect(parsed[0]['card_sequence'], 2);
-    });
-  });
+  // ('counter.json 포맷' 그룹 삭제 — 테스트가 만든 맵을 jsonEncode→jsonDecode 왕복하는
+  //  dart:convert 항등식이었다. 실제 counter.json을 쓰는 memk_export_service 코드는 한 줄도
+  //  실행되지 않았다. 감사 Z2-02.)
 
   group('Export → Import round-trip 경로 변환', () {
     test('로컬 → memk → 파일명 추출 일관성', () {

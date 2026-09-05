@@ -91,17 +91,8 @@ void main() {
       expect(folder.isSpecialFolder, false);
     });
 
-    test('여러 폴더 파싱', () {
-      const json = '''[
-        {"id": 1, "name": "영단어", "cardCount": 100, "sequence": 0, "parent": false, "isSpecialFolder": false},
-        {"id": 2, "name": "일본어", "cardCount": 50, "sequence": 1, "parent": false, "isSpecialFolder": false}
-      ]''';
-
-      final List<dynamic> parsed = jsonDecode(json);
-      expect(parsed.length, 2);
-      expect((parsed[0] as Map<String, dynamic>)['name'], '영단어');
-      expect((parsed[1] as Map<String, dynamic>)['name'], '일본어');
-    });
+    // ('여러 폴더 파싱' 테스트 삭제 — dart:convert의 jsonDecode만 검증하고 프로덕션 코드를
+    //  한 줄도 부르지 않는 항등식이었다. 감사 Z2-02.)
   });
 
   group('cards.json 파싱', () {
@@ -192,33 +183,15 @@ void main() {
         'sequence4': 0,
       };
 
-      final neededFiles = <String>{};
       // extractFileName 유틸리티로 경로 변환 검증
       final fileName = MemkImportService.extractFileName(
         cardJson['answerImagePath'] as String,
       );
       expect(fileName, 'R_abc.jpg');
-      neededFiles.add(fileName);
-      expect(neededFiles.contains('R_abc.jpg'), true);
     });
   });
 
-  group('카드 필터링 로직', () {
-    test('선택된 폴더의 카드만 필터', () {
-      final cards = [
-        {'folderId': 1, 'uuid': 'a'},
-        {'folderId': 2, 'uuid': 'b'},
-        {'folderId': 1, 'uuid': 'c'},
-        {'folderId': 3, 'uuid': 'd'},
-      ];
-      final selectedFolderIds = {1, 3};
-
-      final filtered = cards
-          .where((c) => selectedFolderIds.contains(c['folderId']))
-          .toList();
-
-      expect(filtered.length, 3);
-      expect(filtered.map((c) => c['uuid']), containsAll(['a', 'c', 'd']));
-    });
-  });
+  // ('카드 필터링 로직' 테스트 삭제 — 테스트 파일 안의 where 두 줄을 스스로 검증하는 항등식
+  //  이었다. 실제 필터는 memk_import_service.dart의 selectedFolderSet 경로인데 그 코드는
+  //  한 줄도 실행되지 않았다. 감사 Z2-02.)
 }

@@ -363,9 +363,11 @@ Navigator.pop()이 반환하는 popped Future는 다이얼로그의 퇴장(rever
 State.dispose()에서만 정리할 것.
 ''');
 
-      expect(source.contains('void dispose() {'), isTrue,
+      // 위와 같은 이유로 positive 단언도 주석을 걷어낸 code를 본다 — source(원문)를 보면
+      // `_hexController.dispose();`를 주석 처리해도 트립와이어가 초록이다(감사 Z2-01).
+      expect(code.contains('void dispose() {'), isTrue,
           reason: 'State.dispose() 오버라이드가 사라졌다 — 컨트롤러를 정리할 곳이 없다.');
-      expect(source.contains('_hexController.dispose();'), isTrue,
+      expect(code.contains('_hexController.dispose();'), isTrue,
           reason: '_hexController가 dispose()에서 정리되지 않는다.');
     });
   });
