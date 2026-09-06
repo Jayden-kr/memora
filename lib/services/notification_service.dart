@@ -281,6 +281,16 @@ class NotificationService {
     if (enabledStr != 'true' || rules.isEmpty) {
       debugPrint(
           '[NOTIF] rescheduleAll: 비활성화 또는 규칙 없음 (enabled=$enabledStr, rules=${rules.length})');
+      // "스위치 ON + 규칙 0개"는 화면 어디에도 경고가 안 뜨는 모순 상태다 — 자가치유가 서비스만
+      // 멈추고 스위치는 안 꺼서, 사용자가 직접 OFF→ON 하기 전엔 못 벗어났다(감사 D6-09).
+      if (enabledStr == 'true' && rules.isEmpty) {
+        try {
+          await DatabaseHelper.instance
+              .upsertSetting('notification_enabled', 'false');
+        } catch (e) {
+          debugPrint('[NOTIF] 자가치유(스위치 OFF) 실패: $e');
+        }
+      }
       // 비활성화 시(또는 규칙이 하나도 없을 때) 서비스 중지 — 자가 치유.
       try { await stopIntervalService(); } catch (_) {}
       return;

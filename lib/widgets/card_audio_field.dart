@@ -10,6 +10,7 @@ import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
 import '../l10n/app_localizations.dart';
+import '../services/audio_playback_controller.dart';
 import '../utils/constants.dart';
 
 /// mm:ss 포맷 (재생 위치/길이 표시용)
@@ -40,114 +41,70 @@ class AudioPlayerButton extends StatefulWidget {
 }
 
 class _AudioPlayerButtonState extends State<AudioPlayerButton> {
-  // 앱 전체에서 동시에 하나만 재생: 새 재생이 시작되면 직전 인스턴스를 일시정지.
-  static _AudioPlayerButtonState? _activeInstance;
-
-  AudioPlayer? _player;
-  PlayerState _state = PlayerState.stopped;
-  Duration _position = Duration.zero;
-  Duration? _duration;
-
-  final List<StreamSubscription<dynamic>> _subs = [];
+  // 감사 D2-07: 재생은 더 이상 이 State가 소유하지 않는다. 실제 AudioPlayer는
+  // AudioPlaybackController(앱 전역 싱글턴)가 들고 있고, 이 State는 그 상태를
+  // 구독해서 그리기만 한다 — 그래서 이 위젯이 dispose돼도(리스트 스크롤 아웃·
+  // 카드 접기·선택모드 진입 등) 재생이 끊기지 않는다.
+  AudioPlaybackController get _c => AudioPlaybackController.instance;
 
   @override
   void initState() {
     super.initState();
-    if (widget.durationMs != null && widget.durationMs! > 0) {
-      _duration = Duration(milliseconds: widget.durationMs!);
-    }
-    // lazy=false(기본): 기존처럼 즉시 player 생성. lazy=true: 첫 재생 탭까지 미룸.
-    if (!widget.lazy) {
-      _ensurePlayer();
-    }
+    // currentPath는 "지금 이 경로가 재생 대상인지" 자체가 바뀔 때(다른 버튼이
+    // 재생을 가로챔 등) 필요하므로 항상 구독한다.
+    _c.currentPath.addListener(_onPathChanged);
+    // state/position/duration은 재생 중 tick마다 바뀌는데, 화면에 여러 버튼이
+    // 떠 있을 때(리스트) 재생 중이 아닌 버튼까지 매 tick 다시 그리지 않도록
+    // _onTick 안에서 "내 경로가 현재 재생 대상일 때만" 반응한다.
+    _c.state.addListener(_onTick);
+    _c.position.addListener(_onTick);
+    _c.duration.addListener(_onTick);
   }
 
-  /// player를 (없으면) 생성하고 스트림 구독을 건다. eager/lazy 공용 진입점.
-  AudioPlayer _ensurePlayer() {
-    final existing = _player;
-    if (existing != null) return existing;
-    final player = AudioPlayer();
-    _player = player;
-    _subs.add(player.onDurationChanged.listen((d) {
-      if (mounted) setState(() => _duration = d);
-    }));
-    _subs.add(player.onPositionChanged.listen((pos) {
-      if (mounted) setState(() => _position = pos);
-    }));
-    _subs.add(player.onPlayerStateChanged.listen((s) {
-      if (mounted) setState(() => _state = s);
-    }));
-    _subs.add(player.onPlayerComplete.listen((_) {
-      if (mounted) {
-        setState(() {
-          _state = PlayerState.completed;
-          _position = Duration.zero;
-        });
-      }
-    }));
-    return player;
+  void _onPathChanged() {
+    if (mounted) setState(() {});
   }
 
-  @override
-  void didUpdateWidget(AudioPlayerButton oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 경로가 바뀌면(재녹음/교체) 재생 상태 초기화
-    if (oldWidget.path != widget.path) {
-      _player?.stop();
-      setState(() {
-        _state = PlayerState.stopped;
-        _position = Duration.zero;
-        _duration = (widget.durationMs != null && widget.durationMs! > 0)
-            ? Duration(milliseconds: widget.durationMs!)
-            : null;
-      });
-    }
+  void _onTick() {
+    if (mounted && _c.currentPath.value == widget.path) setState(() {});
   }
+
+  Duration? _knownDuration() =>
+      (widget.durationMs != null && widget.durationMs! > 0)
+          ? Duration(milliseconds: widget.durationMs!)
+          : null;
 
   @override
   void dispose() {
-    if (identical(_activeInstance, this)) _activeInstance = null;
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _player?.dispose();
+    // 감사 D2-07: 여기서 player를 stop/dispose하지 않는다 — 그건
+    // AudioPlaybackController의 몫이다. 이 위젯은 리스너만 뗀다.
+    _c.currentPath.removeListener(_onPathChanged);
+    _c.state.removeListener(_onTick);
+    _c.position.removeListener(_onTick);
+    _c.duration.removeListener(_onTick);
     super.dispose();
   }
 
-  /// 이 버튼을 '현재 재생 중'으로 등록하고, 직전 재생 중이던 다른 버튼을 일시정지.
-  void _becomeActive() {
-    final prev = _activeInstance;
-    if (prev != null && !identical(prev, this)) {
-      prev._player?.pause().catchError((_) {});
-    }
-    _activeInstance = this;
-  }
-
   Future<void> _toggle() async {
-    final player = _ensurePlayer(); // lazy면 여기서 최초 생성
-    try {
-      if (_state == PlayerState.playing) {
-        await player.pause();
-      } else if (_state == PlayerState.paused) {
-        _becomeActive(); // 재개도 재생 시작 — 다른 재생 정지
-        await player.resume();
-      } else {
-        // stopped / completed → 처음부터 재생
-        _becomeActive();
-        await player.play(DeviceFileSource(widget.path));
-      }
-    } catch (_) {
-      // 파일 손상/미존재 등 — 조용히 무시 (UI는 stopped 유지)
+    if (_c.currentPath.value == widget.path && _c.state.value == PlayerState.playing) {
+      await _c.pause();
+    } else {
+      // 컨트롤러가 "이어 재생/처음부터/다른 파일로 전환"을 알아서 판단한다.
+      await _c.play(widget.path, knownDuration: _knownDuration());
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final playing = _state == PlayerState.playing;
-    final total = _duration ?? Duration.zero;
+    final isCurrent = _c.currentPath.value == widget.path;
+    final state = isCurrent ? _c.state.value : PlayerState.stopped;
+    final playing = state == PlayerState.playing;
+    final position = isCurrent ? _c.position.value : Duration.zero;
+    final total =
+        (isCurrent ? _c.duration.value : null) ?? _knownDuration() ?? Duration.zero;
     final hasTotal = total.inMilliseconds > 0;
     final progress = hasTotal
-        ? (_position.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0)
+        ? (position.inMilliseconds / total.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
     final cs = Theme.of(context).colorScheme;
 
@@ -179,8 +136,8 @@ class _AudioPlayerButtonState extends State<AudioPlayerButton> {
                 const SizedBox(height: 4),
                 Text(
                   hasTotal
-                      ? '${_fmtDuration(_position)} / ${_fmtDuration(total)}'
-                      : _fmtDuration(_position),
+                      ? '${_fmtDuration(position)} / ${_fmtDuration(total)}'
+                      : _fmtDuration(position),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -287,6 +244,10 @@ class CardAudioFieldState extends State<CardAudioField> {
     if (oldPath != null &&
         oldPath != newPath &&
         _created.contains(oldPath)) {
+      // 감사 D2-07 invariant 6: 이 파일이 지금 전역 재생기에서 재생/추적
+      // 중이었다면, 파일을 지우기 전에 먼저 정지+해제한다 — 안 그러면 방금
+      // 지운 파일을 가리키는 player가 남는다.
+      AudioPlaybackController.instance.stopIfPlaying(oldPath).ignore();
       File(oldPath).delete().ignore();
       _created.remove(oldPath);
     }
@@ -436,6 +397,9 @@ class CardAudioFieldState extends State<CardAudioField> {
     final old = _path;
     // 이 위젯이 만든 파일이면 즉시 삭제. 원본 파일이면 부모의 저장 cleanup이 처리.
     if (old != null && _created.contains(old)) {
+      // 감사 D2-07 invariant 6: 지금 지우는 파일이 전역 재생기에서 재생/추적
+      // 중이었다면 먼저 정지+해제 — 삭제된 파일을 가리키는 player가 안 남게.
+      AudioPlaybackController.instance.stopIfPlaying(old).ignore();
       File(old).delete().ignore();
       _created.remove(old);
     }

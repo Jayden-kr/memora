@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
+import '../services/audio_playback_controller.dart';
 import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
@@ -224,6 +225,10 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   @override
   void dispose() {
+    // 감사 D2-07: 재생기는 이제 위젯이 아니라 AudioPlaybackController가 소유한다 —
+    // 스크롤/접기/선택모드로 타일이 사라져도 계속 재생되는 게 목적이지만, 목록 화면
+    // 자체를 나가면 멈추는 게 맞다(안 그러면 어디서도 못 끄는 소리가 남는다).
+    AudioPlaybackController.instance.stop().ignore();
     routeObserver.unsubscribe(this);
     _itemPositionsListener.itemPositions.removeListener(_onItemPositionsChanged);
     _searchController.dispose();

@@ -74,18 +74,16 @@ class LockScreenService : Service() {
     private var bgBitmap: Bitmap? = null
     @Volatile
     private var bgBitmapCacheKey: String? = null
-    // 4라운드 감사 수정: bgBitmap과 같은 키로 캐시되는 그 이미지의 평균 상대휘도(0..1).
-    // "auto" 텍스트 모드가 단색 bgColor뿐 아니라 실제 합성된 화면(이미지+스크림)까지
-    // 반영하는 데 쓴다(applyPalette() 참고). bgBitmapCacheKey가 지금 bgImagePath와
-    // 일치할 때만 유효하다 — 아직 디코딩 전(이미지를 방금 고른 뒤 최초 1회)이면
-    // null이라 applyPalette()가 색상 전용으로 근사한다. ⚠️5라운드 감사에서 발견:
-    // "디코딩이 끝나는 다음 글랜스부터 정확해진다"는 예전 주석은 틀렸다 — 화면
-    // 껐다켜기(글랜스)는 updateCardDisplay()만 돌아 텍스트 색을 절대 안 바꾼다.
-    // 그래서 applyBackgroundDrawable()의 디코딩 완료 콜백이 판정이 실제로 뒤집혔을
-    // 때 스스로 뷰 재생성을 트리거한다(appliedIsDarkPalette 비교) — "다음 글랜스"가
-    // 아니라 "디코딩이 끝나는 즉시"가 맞는 설명이다.
-    @Volatile
-    private var bgImageAvgLuminance: Double? = null
+    // 4라운드 감사 수정: "auto" 텍스트 모드는 단색 bgColor뿐 아니라 실제 합성된
+    // 화면(이미지+스크림)까지 반영해야 한다(applyPalette() 참고). ⚠️D4-07 감사(2026-09-06)
+    // 에서 발견: 예전엔 이 평균휘도를 디코딩 시점에 한 번 계산해 필드에 캐시했는데,
+    // 그때는 bgColor와 무관한 값이었다(당시 비트맵이 RGB_565라 애초에 알파도 없었음).
+    // 지금은 픽셀별 실제 알파로 bgColor와 블렌드해야 진짜 합성 결과가 나오는데, 그러면
+    // 값이 bgColor에 의존하게 되어 "경로+화면크기"만 담는 디코딩 캐시 키로는 bgColor만
+    // 바뀐 경우를 못 잡아 옛 배경색 기준 값이 남는다. 그래서 캐시 필드를 없애고
+    // currentImageAvgLuminanceOrNull()이 bgBitmap에서 항상 지금 bgColor로 즉석
+    // 재계산한다(256점 샘플이라 매 글랜스 호출해도 비용은 무시할 만하다) — 계산은
+    // averageLuminance() 참고.
 
     // 서비스 활성 상태 (Handler 콜백에서 체크)
     @Volatile
@@ -305,13 +303,18 @@ class LockScreenService : Service() {
         isAlive = false
         setServiceRunning(false)
         unregisterScreenReceiver()
-        dismissOverlay()
+        // 감사 D4-06: dismissOverlay()는 기본적으로 content bitmap recycle을 다음 프레임으로
+        // 미루는데(draw 파이프라인 완료 보장), 바로 아래 mainHandler.removeCallbacksAndMessages(null)
+        // 가 그 대기 중인 콜백까지 통째로 지워버려서 "해제한다"는 주석과 달리 실제로는 절대
+        // 실행되지 않고 있었다(GC가 결국 회수하니 진짜 누수는 아니지만, 의도한 즉시 해제는
+        // 죽은 코드였다). 서비스가 완전히 종료되는 지금은 다음 프레임을 기다릴 이유가 없으므로
+        // (바로 아래 bgBitmap도 동일하게 동기 recycle) 즉시 recycle하게 한다.
+        dismissOverlay(immediate = true)
         // 배경 이미지 캐시는 글랜스 간(오버레이 dismiss/재생성) 재사용을 위해 dismissOverlay()
         // 에서는 recycle하지 않는다 — 서비스가 완전히 죽는 지금만 해제한다.
         bgBitmap?.let { if (!it.isRecycled) it.recycle() }
         bgBitmap = null
         bgBitmapCacheKey = null
-        bgImageAvgLuminance = null
         fontRegular = null
         fontBold = null
         // 대기 중인 콜백 제거 → 서비스 GC 지연 방지
@@ -321,6 +324,26 @@ class LockScreenService : Service() {
         bgThread = null
         bgHandler = null
         super.onDestroy()
+    }
+
+    /**
+     * 감사 D4-08: 화면 회전 시 배경 이미지 비트맵은 회전 전 화면 크기로 디코딩된 채
+     * 그대로 남아있는데, 오버레이 View는 WindowManager가 새 방향에 맞춰 다시 배치해
+     * 크기가 바뀐다 — Drawable은 View bounds에 맞춰 자동으로 늘어나 그려지므로, 아무도
+     * 재디코딩을 트리거하지 않으면 이미지가 찌그러진 채로 보인다. bgCacheKeyFor가 화면
+     * 가로/세로 픽셀을 캐시 키에 포함하므로, applyBackgroundDrawable()을 다시 부르기만
+     * 하면 캐시가 자동으로 무효화돼 새 해상도로 재디코딩된다. currentIndex/cards는
+     * 절대 건드리지 않는다(불변조건: 덱 재쿼리·인덱스 이동 금지) — 배경 레이어만
+     * 다시 계산한다.
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val root = overlayView ?: return
+        try {
+            applyBackgroundDrawable(root)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to refresh background on configuration change", e)
+        }
     }
 
     private fun setServiceRunning(running: Boolean) {
@@ -542,6 +565,12 @@ class LockScreenService : Service() {
      * applyBackgroundDrawable()의 콜백이 판정이 뒤집혔는지 스스로 확인해 필요할
      * 때만 뷰를 재생성한다(appliedIsDarkPalette 참고) — "다음 글랜스"를 기다릴
      * 필요 없다.
+     *
+     * 감사 D4-07: 매번 지금의 bgColor로 averageLuminance()를 다시 계산한다(값을
+     * 캐시하지 않음) — bgBitmap 자체(경로+화면크기)는 캐시하지만, bgBitmap은 이제
+     * PNG 알파를 그대로 보존한 ARGB_8888이라(composeBackgroundLayers 참고) 그 휘도는
+     * bgColor가 바뀌면 같이 바뀌어야 한다. 256점 샘플이라 매 글랜스 재계산해도 비용은
+     * 무시할 만하다.
      */
     private fun currentImageAvgLuminanceOrNull(): Double? {
         val path = bgImagePath
@@ -549,7 +578,9 @@ class LockScreenService : Service() {
         val dm = resources.displayMetrics
         if (dm.widthPixels <= 0 || dm.heightPixels <= 0) return null
         val key = bgCacheKeyFor(path, dm.widthPixels, dm.heightPixels)
-        return if (bgBitmapCacheKey == key) bgImageAvgLuminance else null
+        val bmp = bgBitmap
+        if (bgBitmapCacheKey != key || bmp == null || bmp.isRecycled) return null
+        return averageLuminance(bmp, bgColor)
     }
 
     /**
@@ -1118,7 +1149,8 @@ class LockScreenService : Service() {
     /**
      * root의 배경을 설정한다. 항상 먼저 ColorDrawable(bgColor)를 동기로 세팅한다
      * (이미지가 없거나, 아직 디코딩 전이거나, 디코딩이 실패했을 때의 회귀 기준 —
-     * 오늘과 완전히 동일한 단색 배경). bgImagePath가 비어 있으면 여기서 끝난다.
+     * 오늘과 완전히 동일한 단색 배경). bgImagePath가 비어 있으면 캐시된 bgBitmap을
+     * 정리(recycle)하고 끝난다(감사 X6-07 — 아래 참고).
      *
      * 이미지가 있으면:
      *  - 캐시(bgBitmap+bgBitmapCacheKey)가 지금 경로/화면크기와 일치하면 즉시(동기)
@@ -1138,7 +1170,23 @@ class LockScreenService : Service() {
     private fun applyBackgroundDrawable(root: View) {
         root.background = ColorDrawable(bgColor)
         val path = bgImagePath
-        if (path.isEmpty()) return
+        if (path.isEmpty()) {
+            // 감사 X6-07: 이미지를 "교체"할 때는 아래 디코딩 콜백이 old bitmap을 recycle
+            // 하지만, "제거"(경로를 빈 문자열로)는 예전엔 여기서 곧장 return해버려
+            // bgBitmap이 화면 어디에도 안 쓰이는데 서비스가 죽을 때(onDestroy)까지 계속
+            // 캐시로 살아있었다 — 전체화면 크기 비트맵 한 장 누수. 캐시 필드부터 지워서
+            // (이후 어떤 코드도 recycle된 bitmap을 유효한 캐시로 오인해 그리지 못하게)
+            // use-after-recycle을 막은 다음, 실제 recycle은 그리기 파이프라인 완료를
+            // 기다려(loadImages/dismissOverlay와 동일 패턴) 다음 루퍼 프레임에 지연
+            // 실행한다.
+            val old = bgBitmap
+            bgBitmap = null
+            bgBitmapCacheKey = null
+            if (old != null && !old.isRecycled) {
+                mainHandler.post { if (!old.isRecycled) old.recycle() }
+            }
+            return
+        }
 
         val dm = resources.displayMetrics
         val screenW = dm.widthPixels
@@ -1164,7 +1212,7 @@ class LockScreenService : Service() {
             mainHandler.post {
                 if (!isServiceActive || overlayView !== root || !root.isAttachedToWindow()) {
                     // 그 사이 오버레이가 dismiss/재생성됐다 — 이 결과는 더 이상 유효하지 않다.
-                    decoded?.bitmap?.let { if (!it.isRecycled) it.recycle() }
+                    decoded?.let { if (!it.isRecycled) it.recycle() }
                     return@post
                 }
                 if (decoded == null) {
@@ -1173,12 +1221,11 @@ class LockScreenService : Service() {
                     return@post
                 }
                 val old = bgBitmap
-                bgBitmap = decoded.bitmap
+                bgBitmap = decoded
                 bgBitmapCacheKey = key
-                bgImageAvgLuminance = decoded.avgLuminance
                 // 지연 recycle — 그리기 파이프라인 완료 보장(loadImages와 동일 패턴).
                 // 재생성 여부와 무관하게 옛 비트맵은 이미 교체됐으니 먼저 처리한다.
-                if (old != null && old !== decoded.bitmap && !old.isRecycled) {
+                if (old != null && old !== decoded && !old.isRecycled) {
                     mainHandler.post { if (!old.isRecycled) old.recycle() }
                 }
 
@@ -1209,7 +1256,7 @@ class LockScreenService : Service() {
                 }
 
                 try {
-                    root.background = composeBackgroundLayers(decoded.bitmap)
+                    root.background = composeBackgroundLayers(decoded)
                 } catch (_: Throwable) {
                     // 조립 실패해도 ColorDrawable(bgColor)로 강등된 상태 유지.
                 }
@@ -1217,7 +1264,14 @@ class LockScreenService : Service() {
         }
     }
 
-    /** ColorDrawable(bgColor) + BitmapDrawable(alpha=bgImageAlpha) + ColorDrawable(스크림) 3겹. */
+    /**
+     * ColorDrawable(bgColor) + BitmapDrawable(alpha=bgImageAlpha) + ColorDrawable(스크림) 3겹.
+     * 감사 D4-07: [bitmap]이 (decodeBackgroundBitmap 참고) 원본 PNG의 알파를 보존한
+     * ARGB_8888이므로, 여기서 LayerDrawable이 그릴 때 이미지의 투명/반투명 영역이
+     * 자동으로 bgColor 레이어와 알파블렌드된다 — Flutter 미리보기(Container(color:
+     * bgColor) 위에 Image를 얹는 것)와 동일한 결과. 예전엔 이 비트맵이 RGB_565라
+     * 애초에 알파가 없어 디코딩 시점에 투명 픽셀이 검정으로 굳어버렸다.
+     */
     private fun composeBackgroundLayers(bitmap: Bitmap): LayerDrawable {
         val bmpDrawable = BitmapDrawable(resources, bitmap).apply {
             alpha = bgImageAlpha.coerceIn(0, 255)
@@ -1228,15 +1282,20 @@ class LockScreenService : Service() {
         return LayerDrawable(arrayOf(ColorDrawable(bgColor), bmpDrawable, scrimDrawable))
     }
 
-    /** [decodeBackgroundBitmap] 성공 결과 — 화면크기 비트맵과 그 평균 상대휘도(0..1). */
-    private data class DecodedBackground(val bitmap: Bitmap, val avgLuminance: Double)
-
     /**
      * 성긴 그리드(16x16=256점)로 비트맵의 평균 상대휘도(0..1)를 근사한다. 전체
-     * 픽셀을 훑지 않아 화면 크기와 무관하게 비용이 일정하다 — decodeBackgroundBitmap이
-     * 이미 화면 크기로 다운스케일한 비트맵에 한 번만 호출하므로 충분히 싸다.
+     * 픽셀을 훑지 않아 화면 크기와 무관하게 비용이 일정하다 — 매 글랜스(applyPalette())
+     * 마다 호출해도 충분히 싸다.
+     *
+     * 감사 D4-07: [bitmap]은 이제 원본 PNG의 알파를 보존한 ARGB_8888이라(디코딩
+     * 시점에 RGB_565로 눌러 담으면 투명 픽셀이 검정으로 굳어버려 실제 잠금화면
+     * 렌더와 어긋났다), 표본 픽셀마다 자기 알파로 [bgColorForBlend]와 블렌드한 뒤
+     * 휘도를 낸다 — 실제 LayerDrawable이 그리는 결과(ColorDrawable(bgColor) 위에
+     * 이 비트맵을 얹은 것)와 일치시키기 위함이다. 완전 불투명 이미지(대다수)는
+     * 항상 alpha=1이라 이 블렌드가 사실상 no-op이라 예전과 동일한 값이 나온다.
      */
-    private fun averageLuminance(bitmap: Bitmap): Double {
+    private fun averageLuminance(bitmap: Bitmap, bgColorForBlend: Int): Double {
+        val bgLum = BgContrast.relativeLuminance(bgColorForBlend)
         val cols = 16
         val rows = 16
         var sum = 0.0
@@ -1245,7 +1304,9 @@ class LockScreenService : Service() {
             val y = (bitmap.height * (yi + 0.5) / rows).toInt().coerceIn(0, bitmap.height - 1)
             for (xi in 0 until cols) {
                 val x = (bitmap.width * (xi + 0.5) / cols).toInt().coerceIn(0, bitmap.width - 1)
-                sum += BgContrast.relativeLuminance(bitmap.getPixel(x, y))
+                val pixel = bitmap.getPixel(x, y)
+                val a = ((pixel ushr 24) and 0xFF) / 255.0
+                sum += BgContrast.relativeLuminance(pixel) * a + bgLum * (1 - a)
                 count++
             }
         }
@@ -1254,19 +1315,27 @@ class LockScreenService : Service() {
 
     /**
      * 배경 이미지를 화면 픽셀 크기(screenW x screenH)로 다운샘플 + cover 스케일 +
-     * center-crop해서 RGB_565 비트맵 한 장으로 만들고, 그 평균 휘도까지 함께 계산한다
-     * (4라운드 감사 수정 — "auto" 텍스트 모드가 실제 이미지 밝기를 반영하는 데 쓴다,
-     * applyPalette()/currentImageAvgLuminanceOrNull() 참고). 반드시 bgHandler(백그라운드
-     * 스레드)에서만 호출한다.
+     * center-crop해서 비트맵 한 장으로 만든다. 반드시 bgHandler(백그라운드 스레드)
+     * 에서만 호출한다.
      *
      * 중간 비트맵을 최소화하기 위해(OOM 위험 축소) createScaledBitmap 등으로 여러 장을
-     * 만들지 않고, 목적지 크기의 빈 RGB_565 비트맵에 Matrix로 스케일+이동해 Canvas로
-     * 한 번에 그린다 — 최대 2장(디코딩 원본 1장 + 목적지 1장)만 동시에 존재한다.
+     * 만들지 않고, 목적지 크기의 빈 비트맵에 Matrix로 스케일+이동해 Canvas로 한 번에
+     * 그린다 — 최대 2장(디코딩 원본 1장 + 목적지 1장)만 동시에 존재한다.
+     *
+     * 감사 D4-07: 두 비트맵 모두 ARGB_8888로 디코딩/생성한다. 예전엔 RGB_565(2바이트/
+     * 픽셀, 메모리 절약)였는데 알파 채널 자체가 없어서, 투명 영역이 있는 PNG를
+     * 배경으로 쓰면 디코딩 시점에 그 투명 픽셀이 검정으로 확정돼버려 이후 무엇으로도
+     * 되돌릴 수 없었다(잠금화면에서만 검게 보이고 Flutter 미리보기와 어긋난 원인).
+     * target을 bgColor로 미리 채우지 않고 완전히 비워(=투명) 두는 이유: 실제 합성은
+     * composeBackgroundLayers()의 LayerDrawable이 draw 시점마다 하므로, 여기서
+     * bgColor를 미리 구워 넣으면 bgColor가 바뀔 때마다 이 비트맵을 다시 디코딩해야
+     * 한다 — 대신 draw 시점에 합성하고, 휘도(auto 텍스트 판정용)만
+     * averageLuminance()에서 그때그때 현재 bgColor를 반영해 즉석 계산한다.
      *
      * 실패(파일 없음/손상/OOM 등 Throwable 전부)하면 null을 반환한다 — 호출부가
      * 단색으로 조용히 강등한다.
      */
-    private fun decodeBackgroundBitmap(path: String, screenW: Int, screenH: Int): DecodedBackground? {
+    private fun decodeBackgroundBitmap(path: String, screenW: Int, screenH: Int): Bitmap? {
         return try {
             val file = java.io.File(path)
             if (!file.exists()) return null
@@ -1294,9 +1363,18 @@ class LockScreenService : Service() {
             ) {
                 sampleSize *= 2
             }
+            // 감사 D4-07: 알파가 있을 수 있는 포맷만 ARGB_8888(4바이트/픽셀)로 디코딩한다.
+            // 무조건 ARGB_8888로 바꾸면 알파가 아예 불가능한 JPEG(갤러리 사진의 대다수)까지
+            // 디코딩 버퍼와 상주 캐시가 2배가 된다. 이 서비스는 import·PDF와 같은 메인
+            // 프로세스에서 돌고 캐시는 전체화면 크기라, 그 2배가 그대로 OOM 여유를 깎는다.
+            val srcMime = boundsOpts.outMimeType ?: ""
+            val mayHaveAlpha = !srcMime.equals("image/jpeg", ignoreCase = true) &&
+                !srcMime.equals("image/jpg", ignoreCase = true) &&
+                !srcMime.equals("image/bmp", ignoreCase = true)
             val decodeOpts = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.RGB_565
+                inPreferredConfig =
+                    if (mayHaveAlpha) Bitmap.Config.ARGB_8888 else Bitmap.Config.RGB_565
             }
             val decoded = BitmapFactory.decodeFile(path, decodeOpts) ?: return null
             if (decoded.width <= 0 || decoded.height <= 0) {
@@ -1305,7 +1383,7 @@ class LockScreenService : Service() {
             }
 
             // cover 스케일 + center-crop을 Matrix+Canvas로 한 번에: 목적지 비트맵(화면
-            // 크기, RGB_565)에 그대로 그려 넣는다.
+            // 크기)에 그대로 그려 넣는다.
             val scale = maxOf(
                 screenW.toFloat() / decoded.width,
                 screenH.toFloat() / decoded.height
@@ -1315,7 +1393,11 @@ class LockScreenService : Service() {
             val dx = (screenW - scaledW) / 2f
             val dy = (screenH - scaledH) / 2f
 
-            val target = Bitmap.createBitmap(screenW, screenH, Bitmap.Config.RGB_565)
+            // 감사 D4-07: 실제로 투명 픽셀이 있는 이미지만 상주 캐시를 ARGB_8888로 잡는다.
+            // hasAlpha()가 false면(불투명 PNG·JPEG) 예전과 같은 RGB_565라 메모리도 그대로다.
+            val targetConfig =
+                if (decoded.hasAlpha()) Bitmap.Config.ARGB_8888 else Bitmap.Config.RGB_565
+            val target = Bitmap.createBitmap(screenW, screenH, targetConfig)
             val canvas = Canvas(target)
             val matrix = Matrix().apply {
                 setScale(scale, scale)
@@ -1324,7 +1406,7 @@ class LockScreenService : Service() {
             val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
             canvas.drawBitmap(decoded, matrix, paint)
             decoded.recycle()
-            DecodedBackground(target, averageLuminance(target))
+            target
         } catch (_: Throwable) {
             // OutOfMemoryError는 Exception이 아니라 Error라 잡히지 않는다 — Throwable로
             // 잡아 디코딩 실패 한 건만 조용히 강등시키고 서비스/프로세스는 죽지 않게 한다.
@@ -1743,8 +1825,20 @@ class LockScreenService : Service() {
             addUpdateListener {
                 view.slideProgress = it.animatedValue as Float
             }
+            // 감사 D4-10: ValueAnimator는 cancel()해도 리스너의 onAnimationEnd가 그대로
+            // 불린다(cancel → onAnimationCancel → onAnimationEnd 순서, 취소해도 end는
+            // 항상 옴). dismissOverlay()의 stopBottomBarIdleAnimation()이 이 애니메이터를
+            // (예: 화면이 꺼져 오버레이를 닫는 도중) 취소할 때도 "끝까지 재생됨"과 똑같이
+            // onAnimationEnd가 발동해, direction<0(왼쪽 스와이프=편집 열기)이면 오버레이를
+            // 닫으려는 그 순간에 편집화면이 함께 열려버렸다(취소 직후 ~200ms 창). cancelled
+            // 플래그로 진짜 완주했을 때만 동작을 실행한다.
+            var cancelled = false
             addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationCancel(animation: android.animation.Animator) {
+                    cancelled = true
+                }
                 override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (cancelled) return
                     if (direction > 0) {
                         dismissOverlay()
                     } else {
@@ -1899,7 +1993,18 @@ class LockScreenService : Service() {
         }
     }
 
-    private fun dismissOverlay() {
+    /**
+     * @param immediate true면 content bitmap recycle을 다음 루퍼 프레임으로 미루지 않고
+     * 그 자리에서 바로 실행한다. onDestroy()에서만 true로 넘긴다(감사 D4-06) — 그 경우
+     * 곧이어 mainHandler.removeCallbacksAndMessages(null)가 호출되는데, 기본 지연
+     * 경로로 예약된 recycle 콜백까지 실행 전에 통째로 취소돼버려 "해제한다"는 주석과
+     * 달리 실제로는 절대 실행되지 않고 있었다. 서비스가 완전히 종료되는 중이라(윈도우도
+     * 막 제거됨) 다음 프레임의 draw 파이프라인을 기다릴 필요가 없다 — 오늘 bgBitmap을
+     * onDestroy에서 동기로 recycle하는 것과 동일한 전제. 서비스가 계속 살아있는 나머지
+     * 호출부(배경/텍스트모드 변경 재생성, 카드 편집 진입, 스와이프 dismiss 등)는
+     * 기존대로 지연 recycle을 유지한다(기본값 false).
+     */
+    private fun dismissOverlay(immediate: Boolean = false) {
         releaseVoice()
         stopBottomBarIdleAnimation()
         overlayView?.let { view ->
@@ -1910,10 +2015,16 @@ class LockScreenService : Service() {
             } catch (_: Exception) {}
             overlayView = null
             overlayVisualKey = null
-            // removeView 후 다음 프레임에서 bitmap recycle (draw pipeline 완료 보장)
-            mainHandler.post {
+            if (immediate) {
                 bitmapsToRecycle.forEach { bmp ->
                     if (!bmp.isRecycled) bmp.recycle()
+                }
+            } else {
+                // removeView 후 다음 프레임에서 bitmap recycle (draw pipeline 완료 보장)
+                mainHandler.post {
+                    bitmapsToRecycle.forEach { bmp ->
+                        if (!bmp.isRecycled) bmp.recycle()
+                    }
                 }
             }
         }

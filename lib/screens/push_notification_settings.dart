@@ -472,6 +472,17 @@ class _PushNotificationSettingsScreenState
                             }
                           } catch (e) {
                             debugPrint('[PUSH_SETTINGS] toggle failed: $e');
+                            // DB엔 이미 새 값이 들어갔을 수 있다 — UI만 되돌리면 화면은 OFF인데
+                            // 저장값은 ON(규칙 0개)인 모순이 남아 알림이 계속 오거나 영영 안 온다
+                            // (감사 D6-09). 저장값도 되돌리고 서비스 상태를 다시 맞춘다.
+                            try {
+                              await DatabaseHelper.instance.upsertSetting(
+                                  _settingNotificationEnabled,
+                                  previousEnabled.toString());
+                              await NotificationService.rescheduleAll();
+                            } catch (e2) {
+                              debugPrint('[PUSH_SETTINGS] rollback failed: $e2');
+                            }
                             if (!mounted) return;
                             setState(() => _enabled = previousEnabled);
                             messenger.showSnackBar(

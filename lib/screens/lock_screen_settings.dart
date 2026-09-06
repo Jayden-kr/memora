@@ -336,6 +336,14 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     });
   }
 
+  /// 디바운스를 건너뛰고 지금 즉시 저장한다. 배경 이미지처럼 "설정을 쓰기 전에 파일을 지우면
+  /// 그 사이 프로세스가 죽었을 때 배경이 영구 소실되는" 경로에서 쓴다(감사 D4-12).
+  Future<void> _flushSettingNow() async {
+    _settingDebounce?.cancel();
+    _settingDebounce = null;
+    await _applySettings();
+  }
+
   // ─── 시간대별 폴더 자동 전환 ───
 
   Folder? _folderForId(int id) {
@@ -469,7 +477,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         return;
       }
       setState(() => _bgImagePath = destPath);
-      _onSettingChanged();
+      // 새 경로를 확정 저장한 뒤에 옛 파일을 지운다 — 500ms 디바운스 사이에 잠기거나 앱이
+      // 죽으면 prefs가 방금 지운 옛 파일을 가리켜 배경이 사라졌다(감사 D4-12).
+      await _flushSettingNow();
       if (previousPath.isNotEmpty && previousPath != destPath) {
         File(previousPath).delete().ignore();
       }
@@ -484,10 +494,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     }
   }
 
-  void _removeBackgroundImage() {
+  Future<void> _removeBackgroundImage() async {
     final previousPath = _bgImagePath;
     setState(() => _bgImagePath = '');
-    _onSettingChanged();
+    // 제거도 같은 이유로 저장을 먼저 끝낸다(D4-12).
+    await _flushSettingNow();
     if (previousPath.isNotEmpty) {
       File(previousPath).delete().ignore();
     }

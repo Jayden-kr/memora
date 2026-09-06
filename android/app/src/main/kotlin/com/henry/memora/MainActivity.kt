@@ -271,6 +271,20 @@ class MainActivity : FlutterActivity() {
                         }
                         "stopService" -> {
                             try {
+                                // 감사 D10-07: Dart는 앱 실행마다(rescheduleAll → 비활성) 이걸
+                                // 무조건 보낸다 — "미실행 서비스에도 무해하다"는 전제였지만,
+                                // startForegroundService는 **없던 프로세스를 새로 띄운다**. 그래서
+                                // 푸시를 한 번도 켠 적 없는 사용자도 실행마다 `:push`가 생기고
+                                // onCreate가 알림 채널까지 만들었다(실기기 확인). 죽어 있으면
+                                // 멈출 서비스도 없다 — 그때만 건너뛴다.
+                                // (끈 직후처럼 살아 있는 경우엔 예전과 100% 동일하게 STOP을 보낸다.
+                                //  프로세스가 죽은 채 알람만 남은 드문 경우도 다음 TICK이 running=false를
+                                //  보고 스스로 정리하므로 체인이 되살아나지 않는다.)
+                                if (!isPushProcessAlive()) {
+                                    Log.d(TAG, ":push 미실행 — STOP 생략(프로세스 생성 방지)")
+                                    result.success(true)
+                                    return@setMethodCallHandler
+                                }
                                 val intent = Intent(this, PushNotificationService::class.java)
                                 intent.action = PushNotificationService.ACTION_STOP
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -412,6 +426,17 @@ class MainActivity : FlutterActivity() {
                                     val self = retryRef ?: return
                                     channel.invokeMethod("navigateToPushCard", payload, object : MethodChannel.Result {
                                         override fun success(result: Any?) {
+                                            // 편집 딥링크와 같은 이유로 false는 "아직 준비 안 됨"이다(D4-11).
+                                            if (result == false) {
+                                                retryCount++
+                                                if (retryCount < maxRetries) {
+                                                    Log.d(TAG, "Cold start nav not ready, retry $retryCount/$maxRetries")
+                                                    mainHandler.postDelayed(self, 500)
+                                                } else {
+                                                    Log.w(TAG, "Cold start nav: gave up after $maxRetries retries")
+                                                }
+                                                return
+                                            }
                                             Log.d(TAG, "Cold start nav succeeded")
                                         }
                                         override fun error(code: String, message: String?, details: Any?) {
@@ -462,6 +487,19 @@ class MainActivity : FlutterActivity() {
                             val self = retryRef ?: return
                             channel.invokeMethod("navigateToEditCard", payload, object : MethodChannel.Result {
                                 override fun success(result: Any?) {
+                                    // Dart는 네비게이터가 아직 없으면 false를 돌려준다 — 예전엔 무조건
+                                    // success라 재시도가 notImplemented에만 걸려, 콜드스타트 편집
+                                    // 딥링크가 조용히 유실됐다(감사 D4-11).
+                                    if (result == false) {
+                                        retryCount++
+                                        if (retryCount < maxRetries) {
+                                            Log.d(TAG, "Cold start edit nav not ready, retry $retryCount/$maxRetries")
+                                            mainHandler.postDelayed(self, 500)
+                                        } else {
+                                            Log.w(TAG, "Cold start edit nav: gave up after $maxRetries retries")
+                                        }
+                                        return
+                                    }
                                     Log.d(TAG, "Cold start edit nav succeeded")
                                 }
                                 override fun error(code: String, message: String?, details: Any?) {
@@ -546,6 +584,8 @@ class MainActivity : FlutterActivity() {
             // 서비스가 안 돌고 있어도 채널 이름은 남아 있으므로 여기서 갱신해 둔다.
             ImportExportService.refreshChannelLanguage(this)
             LockScreenService.refreshChannelLanguage(this)
+            // 부팅 복원 채널만 갱신 대상에서 빠져 있어 시스템 설정에서 이것만 옛 언어로 남았다(X5-05).
+            LockScreenStartReceiver.refreshChannelLanguage(this)
         } catch (e: Exception) {
             Log.w(TAG, "알림 채널 언어 갱신 실패: ${e.message}")
         }
@@ -564,13 +604,35 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            startService(Intent(this, PushNotificationService::class.java).apply {
-                action = AppLang.ACTION_SET_LANG
-                putExtra(AppLang.EXTRA_LANG, code)
-            })
+            // `:push`가 실제로 살아 있을 때만 통지한다 — 예전엔 무조건 startService라, 푸시를
+            // 한 번도 켠 적 없는 사용자도 앱 실행마다 별도 프로세스가 뜨고(onCreate가 채널을
+            // 무조건 만든다) '푸시 알림 서비스' 채널이 생겼다(감사 D10-07). 별도 프로세스라
+            // 이 프로세스의 prefs 캐시는 못 믿으므로 프로세스 목록으로 판단한다.
+            // 죽어 있는 동안의 언어 변경은 유실되지 않는다 — 푸시를 다시 켜는 경로
+            // (NotificationService._startPushService)가 `lang` extra를 항상 함께 보낸다.
+            if (isPushProcessAlive()) {
+                startService(Intent(this, PushNotificationService::class.java).apply {
+                    action = AppLang.ACTION_SET_LANG
+                    putExtra(AppLang.EXTRA_LANG, code)
+                })
+            }
         } catch (e: Exception) {
             Log.w(TAG, "푸시 서비스 언어 통지 실패: ${e.message}")
         }
+    }
+
+    /**
+     * `:push` 원격 프로세스가 살아 있는지 확인한다. `getRunningAppProcesses()`는 다른 앱은
+     * 못 보지만 **자기 앱의 프로세스**는 계속 돌려주므로 이 용도엔 유효하다.
+     * 확인에 실패하면 true(=기존 동작인 통지)로 폴백해 언어가 안 바뀌는 쪽을 피한다.
+     */
+    private fun isPushProcessAlive(): Boolean = try {
+        val am = getSystemService(ACTIVITY_SERVICE) as? android.app.ActivityManager
+        val target = "$packageName:push"
+        am?.runningAppProcesses?.any { it.processName == target } == true
+    } catch (e: Exception) {
+        Log.w(TAG, ":push 프로세스 확인 실패: ${e.message}")
+        true
     }
 
     private fun saveSettings(settings: Map<String, Any?>) {

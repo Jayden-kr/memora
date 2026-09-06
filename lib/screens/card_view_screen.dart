@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../database/database_helper.dart';
+import '../services/audio_playback_controller.dart';
 import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../widgets/card_audio_field.dart';
@@ -25,6 +26,13 @@ class CardViewScreen extends StatefulWidget {
 }
 
 class _CardViewScreenState extends State<CardViewScreen> {
+  @override
+  void dispose() {
+    // 감사 D2-07: 목록 화면과 같은 이유 — 이 화면을 나가면 재생도 끝낸다.
+    AudioPlaybackController.instance.stop().ignore();
+    super.dispose();
+  }
+
   late CardModel _card;
   String? _folderName;
   bool _answerRevealed = false;

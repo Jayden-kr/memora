@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import '../services/audio_playback_controller.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
@@ -846,6 +847,8 @@ class DatabaseHelper {
       return;
     }
     for (final path in wanted.difference(keep)) {
+      // 감사 D2-07: 재생 중인 파일을 지우기 전에 재생기를 놓아준다.
+      await AudioPlaybackController.instance.stopIfPlaying(path);
       try {
         final f = File(path);
         if (await f.exists()) await f.delete();

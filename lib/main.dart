@@ -52,8 +52,10 @@ void main() async {
     debugPrint('Failed to load theme setting: $e');
   }
 
-  // 잠금화면 서비스 자동 재시작 (enabled 상태면)
-  _restoreLockScreenService();
+  // 잠금화면이 참조하는 삭제된 폴더를 정리한 뒤 서비스를 복원한다. 폴더 삭제 직후의 정리는
+  // fire-and-forget이라 그 창에서 앱이 죽거나 채널이 한 번 실패하면 "켜져 있는데 영원히 안 뜨는"
+  // 상태가 영구히 남았다 — 시작할 때마다 대조해 스스로 낫게 한다(감사 D1-06).
+  _reconcileLockScreenFoldersOnce().whenComplete(_restoreLockScreenService);
 
   // 알림 권한 요청 + 재스케줄링
   NotificationService.requestPermission().then((_) async {
@@ -79,7 +81,10 @@ void main() async {
         final folderId = (args['folderId'] as num?)?.toInt();
         final cardId = (args['cardId'] as num?)?.toInt();
         if (folderId != null && cardId != null) {
-          _handleNotificationNav(NotificationNavEvent(folderId, cardId));
+          // 결과를 그대로 돌려준다 — 네이티브는 false를 "아직 준비 안 됨"으로 읽고
+          // 재시도한다. 예전엔 무조건 success라 콜드스타트 딥링크가 유실됐다(감사 D4-11).
+          return await _handleNotificationNav(
+              NotificationNavEvent(folderId, cardId));
         }
       }
     } else if (call.method == 'navigateToEditCard') {
@@ -88,7 +93,7 @@ void main() async {
         final folderId = (args['folderId'] as num?)?.toInt();
         final cardId = (args['cardId'] as num?)?.toInt();
         if (folderId != null && cardId != null) {
-          _handleEditCardNav(folderId, cardId);
+          return await _handleEditCardNav(folderId, cardId);
         }
       }
     } else if (call.method == 'navigateToSettings') {
@@ -186,7 +191,9 @@ Future<void> _cleanupBrokenImagePathsOnce() async {
 /// Cold-start 시 navigator 준비 전에 도착한 설정 네비게이션 대상
 String? _pendingSettingsTarget;
 
-Future<void> _handleNotificationNav(NotificationNavEvent event) async {
+/// 반환값 false = "아직 못 갔다, 다시 불러라"(네이티브 콜드스타트 재시도 신호, 감사 D4-11).
+/// 의도적으로 건너뛴 경우(편집 화면이 열려 있음 등)는 재시도해도 소용없으므로 true다.
+Future<bool> _handleNotificationNav(NotificationNavEvent event) async {
   debugPrint(
       '[MAIN] _handleNotificationNav: folder=${event.folderId} card=${event.cardId}');
 
@@ -198,7 +205,7 @@ Future<void> _handleNotificationNav(NotificationNavEvent event) async {
     final retryNav = navigatorKey.currentState;
     if (retryNav == null) {
       debugPrint('[MAIN] navigatorKey still null after retry, giving up');
-      return;
+      return false;
     }
     return _doNavigate(retryNav, event);
   }
@@ -206,7 +213,7 @@ Future<void> _handleNotificationNav(NotificationNavEvent event) async {
   return _doNavigate(nav, event);
 }
 
-Future<void> _doNavigate(
+Future<bool> _doNavigate(
     NavigatorState nav, NotificationNavEvent event) async {
   try {
     // 카드 조회 + 폴더 조회 병렬 실행 (event.folderId 활용)
@@ -219,7 +226,7 @@ Future<void> _doNavigate(
 
     if (card == null) {
       debugPrint('[MAIN] card not found for id=${event.cardId}');
-      return;
+      return true; // 카드가 없는 건 재시도해도 그대로다
     }
 
     // 카드가 다른 폴더로 이동된 경우 → 현재 폴더로 보정
@@ -230,14 +237,14 @@ Future<void> _doNavigate(
     final resolvedFolder = folder;
     if (resolvedFolder == null) {
       debugPrint('[MAIN] folder not found');
-      return;
+      return true;
     }
 
     // 편집 화면이 열려 있으면 popUntil이 PopScope의 미저장-변경 가드를 우회해
     // 편집 중인 내용을 조용히 날려버린다 — 편집 중엔 알림 네비게이션을 건너뛴다.
     if (CardEditScreen.isOpen) {
       debugPrint('[MAIN] CardEditScreen open, skipping notification navigation');
-      return;
+      return true; // 의도적 건너뜀 — 재시도 대상 아님
     }
     debugPrint('[MAIN] navigating to folder="${resolvedFolder.name}" scrollToCard=${card.id}');
     nav.popUntil((route) => route.isFirst);
@@ -247,14 +254,17 @@ Future<void> _doNavigate(
         scrollToCardId: card.id,
       ),
     ));
+    return true;
   } catch (e) {
     debugPrint('[MAIN] _doNavigate 오류 (DB 연결 등): $e');
+    return false; // DB가 아직 안 열렸을 수 있다 — 네이티브가 몇 번 더 부른다.
   }
 }
 
 /// 잠금화면 좌측 슬라이드 → 해당 카드 편집 화면 이동.
 /// CardListScreen에 autoEditCardId를 전달해 _editCard() 경로로 편집 → pop 시 refresh 보장.
-Future<void> _handleEditCardNav(int folderId, int cardId) async {
+/// 반환값 규약은 [_handleNotificationNav]와 같다(false=재시도 요청, 감사 D4-11).
+Future<bool> _handleEditCardNav(int folderId, int cardId) async {
   debugPrint('[MAIN] _handleEditCardNav: folder=$folderId card=$cardId');
   final nav = navigatorKey.currentState;
   if (nav == null) {
@@ -262,14 +272,14 @@ Future<void> _handleEditCardNav(int folderId, int cardId) async {
     final retryNav = navigatorKey.currentState;
     if (retryNav == null) {
       debugPrint('[MAIN] navigatorKey still null, giving up edit nav');
-      return;
+      return false;
     }
     return _doEditNavigate(retryNav, folderId, cardId);
   }
   return _doEditNavigate(nav, folderId, cardId);
 }
 
-Future<void> _doEditNavigate(
+Future<bool> _doEditNavigate(
     NavigatorState nav, int folderId, int cardId) async {
   try {
     final results = await Future.wait([
@@ -280,7 +290,7 @@ Future<void> _doEditNavigate(
     var folder = results[1] as Folder?;
     if (card == null) {
       debugPrint('[MAIN] edit card not found for id=$cardId');
-      return;
+      return true;
     }
     if (card.folderId != folderId) {
       folder = await DatabaseHelper.instance.getFolderById(card.folderId);
@@ -288,13 +298,13 @@ Future<void> _doEditNavigate(
     final resolvedFolder = folder;
     if (resolvedFolder == null) {
       debugPrint('[MAIN] edit folder not found');
-      return;
+      return true;
     }
     // 이미 편집 화면이 열려 있으면 popUntil이 PopScope의 미저장-변경 가드를
     // 우회해 편집 중인 내용을 조용히 날려버린다 — 이 경우 편집 네비게이션을 건너뛴다.
     if (CardEditScreen.isOpen) {
       debugPrint('[MAIN] CardEditScreen open, skipping edit navigation');
-      return;
+      return true; // 의도적 건너뜀
     }
     nav.popUntil((route) => route.isFirst);
     nav.push(MaterialPageRoute(
@@ -310,8 +320,10 @@ Future<void> _doEditNavigate(
         existingCard: card,
       ),
     ));
+    return true;
   } catch (e) {
     debugPrint('[MAIN] _doEditNavigate 오류: $e');
+    return false;
   }
 }
 
@@ -373,6 +385,37 @@ void _handleSettingsNavigation(String target) {
 
   nav.popUntil((route) => route.isFirst);
   nav.push(MaterialPageRoute(builder: (_) => screen));
+}
+
+/// 잠금화면 설정(기본 폴더 + 시간대 슬롯)이 가리키는 폴더 중 DB에 더는 없는 것을 정리한다.
+/// 폴더 삭제 경로의 정리가 실패했거나 그 전에 프로세스가 죽었어도 다음 실행에서 회복된다.
+Future<void> _reconcileLockScreenFoldersOnce() async {
+  try {
+    final settings = await LockScreenService.getSettings();
+    final referenced = <int>{};
+    final rawIds = settings['folderIds'];
+    if (rawIds is List) {
+      for (final v in rawIds) {
+        final id = v is int ? v : int.tryParse(v.toString());
+        if (id != null) referenced.add(id);
+      }
+    }
+    for (final slot
+        in LockScreenSchedule.decode(settings['scheduleCsv'] as String?)) {
+      referenced.add(slot.folderId);
+    }
+    if (referenced.isEmpty) return;
+
+    final folders = await DatabaseHelper.instance.getAllFolders();
+    final alive = folders.map((f) => f.id).whereType<int>().toSet();
+    final stale = referenced.difference(alive).toList();
+    if (stale.isEmpty) return;
+
+    debugPrint('[STARTUP] 잠금화면이 없는 폴더 참조 중: $stale → 정리');
+    await LockScreenService.removeFoldersFromSettingsBatch(stale);
+  } catch (e) {
+    debugPrint('[STARTUP] 잠금화면 폴더 대조 실패: $e');
+  }
 }
 
 Future<void> _restoreLockScreenService() async {

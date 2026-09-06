@@ -240,16 +240,46 @@ class PdfGenerator(private val context: Context) {
             var end = line
             while (end + 1 < lineCount && layout.getLineBottom(end + 1) - top <= avail) end++
 
+            // 이 페이지에 들어가는 줄만 다시 레이아웃해 그린다 — 예전엔 전체 layout을 매 페이지에
+            // 그리고 clip으로 가리기만 해서, 페이지를 넘기는 긴 카드의 본문 전체가 페이지마다
+            // PDF 콘텐츠에 들어갔다(파일 크기·뷰어 검색 오염, 감사 D9-07).
+            // 재레이아웃 줄 수가 원본과 다르면(이론상 경계 케이스) 예전 방식으로 폴백한다.
+            val pageLayout = subLayout(t, layout, line, end)
             canvas.save()
             canvas.clipRect(x, y, x + IW, y + avail)
-            canvas.translate(x, y - top)
-            layout.draw(canvas)
+            if (pageLayout != null) {
+                canvas.translate(x, y)
+                pageLayout.draw(canvas)
+            } else {
+                canvas.translate(x, y - top)
+                layout.draw(canvas)
+            }
             canvas.restore()
 
             y += layout.getLineBottom(end).toFloat() - top
             line = end + 1
         }
         return canvas to y
+    }
+
+    /**
+     * [layout]의 [from]..[to] 줄 구간만 담은 StaticLayout.
+     * 재레이아웃 줄 수가 원본과 다르면 null을 돌려 호출자가 예전 방식으로 폴백하게 한다.
+     * textPaint는 호출자(wrapPaged)가 크기/서체/색을 이미 맞춰 둔 상태여야 한다.
+     */
+    private fun subLayout(text: String, layout: StaticLayout, from: Int, to: Int): StaticLayout? {
+        return try {
+            val start = layout.getLineStart(from)
+            var end = layout.getLineEnd(to)
+            // 줄 끝 개행은 빈 줄을 하나 더 만들어 줄 수 비교를 깨뜨린다.
+            while (end > start && (text[end - 1] == '\n' || text[end - 1] == '\r')) end--
+            if (end <= start) return null
+            val sub = StaticLayout.Builder.obtain(text, start, end, textPaint, IW)
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL).setLineSpacing(0f, 1.3f).build()
+            if (sub.lineCount != to - from + 1) null else sub
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** 카메라 사진의 EXIF 회전을 적용한다. Flutter(Image.file)는 디코더가 EXIF를 존중하지만

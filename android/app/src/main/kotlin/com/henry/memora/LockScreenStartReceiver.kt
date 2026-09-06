@@ -16,6 +16,33 @@ class LockScreenStartReceiver : BroadcastReceiver() {
         private const val TAG = "LockScreenStartReceiver"
         private const val CHANNEL_ID = "lock_screen_restore_channel"
         private const val RESTORE_NOTIFICATION_ID = 9001
+        /// 푸시 복원 실패 안내는 별도 ID — 잠금화면 복원과 ID를 공유하면 둘 다 실패했을 때
+        /// 한쪽 안내가 다른 쪽을 덮어써 사라졌다(감사 D6-06).
+        private const val PUSH_RESTORE_NOTIFICATION_ID = 9002
+
+        /**
+         * 앱 언어가 바뀌었을 때 복원 알림 채널의 이름/설명을 새 언어로 갱신한다.
+         * 채널 4개 중 이것만 갱신 대상에서 빠져 있어 시스템 알림 설정에서 이 채널만
+         * 다른 언어로 남았다(감사 X5-05). 같은 ID로 다시 만드는 것은 비파괴적이며,
+         * 채널이 아직 없으면 아무것도 하지 않는다(다음 실패 때 새 언어로 생성됨).
+         */
+        fun refreshChannelLanguage(context: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+            val appContext = context.applicationContext
+            val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE)
+                as? NotificationManager ?: return
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) return
+            val res = AppLang.wrap(appContext)
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    res.getString(R.string.restore_channel_name),
+                    NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    description = res.getString(R.string.restore_channel_desc)
+                }
+            )
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -90,6 +117,10 @@ class LockScreenStartReceiver : BroadcastReceiver() {
             nm.createNotificationChannel(channel)
         }
 
+        // 잠금화면 복원 실패와 푸시 복원 실패는 서로 다른 알림이다(문구도 ID도 분리).
+        val notifId =
+            if (forPush) PUSH_RESTORE_NOTIFICATION_ID else RESTORE_NOTIFICATION_ID
+
         // 앱 열기 Intent
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -97,7 +128,7 @@ class LockScreenStartReceiver : BroadcastReceiver() {
         // requestCode는 이 알림 고유값 — 예전엔 0이라 ImportExportService의 진행 알림 PI(같은
         // MainActivity 컴포넌트, requestCode 0)와 FLAG_UPDATE_CURRENT로 서로의 extras를 덮어썼다.
         val pendingIntent = PendingIntent.getActivity(
-            context, RESTORE_NOTIFICATION_ID, openIntent,
+            context, notifId, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -112,6 +143,6 @@ class LockScreenStartReceiver : BroadcastReceiver() {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
-        nm.notify(RESTORE_NOTIFICATION_ID, notification)
+        nm.notify(notifId, notification)
     }
 }

@@ -185,8 +185,10 @@ class ImportExportService : Service() {
         val res = AppLang.wrap(this)
         val title = intent?.getStringExtra("title") ?: res.getString(R.string.ie_processing)
         val type = intent?.getStringExtra("type") ?: "import"
+        // requestCode 0은 다른 알림의 PendingIntent와 같은 값이라 FLAG_UPDATE_CURRENT로 서로의
+        // extras를 덮어썼다(감사 D4-09/D6-11) — 위 updateProgress와 같은 고유 ID를 쓴다.
         val pi = PendingIntent.getActivity(
-            this, 0,
+            this, PROGRESS_NOTIFICATION_ID,
             Intent(this, MainActivity::class.java).apply {
                 this.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 if (type == "import") {

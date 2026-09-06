@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../database/database_helper.dart';
+import '../services/audio_playback_controller.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../widgets/folder_tile.dart';
@@ -635,6 +636,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   /// 파일 경로 리스트의 파일들을 디스크에서 삭제 (card_list_screen과 동일 패턴)
   Future<void> _deleteFiles(List<String> paths) async {
     for (final path in paths) {
+      // 감사 D2-07: 지우려는 파일이 지금 재생 중이면 먼저 멈춘다(사라진 파일을 가리키는
+      // 재생기가 남지 않게).
+      await AudioPlaybackController.instance.stopIfPlaying(path);
       try {
         final f = File(path);
         if (await f.exists()) await f.delete();

@@ -77,6 +77,11 @@ class PushNotificationService : Service() {
 
     private var lang = "ko"
     private var rules: List<PushSchedule.Rule> = emptyList()
+    // 감사 D6-07: 이 인스턴스가 지금까지 한 번이라도 startForeground()에 성공했는지.
+    // ACTION_SET_LANG이 이 값이 false인 채로 들어오면 죽어있던 :push를 막 콜드스타트로
+    // 깨운 것 — LockScreenService의 SET_LANG 자가치유가 screenReceiver==null로 같은
+    // 상황을 판정하는 것과 동일한 역할.
+    private var foregroundStarted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -95,11 +100,27 @@ class PushNotificationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "RECREATE_NOTIFICATION") {
             Log.d(TAG, "상주 알림 재생성")
+            // 감사 D6-08: 이 인텐트는 알림의 deleteIntent(getForegroundService)로 오므로
+            // 다른 분기(TICK/STOP/메인)와 마찬가지로 항상 startForegroundService 계약을
+            // 진다 — startForeground를 try/catch 없이 불렀다가 Android 12+에서
+            // ForegroundServiceStartNotAllowedException이 나면(상주 알림을 스와이프만
+            // 해도 재현 가능) :push 프로세스가 그대로 죽었다. 다른 분기와 같은 방어를 넣는다.
             val notification = createServiceNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(SERVICE_NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(SERVICE_NOTIF_ID, notification)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(SERVICE_NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                } else {
+                    startForeground(SERVICE_NOTIF_ID, notification)
+                }
+                foregroundStarted = true
+            } catch (e: Exception) {
+                Log.e(TAG, "RECREATE_NOTIFICATION startForeground 실패", e)
+                // TICK과 동일 이유: startForegroundService로 시작됐는데 startForeground를
+                // 못 했으니 5초 안에 스스로 멈춰야 ForegroundServiceDidNotStartInTime으로
+                // 또 한 번 크래시하지 않는다. 이 분기는 알람 체인을 건드리지 않으므로
+                // TICK과 달리 복구 알람 예약은 불필요.
+                stopSelf()
+                return START_NOT_STICKY
             }
             return START_STICKY
         }
@@ -131,9 +152,54 @@ class PushNotificationService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            // 프로세스가 새로 떴을 수 있으므로 시간/간격을 복원한 뒤 알림을 다시 만든다.
+            // 프로세스가 새로 떴을 수 있으므로 시간/간격을 복원한다.
             loadSettingsFromPrefs()
-            nm?.notify(SERVICE_NOTIF_ID, createServiceNotification())
+            // 감사 D6-07: foregroundStarted==false면 이 인텐트가 죽어있던 :push를
+            // 콜드스타트로 깨웠다는 뜻(이 인스턴스가 TICK/메인 경로로 startForeground를
+            // 한 번도 못 밟음). 이 상태에서 nm.notify()만 하면 상주 알림은 보이는데
+            // 실제로는 foreground 서비스가 아니라서 곧 시스템이 프로세스를 죽인다(최대
+            // 한 주기 알림 유실 + 알림 3이 낡은 채로 남을 수 있음). LockScreenService의
+            // SET_LANG 자가치유(screenReceiver==null → startNormally())와 같은 원리로,
+            // 언어 적용 전에 정식 시작 경로(foreground 승격 + running 플래그 + 알람
+            // 체인 확인)부터 밟는다.
+            if (!foregroundStarted) {
+                createNotificationChannel()
+                val notification = createServiceNotification()
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(SERVICE_NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                    } else {
+                        startForeground(SERVICE_NOTIF_ID, notification)
+                    }
+                    foregroundStarted = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "SET_LANG 콜드스타트 startForeground 실패", e)
+                }
+                saveRunning(true)
+                // 알람 체인 확인: 프로세스만 재생성됐다면 AlarmManager 예약은 프로세스
+                // 사망과 무관하게 이미 살아있어 아래는 사실상 재확인일 뿐이다. 하지만 기기
+                // 재부팅처럼 예약 자체가 사라진 경우엔 이 재확인이 없으면 다음 TICK이
+                // 영영 오지 않는다. 메인 분기의 "남은 시간이 정상 범위면 유지, 아니면
+                // 전체 간격으로 리셋" 로직을 그대로 재사용한다 — computeNextFireTime()은
+                // "직전 발화 다음" 계산이라 여기서 쓰면 한 주기를 통째로 건너뛰므로 쓰지 않는다.
+                val nowMin = nowMinutes()
+                val activeRule = PushSchedule.activeRule(nowMin, rules)
+                val delayMs: Long = if (activeRule != null) {
+                    activeRule.intervalMin * 60_000L
+                } else {
+                    minOf(PushSchedule.minutesUntilNextStart(nowMin, rules), MAX_GAP_POLL_MIN) * 60_000L
+                }
+                val pushPrefsForAlarm = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                val remaining = pushPrefsForAlarm.getLong("nextFireTime", 0L) - System.currentTimeMillis()
+                if (remaining in 1L..delayMs) {
+                    scheduleNextAlarm(remaining)
+                } else {
+                    saveNextFireTime(System.currentTimeMillis() + delayMs)
+                    scheduleNextAlarm(delayMs)
+                }
+            } else {
+                nm?.notify(SERVICE_NOTIF_ID, createServiceNotification())
+            }
             return START_STICKY
         }
 
@@ -186,6 +252,7 @@ class PushNotificationService : Service() {
                 } else {
                     startForeground(SERVICE_NOTIF_ID, notification)
                 }
+                foregroundStarted = true
             } catch (e: Exception) {
                 Log.e(TAG, "TICK startForeground 실패", e)
                 // 체인 유지: 여기서 그냥 물러나면 다음 알람이 영영 예약되지 않아 앱을 다시
@@ -312,6 +379,7 @@ class PushNotificationService : Service() {
             } else {
                 startForeground(SERVICE_NOTIF_ID, notification)
             }
+            foregroundStarted = true
         } catch (e: Exception) {
             Log.e(TAG, "startForeground 실패", e)
             return START_NOT_STICKY
@@ -716,7 +784,11 @@ class PushNotificationService : Service() {
             // 이 prefs는 :push 프로세스(이 서비스 자신)만 읽고 쓴다.
             val updatedRecent = (listOf(cardId) + recentCardIds.filter { it != cardId })
                 .take(RECENT_CARD_LIMIT)
-            pushPrefs.edit().putString("recentCardIds", encodeRecentIds(updatedRecent)).apply()
+            // 감사 D6-10: apply()는 비동기라 :push 프로세스가 발화 직후 죽으면 이 쓰기가
+            // 유실돼 방금 뜬 카드가 바로 다음 발화에 또 뽑힌다(재출현 방지 기능 무력화).
+            // 이 코드는 fire()가 띄운 백그라운드 Thread 안에서만 실행되므로(메인 스레드
+            // 아님) commit()의 동기 I/O가 ANR을 유발하지 않는다.
+            pushPrefs.edit().putString("recentCardIds", encodeRecentIds(updatedRecent)).commit()
 
             // 카드 알림은 카드마다 ID가 달라 아무도 지우지 않으면 무한 누적된다. Android는
             // 패키지당 동시 알림 상한(AOSP 25)을 넘기면 notify()를 예외 없이 무시하므로 알림함을
