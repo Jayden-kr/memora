@@ -119,6 +119,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         );
         return;
       }
+      // 시스템 파일 앱(DocumentsUI)에서 "열기"로 들어오면 플러그인이 캐시 복사 없이
+      // /storage/emulated/0/... 원시 경로를 돌려주는데 이 앱은 그 경로를 읽을 권한이 없다
+      // (X6-06). 여기서 걸러 우회로(공유·가져오기 버튼)를 안내한다.
+      if (!_isReadableFile(importFile.path)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.homeSharedFileUnreadable)),
+        );
+        return;
+      }
       _navigateToImport(importFile.path);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -332,6 +341,15 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     await DatabaseHelper.instance.updateFolder(folder.copyWith(name: newName));
     if (!mounted) return;
     await _loadFolders();
+  }
+
+  static bool _isReadableFile(String path) {
+    try {
+      File(path).openSync().closeSync();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _navigateToImport(String filePath) async {
@@ -637,8 +655,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           _clearSelection();
           return;
         }
-        // Export/Import 진행 중이면 앱을 종료하지 않고 백그라운드로 보냄
-        if (ImportExportController.instance.isRunning) {
+        // Export/Import 진행 중이면 앱을 종료하지 않고 백그라운드로 보냄 (다중 import 배치는
+        // 파일 사이 틈에 isRunning이 잠깐 false라 isBusy로 본다)
+        if (ImportExportController.instance.isBusy) {
           const MethodChannel('com.henry.memora/import_export')
               .invokeMethod('moveToBackground');
           return;

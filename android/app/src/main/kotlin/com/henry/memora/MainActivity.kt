@@ -217,6 +217,15 @@ class MainActivity : FlutterActivity() {
                                 ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                                 != PackageManager.PERMISSION_GRANTED) {
                                 Log.d(TAG, "WRITE_EXTERNAL_STORAGE 미승인, 런타임 요청 후 재개")
+                                // 앞선 요청이 아직 권한 응답을 기다리는 중이면 그 Result를 먼저 끝낸다 —
+                                // 그냥 덮어쓰면 첫 요청의 Dart await가 영영 돌아오지 않았다(D7-10).
+                                pendingSaveToDownloads?.third?.let { old ->
+                                    try {
+                                        old.error("SUPERSEDED", "replaced by a newer saveToDownloads request", null)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "stale pending result already replied", e)
+                                    }
+                                }
                                 pendingSaveToDownloads = Triple(sourcePath, fileName, result)
                                 ActivityCompat.requestPermissions(
                                     this,

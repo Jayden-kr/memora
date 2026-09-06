@@ -85,7 +85,11 @@ class _ImportScreenState extends State<ImportScreen> {
       } else if (_controller.lastImportResult != null) {
         setState(() => _stage = _ImportStage.done);
       } else {
-        if (mounted) Navigator.pop(context);
+        // initState 안에서 동기 pop하면 빌드 페이즈 중 Navigator 변경이다 — 형제 ExportScreen과
+        // 같이 첫 프레임 뒤로 미룬다(Y1-03).
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) Navigator.pop(context);
+        });
       }
       return;
     }
@@ -257,6 +261,10 @@ class _ImportScreenState extends State<ImportScreen> {
   String _resolveErrorMessage(AppLocalizations t) {
     if (_errorMessage != null) return _errorMessage!;
     if (_errorRaw == null) return t.importErrorUnknown;
+    // Memora 번들이 아닌 파일(folders.json/cards.json 없음·깨짐) — 원인을 그대로 알린다(D7-12).
+    if (_errorRaw!.contains('ImportFormatException')) {
+      return t.importErrorNotArchive;
+    }
     final parts = _errorRaw!.split(':');
     final type = parts.first;
     final rest = parts.skip(1).join(':');

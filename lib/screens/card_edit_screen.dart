@@ -53,6 +53,27 @@ class CardEditScreen extends StatefulWidget {
     this.existingCard,
   });
 
+  /// 편집 저장이 UPDATE할 컬럼 — 화면을 열 때의 스냅샷([before]) 대비 실제로 바뀐 것만.
+  /// 68컬럼을 통째로 되쓰면 이 화면이 열려 있는 동안 import가 uuid로 복구해 채운 경로
+  /// (손글씨·음성 슬롯 2~10처럼 이 화면이 노출하지 않는 컬럼 포함)를 옛 값으로 되돌리고,
+  /// 그 파일은 다음 시작 GC가 지웠다(감사 X3-02). 문자열 컬럼은 ''과 null을 같은 값으로
+  /// 본다 — 미디어 경로는 로드 시 `_normPath`로 ''→null 정규화되므로 그 차이는 편집이 아니다.
+  static Map<String, Object?> changedDbFields(CardModel before, CardModel after) {
+    final b = before.toDb();
+    final a = after.toDb();
+    final changed = <String, Object?>{};
+    for (final key in a.keys) {
+      if (key == 'id') continue;
+      final bv = b[key];
+      final av = a[key];
+      final same = (bv is String? && av is String?)
+          ? (bv ?? '') == (av ?? '')
+          : bv == av;
+      if (!same) changed[key] = av;
+    }
+    return changed;
+  }
+
   @override
   State<CardEditScreen> createState() => _CardEditScreenState();
 }
@@ -597,15 +618,17 @@ class _CardEditScreenState extends State<CardEditScreen>
           modified: modifiedStr,
         );
         final originalFolderId = widget.existingCard!.folderId;
-        final int updateRows;
+        // 바뀐 컬럼만 UPDATE — 스냅샷 68컬럼을 통째로 되쓰면 이 화면이 열려 있는 동안 import가
+        // uuid로 복구해 채운 경로(이 화면이 노출하지 않는 손글씨·음성 슬롯 포함)를 열 때의 옛
+        // 값으로 되돌렸고, 그 파일은 다음 시작 GC가 지웠다(X3-02).
+        final changed = CardEditScreen.changedDbFields(existing, updated);
         if (_currentFolderId != originalFolderId) {
           // 폴더 변경은 moveCard로 원자적 처리 (트랜잭션 내 card_count 갱신 포함)
           await DatabaseHelper.instance.moveCard(widget.existingCard!.id!, _currentFolderId);
-          // 이동 후 나머지 필드 업데이트 (folderId는 이미 moveCard에서 변경됨)
-          updateRows = await DatabaseHelper.instance.updateCard(updated);
-        } else {
-          updateRows = await DatabaseHelper.instance.updateCard(updated);
+          changed.remove('folder_id'); // 이미 moveCard가 바꿨다
         }
+        final updateRows = await DatabaseHelper.instance
+            .updateCardFields(existing.id!, changed);
         _cleanupRemovedImages(); // fire-and-forget, await 안 함
         resultCardId = widget.existingCard!.id;
 

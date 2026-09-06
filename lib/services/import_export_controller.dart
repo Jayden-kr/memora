@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -58,9 +59,7 @@ class ImportExportController {
     if (!isRunning) return;
     isRunning = false;
     currentOperation = null;
-    if (_operationLock != null && !_operationLock!.isCompleted) {
-      _operationLock!.complete();
-    }
+    _releaseLock();
     clearExportResult();
     _cancel();
     _notify();
@@ -101,8 +100,62 @@ class ImportExportController {
   void removeListener(void Function() listener) => _listeners.remove(listener);
   void _notify() {
     for (final l in List.of(_listeners)) {
-      l();
+      // 리스너 하나가 던져도 나머지 리스너와 호출자(start*)는 계속 간다 — 예전엔 락을 잡은
+      // 직후의 _notify()에서 새면 락이 영영 안 풀려 import/export 전 기능이 재시작 전까지
+      // 죽었다(Z2-03).
+      try {
+        l();
+      } catch (e, st) {
+        debugPrint('[ImportExportController] listener threw: $e\n$st');
+      }
     }
+  }
+
+  /// 락 해제 — 이미 풀렸으면 무시(성공 경로에서 풀고 뒤이은 알림 호출이 던져 catch로 오면
+  /// 두 번째 complete()가 StateError를 냈다).
+  void _releaseLock() {
+    final lock = _operationLock;
+    if (lock != null && !lock.isCompleted) lock.complete();
+  }
+
+  // ─── 배치 import (MultiImportScreen) ───
+  // 파일마다 FGS를 껐다 켜면(complete→STOP→startForegroundService) 앱이 뒤로 물러난 상태에서
+  // 두 번째 파일부터 Android 12+ 배경 FGS 시작 제한에 걸릴 수 있고 그 실패는 삼켜졌다(X1-03).
+  // 배치 동안은 서비스를 내리지 않고, 완료 알림도 합계로 한 번만 낸다(X1-06).
+  int _batchDepth = 0;
+  int _batchFiles = 0;
+  int _batchFailed = 0;
+  int _batchNewCards = 0;
+  Duration _batchDuration = Duration.zero;
+
+  /// 배치가 열려 있으면 파일 사이의 짧은 틈에도 true — 홈 뒤로가기의 "백그라운드로" 판정용.
+  bool get isBusy => isRunning || _batchDepth > 0;
+
+  void beginImportBatch() {
+    if (_batchDepth++ == 0) {
+      _batchFiles = 0;
+      _batchFailed = 0;
+      _batchNewCards = 0;
+      _batchDuration = Duration.zero;
+    }
+  }
+
+  Future<void> endImportBatch() async {
+    if (_batchDepth == 0) return;
+    if (--_batchDepth > 0) return;
+    if (_batchFiles == 0 && _batchFailed == 0) {
+      await _cancel();
+      return;
+    }
+    final isEn = LocaleService.currentLanguageCode() == 'en';
+    final secs = _batchDuration.inSeconds;
+    final failedNote = _batchFailed == 0
+        ? ''
+        : (isEn ? ', $_batchFailed failed' : ', 실패 $_batchFailed개');
+    final body = isEn
+        ? 'Imported $_batchNewCards card(s) from $_batchFiles file(s) (${secs}s)$failedNote'
+        : '$_batchFiles개 파일에서 $_batchNewCards장 가져옴 ($secs초)$failedNote';
+    await _complete(isEn ? 'Import complete' : 'Import 완료', body);
   }
 
   // ─── Foreground Service 제어 ───
@@ -224,7 +277,7 @@ class ImportExportController {
       isRunning = false;
       currentOperation = null;
       currentImportFilePath = null;
-      _operationLock?.complete();
+      _releaseLock();
       _notify();
 
       // import 정상 완료 → marker clear
@@ -232,6 +285,13 @@ class ImportExportController {
         await DatabaseHelper.instance.deleteSetting('import_in_progress');
       } catch (_) {}
 
+      if (_batchDepth > 0) {
+        // 배치 중: 서비스는 유지, 완료 알림은 endImportBatch가 합계로 한 번.
+        _batchFiles++;
+        _batchNewCards += result.newCards;
+        _batchDuration += result.duration;
+        return;
+      }
       final body = isEn
           ? 'Imported ${result.newCards} card(s) (${result.duration.inSeconds}s)'
           : '${result.newCards}장 가져옴 (${result.duration.inSeconds}초)';
@@ -243,22 +303,46 @@ class ImportExportController {
       isRunning = false;
       currentOperation = null;
       currentImportFilePath = null;
-      _operationLock?.complete();
+      _releaseLock();
       _notify();
       // 실패도 마커 clear (실패는 사용자가 인지하고 재시도 가능, OOM kill 아니라)
       try {
         await DatabaseHelper.instance.deleteSetting('import_in_progress');
       } catch (_) {}
-      await _cancel();
+      if (_batchDepth > 0) {
+        // 배치 중엔 FGS를 내리지 않는다(다음 파일이 배경에서 다시 못 띄울 수 있다).
+        _batchFailed++;
+      } else {
+        await _cancel();
+      }
       rethrow;
     }
   }
 
   // ─── Export (Memk per folder) ───
 
+  /// 파일 이름 stem이 차지할 수 있는 최대 UTF-8 바이트. Android(ext4/f2fs)의 이름 한도는
+  /// 255바이트 — `_NNN.mra`/`.pdf` 접미사 여유를 두고 자른다. 긴 폴더 이름 하나가 배치
+  /// 전체를 ENAMETOOLONG으로 중단시켰다(D7-14).
+  static const _maxStemBytes = 200;
+
+  @visibleForTesting
+  static String sanitizeFileName(String name) => _sanitizeFileName(name);
+
   static String _sanitizeFileName(String name) {
-    final sanitized =
+    var sanitized =
         name.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    if (utf8.encode(sanitized).length > _maxStemBytes) {
+      final buf = StringBuffer();
+      var used = 0;
+      for (final rune in sanitized.runes) {
+        final n = utf8.encode(String.fromCharCode(rune)).length;
+        if (used + n > _maxStemBytes) break;
+        buf.writeCharCode(rune);
+        used += n;
+      }
+      sanitized = buf.toString().trimRight();
+    }
     return sanitized.isEmpty ? 'export' : sanitized;
   }
 
@@ -362,9 +446,8 @@ class ImportExportController {
           },
         );
 
-        // exported_files DB 기록
-        final file = File(outputPath);
-        final fileSize = await file.length();
+        // exported_files DB 기록 — 크기 조회 실패로 배치를 멈추지 않는다(파일은 이미 만들어졌다).
+        final fileSize = await _fileLengthOrZero(outputPath);
         try {
           await DatabaseHelper.instance.insertExportedFile(
             fileName: fileName,
@@ -384,7 +467,7 @@ class ImportExportController {
       lastExportFilePaths = createdFiles;
       isRunning = false;
       currentOperation = null;
-      _operationLock?.complete();
+      _releaseLock();
       _notify();
 
       final body = isEn
@@ -404,9 +487,18 @@ class ImportExportController {
       lastExportError = e;
       isRunning = false;
       currentOperation = null;
-      _operationLock?.complete();
+      _releaseLock();
       _notify();
       await _cancel();
+    }
+  }
+
+  static Future<int> _fileLengthOrZero(String path) async {
+    try {
+      return await File(path).length();
+    } catch (e) {
+      debugPrint('[EXPORT] length() failed for $path: $e');
+      return 0;
     }
   }
 
@@ -510,8 +602,7 @@ class ImportExportController {
         });
 
         // exported_files DB 기록
-        final file = File(outputPath);
-        final fileSize = await file.length();
+        final fileSize = await _fileLengthOrZero(outputPath);
         try {
           await DatabaseHelper.instance.insertExportedFile(
             fileName: fileName,
@@ -531,7 +622,7 @@ class ImportExportController {
       lastExportFilePaths = createdFiles;
       isRunning = false;
       currentOperation = null;
-      _operationLock?.complete();
+      _releaseLock();
       _notify();
 
       final body = isEn
@@ -550,7 +641,7 @@ class ImportExportController {
       lastExportError = e;
       isRunning = false;
       currentOperation = null;
-      _operationLock?.complete();
+      _releaseLock();
       _notify();
       await _cancel();
     }

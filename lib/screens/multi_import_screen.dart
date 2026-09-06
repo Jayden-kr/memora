@@ -185,34 +185,41 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
       // ⚡ for-loop을 widget life와 분리: !mounted return 제거.
       //    widget destroy 시에도 controller가 batch import 끝까지 진행.
       //    UI 갱신만 mounted 가드 (setState만 widget life 의존).
-      for (var i = 0; i < batch.length; i++) {
-        final entry = batch[i];
-        if (mounted) {
-          setState(() {
-            _currentFileIdx = i + 1;
-            _currentFileName = entry.fileName;
-          });
-        }
-        try {
-          final allFolderNames = (entry.folders ?? const [])
-              .map((f) => (f['name'] as String?) ?? '')
-              .where((s) => s.isNotEmpty)
-              .toList();
-          await _controller.startImport(
-            filePath: entry.filePath,
-            selectedFolderNames: allFolderNames,
-            folderMapping: null,
-            conflictPolicy: conflictPolicy,
-          );
-          final result = _controller.lastImportResult;
-          if (result != null) {
-            entry.newCards = result.newCards;
-            entry.newFolders = result.newFolders;
-            entry.mergedFolders = result.mergedFolders;
+      // 배치 구간은 FGS를 한 번만 띄우고 완료 알림도 합계로 한 번 — 파일마다 껐다 켜면
+      // 앱이 뒤로 물러난 뒤 두 번째 파일부터 배경 FGS 시작이 막힐 수 있다(X1-03/X1-06).
+      _controller.beginImportBatch();
+      try {
+        for (var i = 0; i < batch.length; i++) {
+          final entry = batch[i];
+          if (mounted) {
+            setState(() {
+              _currentFileIdx = i + 1;
+              _currentFileName = entry.fileName;
+            });
           }
-        } catch (e) {
-          entry.error = e.toString();
+          try {
+            final allFolderNames = (entry.folders ?? const [])
+                .map((f) => (f['name'] as String?) ?? '')
+                .where((s) => s.isNotEmpty)
+                .toList();
+            await _controller.startImport(
+              filePath: entry.filePath,
+              selectedFolderNames: allFolderNames,
+              folderMapping: null,
+              conflictPolicy: conflictPolicy,
+            );
+            final result = _controller.lastImportResult;
+            if (result != null) {
+              entry.newCards = result.newCards;
+              entry.newFolders = result.newFolders;
+              entry.mergedFolders = result.mergedFolders;
+            }
+          } catch (e) {
+            entry.error = e.toString();
+          }
         }
+      } finally {
+        await _controller.endImportBatch();
       }
     }
 

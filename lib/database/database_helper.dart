@@ -577,6 +577,20 @@ class DatabaseHelper {
     return resultId;
   }
 
+  /// 일반 폴더의 card_count 캐시를 실제 COUNT(*)로 맞춘다 — 앱 시작 시 1회. 홈 타일은
+  /// 캐시, 카드 목록 앱바는 실시간 COUNT라 캐시가 어긋나면 두 화면의 숫자가 달랐고 잠금화면/
+  /// 푸시 설정이 멀쩡한 폴더를 "카드 없음"으로 표시했다(X3-06). 어긋난 행만 UPDATE한다.
+  Future<int> resyncFolderCardCounts() async {
+    final db = await database;
+    const actual =
+        '(SELECT COUNT(*) FROM ${AppConstants.tableCards} c '
+        'WHERE c.folder_id = ${AppConstants.tableFolders}.id)';
+    return await db.rawUpdate(
+      'UPDATE ${AppConstants.tableFolders} SET card_count = $actual '
+      'WHERE is_bundle = 0 AND card_count != $actual',
+    );
+  }
+
   Future<void> updateFolderCardCount(int folderId) async {
     final db = await database;
     final count = Sqflite.firstIntValue(await db.rawQuery(
@@ -662,6 +676,20 @@ class DatabaseHelper {
       map,
       where: 'id = ?',
       whereArgs: [card.id],
+    );
+  }
+
+  /// 지정한 컬럼만 UPDATE. 편집 저장이 쓴다 — 전체 컬럼 되쓰기는 동시에 도는 import의
+  /// 복구 결과를 덮었다(X3-02). 바꿀 게 없으면 0.
+  Future<int> updateCardFields(int id, Map<String, Object?> fields) async {
+    final map = Map<String, Object?>.from(fields)..remove('id');
+    if (map.isEmpty) return 0;
+    final db = await database;
+    return await db.update(
+      AppConstants.tableCards,
+      map,
+      where: 'id = ?',
+      whereArgs: [id],
     );
   }
 

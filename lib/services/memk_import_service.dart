@@ -53,6 +53,15 @@ class ImportResult {
   });
 }
 
+/// 아카이브가 Memora/암기왕 번들이 아닐 때(folders.json·cards.json 없음/깨짐) 던진다.
+/// 예전엔 빈 ImportResult를 돌려줘 "Import 완료 · 0장"으로 보고됐다(감사 D7-12).
+class ImportFormatException implements Exception {
+  final String detail;
+  const ImportFormatException(this.detail);
+  @override
+  String toString() => 'ImportFormatException: $detail';
+}
+
 class MemkImportService {
   /// 캐시된 Archive (readFolderList → importSelectedFolders 재사용)
   Archive? _cachedArchive;
@@ -62,6 +71,25 @@ class MemkImportService {
   void clearCache() {
     _cachedArchive = null;
     _cachedFilePath = null;
+  }
+
+  /// 아카이브의 JSON 항목 하나를 디코드한다. 없거나 JSON이 아니면 [ImportFormatException].
+  static dynamic _decodeJsonEntry(ArchiveFile? file, String name) {
+    if (file == null) {
+      throw ImportFormatException('$name missing');
+    }
+    try {
+      // `.content`는 압축해제 결과를 ArchiveFile 안에 영구 캐시한다 — writeContent는 스트림
+      // 으로 바로 풀어 주고(freeMemory) 캐시를 남기지 않는다. 같은 항목을 다시 읽어도 된다
+      // (원본 압축 데이터는 그대로).
+      final out = OutputMemoryStream();
+      file.writeContent(out);
+      return jsonDecode(utf8.decode(out.getBytes()));
+    } on ImportFormatException {
+      rethrow;
+    } catch (e) {
+      throw ImportFormatException('$name unreadable: $e');
+    }
   }
 
   /// .memk 경로에서 파일명만 추출 (/ 및 \ 모두 처리)
@@ -92,12 +120,19 @@ class MemkImportService {
 
     for (final file in archive.files) {
       if (file.name == AppConstants.memkFoldersJson && file.isFile) {
-        final jsonStr = utf8.decode(file.content as List<int>);
-        final List<dynamic> foldersList = jsonDecode(jsonStr);
-        return foldersList.cast<Map<String, dynamic>>();
+        final decoded = _decodeJsonEntry(file, AppConstants.memkFoldersJson);
+        if (decoded is! List) {
+          throw const ImportFormatException('folders.json is not a list');
+        }
+        return decoded.cast<Map<String, dynamic>>();
       }
     }
-    return [];
+    // folders.json이 없으면 Memora 번들이 아니다 — 빈 목록을 돌려주면 화면은 "폴더 0개"로
+    // 정상 진행돼 결국 "완료 0장"이 된다. 호출자(ImportScreen/MultiImportScreen)는 예외를
+    // 읽기 실패로 표시한다.
+    _cachedArchive = null;
+    _cachedFilePath = null;
+    throw const ImportFormatException('folders.json missing');
   }
 
   /// 선택된 폴더의 카드+이미지를 import
@@ -130,7 +165,8 @@ class MemkImportService {
 
     // 캐시된 Archive 재사용 (readFolderList에서 이미 디코딩됨)
     // 메모리 절약: zipBytes는 나중에 raw 추출이 필요할 때만 읽음
-    Archive archive;
+    // nullable인 이유: 아래 raw ZIP 폴백 직전에 참조를 놓아 원본 버퍼가 회수되게 하려고.
+    Archive? archive;
     if (_cachedArchive != null && _cachedFilePath == filePath) {
       archive = _cachedArchive!;
       _cachedArchive = null;
@@ -165,19 +201,32 @@ class MemkImportService {
     }
     debugPrint('[IMPORT] archive entries: $archiveTotal total, $archiveFiles files, rawZipEntries=${rawZipEntries.length}');
 
-    // folders.json 파싱
-    final foldersFile = zipFileIndex[AppConstants.memkFoldersJson];
-    if (foldersFile == null) {
-      return ImportResult(duration: stopwatch.elapsed);
+    // folders.json / cards.json 파싱 — 둘 다 폴더를 만들기 *전에* 검증한다. 어느 하나라도
+    // 없거나 깨졌으면 ImportFormatException(빈 폴더만 남기고 "완료 0장"이 되지 않게).
+    final foldersDecoded = _decodeJsonEntry(
+        zipFileIndex[AppConstants.memkFoldersJson], AppConstants.memkFoldersJson);
+    final cardsDecoded = _decodeJsonEntry(
+        zipFileIndex[AppConstants.memkCardsJson], AppConstants.memkCardsJson);
+    if (foldersDecoded is! List || cardsDecoded is! List) {
+      throw const ImportFormatException('folders.json/cards.json is not a list');
     }
-    List<dynamic> foldersJson;
+    final List<dynamic> foldersJson = foldersDecoded;
+    final List<dynamic> cardsJson = cardsDecoded;
+    // counter.json은 작으니 여기서 미리 디코드해 두고, 아래에서 아카이브 참조를 놓을 때
+    // 같이 놓는다(예전엔 ArchiveFile 참조를 끝까지 들고 있어 원본 버퍼 전체가 pin됐다 — X6-03).
+    Map<String, dynamic>? counterData;
     try {
-      foldersJson =
-          jsonDecode(utf8.decode(foldersFile.content as List<int>))
-              as List<dynamic>;
+      final counterDecoded = _decodeJsonEntry(
+          zipFileIndex[AppConstants.memkCounterJson], AppConstants.memkCounterJson);
+      if (counterDecoded is List && counterDecoded.isNotEmpty) {
+        counterData = counterDecoded[0] as Map<String, dynamic>;
+      }
     } catch (e) {
-      return ImportResult(duration: stopwatch.elapsed);
+      debugPrint('[IMPORT] counter.json 없음/깨짐 — 건너뜀: $e');
     }
+    // 홈 '수동 정렬'은 sequence 순이다. 아카이브의 sequence를 그대로 심으면 새 폴더가 기존
+    // 폴더 사이에 끼어들고 값이 겹친다(X3-04) — 이번 import의 새 폴더는 맨 뒤에 붙인다.
+    int nextFolderSequence = await db.getMaxFolderSequence() + 1;
 
     // 선택된 폴더만 필터 + 폴더 ID 매핑
     final selectedFolderSet = selectedFolderNames.toSet();
@@ -244,7 +293,7 @@ class MemkImportService {
               name: targetName,
               cardCount: 0, // 나중에 updateFolderCardCount로 갱신
               folderCount: 0, // 번들 관계는 import에서 미지원
-              sequence: folder.sequence,
+              sequence: nextFolderSequence++,
               originalSequence: folder.originalSequence,
               modified: folder.modified,
               parent: false, // parentFolderId 리매핑 미지원이므로 리셋
@@ -265,30 +314,6 @@ class MemkImportService {
           }
         }
       }
-    }
-
-    // cards.json 파싱
-    final cardsFile = zipFileIndex[AppConstants.memkCardsJson];
-    if (cardsFile == null) {
-      stopwatch.stop();
-      return ImportResult(
-        newFolders: newFolders,
-        mergedFolders: mergedFolders,
-        duration: stopwatch.elapsed,
-      );
-    }
-    List<dynamic> cardsJson;
-    try {
-      cardsJson =
-          jsonDecode(utf8.decode(cardsFile.content as List<int>))
-              as List<dynamic>;
-    } catch (e) {
-      stopwatch.stop();
-      return ImportResult(
-        newFolders: newFolders,
-        mergedFolders: mergedFolders,
-        duration: stopwatch.elapsed,
-      );
     }
 
     // 선택된 폴더의 카드만 필터
@@ -361,13 +386,16 @@ class MemkImportService {
           skippedCards += result.skipped;
           batch.clear();
 
+          // 진행률은 '처리한' 카드 수(i+1)다 — '삽입된' 수(newCards)로 세면 재import처럼
+          // 전부 건너뛰는 경우 0/N에 멈춰 보였다(D7-08).
+          final processed = i + 1;
           onProgress(ImportProgress(
             phase: 'cards',
-            currentCards: newCards,
+            currentCards: processed,
             totalCards: totalCards,
             message: _isEn
-                ? 'Processing cards... $newCards / $totalCards'
-                : '카드 처리 중... $newCards / $totalCards',
+                ? 'Processing cards... $processed / $totalCards'
+                : '카드 처리 중... $processed / $totalCards',
           ));
 
           // UI 갱신 기회
@@ -409,10 +437,17 @@ class MemkImportService {
 
         final localPath = localImagePath(appDocDir, fileName);
         final localFile = File(localPath);
-        // 크기까지 비교 — 중단된 이전 import가 남긴 손상/0바이트 파일은
-        // existsSync()만으로는 걸러지지 않아 재import해도 영구히 방치됨
-        if (!localFile.existsSync() || localFile.lengthSync() != zipFile.size) {
-          await localFile.writeAsBytes(zipFile.content as List<int>);
+        // 같은 이름의 파일이 이미 있으면 덮어쓰지 않는다. 단, 아카이브 것보다 *짧은* 파일은
+        // 예전 버전의 중단된 import가 최종 경로에 직접 쓰다 남긴 잘린 파일이므로 교체한다.
+        // "크기가 다르기만 하면 덮는다"던 규칙은 이름만 같은 남의 사진까지 바꿔치기했다(X3-05).
+        final existingLen =
+            localFile.existsSync() ? localFile.lengthSync() : -1;
+        if (existingLen < 0 || existingLen < zipFile.size) {
+          // 임시 파일에 스트리밍으로 풀고 rename — (1) 압축해제 결과를 ArchiveFile 캐시에
+          // 남기지 않아(D7-02: `.content`는 끝까지 힙에 남았다) 피크 메모리가 "원본 + 이미지
+          // 한 장"으로 고정되고, (2) 도중에 강제종료돼도 최종 경로엔 완전한 파일만 남는다
+          // (D7-06: 잘린 이미지가 영구 고착되던 구멍).
+          await _writeArchiveFileAtomically(zipFile, localPath);
         }
         imageCount++;
 
@@ -436,7 +471,6 @@ class MemkImportService {
     debugPrint('[IMPORT] archive extraction: $imageCount extracted, $archiveSkipped skipped (not in archive index)');
 
     // archive에서 추출 실패한 이미지를 raw ZIP 파싱으로 추출
-    // archive 객체 참조 해제 → 메모리 확보 후 파일을 다시 읽음
     final missingOnDisk = <String>{};
     for (final fileName in neededImageFiles) {
       final path = localImagePath(appDocDir, fileName);
@@ -444,20 +478,21 @@ class MemkImportService {
         missingOnDisk.add(fileName);
       }
     }
-    // counter.json 참조를 clear() 전에 보존
-    final counterFile = zipFileIndex[AppConstants.memkCounterJson];
 
     if (missingOnDisk.isNotEmpty) {
       debugPrint('[IMPORT] ${missingOnDisk.length} images missing after archive extraction, trying raw ZIP extraction');
-      // archive/인덱스 참조 해제하여 메모리 확보
+      // 아카이브 참조를 *전부* 놓는다 — 인덱스 맵만 비우던 예전 코드는 archive 지역변수와
+      // counter.json ArchiveFile이 원본 버퍼 전체를 붙들고 있어 아무것도 회수되지 않았고,
+      // 그 위에 파일을 통째로 다시 읽어 피크가 2배였다(X6-03). 지금은 폴백이 파일을
+      // RandomAccessFile로 필요한 항목만 읽는다.
       zipFileIndex.clear();
       zipFileByBareName.clear();
+      archive = null;
       // GC 기회 제공
       await Future.delayed(Duration.zero);
 
-      final zipBytes = await File(filePath).readAsBytes();
       final rawExtracted = await _extractMissingImages(
-        zipBytes: zipBytes,
+        zipPath: filePath,
         missingFileNames: missingOnDisk,
         appDocDir: appDocDir,
       );
@@ -470,39 +505,34 @@ class MemkImportService {
       await db.updateFolderCardCount(localFolderId);
     }
 
-    // counter.json 처리 — 현재 값보다 높은 경우만 적용
-    if (counterFile != null) {
+    // counter.json 처리 — 현재 값보다 높은 경우만 적용 (위에서 미리 디코드해 둔 값)
+    if (counterData != null) {
       try {
-        final counterJson =
-            jsonDecode(utf8.decode(counterFile.content as List<int>));
-        if (counterJson is List && counterJson.isNotEmpty) {
-          final counterData = counterJson[0] as Map<String, dynamic>;
-          final current = await db.getCounter();
-          // snake_case / camelCase 양쪽 키 호환 (.memk 원본은 camelCase)
-          // num → int 안전 캐스트 (JSON 파싱 결과가 num일 수 있음)
-          int counterVal(String snakeKey, String camelKey) =>
-              (counterData[snakeKey] as num?)?.toInt() ??
-              (counterData[camelKey] as num?)?.toInt() ??
-              0;
-          await db.updateCounter({
-            'card_sequence': max(
-              (current?['card_sequence'] as int?) ?? 0,
-              counterVal('card_sequence', 'cardSequence'),
-            ),
-            'card_minus_sequence': max(
-              (current?['card_minus_sequence'] as int?) ?? 0,
-              counterVal('card_minus_sequence', 'cardMinusSequence'),
-            ),
-            'folder_sequence': max(
-              (current?['folder_sequence'] as int?) ?? 0,
-              counterVal('folder_sequence', 'folderSequence'),
-            ),
-            'folder_minus_sequence': max(
-              (current?['folder_minus_sequence'] as int?) ?? 0,
-              counterVal('folder_minus_sequence', 'folderMinusSequence'),
-            ),
-          });
-        }
+        final current = await db.getCounter();
+        // snake_case / camelCase 양쪽 키 호환 (.memk 원본은 camelCase)
+        // num → int 안전 캐스트 (JSON 파싱 결과가 num일 수 있음)
+        int counterVal(String snakeKey, String camelKey) =>
+            (counterData![snakeKey] as num?)?.toInt() ??
+            (counterData[camelKey] as num?)?.toInt() ??
+            0;
+        await db.updateCounter({
+          'card_sequence': max(
+            (current?['card_sequence'] as int?) ?? 0,
+            counterVal('card_sequence', 'cardSequence'),
+          ),
+          'card_minus_sequence': max(
+            (current?['card_minus_sequence'] as int?) ?? 0,
+            counterVal('card_minus_sequence', 'cardMinusSequence'),
+          ),
+          'folder_sequence': max(
+            (current?['folder_sequence'] as int?) ?? 0,
+            counterVal('folder_sequence', 'folderSequence'),
+          ),
+          'folder_minus_sequence': max(
+            (current?['folder_minus_sequence'] as int?) ?? 0,
+            counterVal('folder_minus_sequence', 'folderMinusSequence'),
+          ),
+        });
       } catch (e) {
         debugPrint('[IMPORT] counter.json merge 실패: $e');
       }
@@ -547,7 +577,13 @@ class MemkImportService {
       if (value is! String || value.isEmpty) continue;
 
       final fileName = extractFileName(value);
-      if (fileName.isEmpty) continue;
+      if (fileName.isEmpty) {
+        // 경로 순회 등으로 거부된 이름 — 남의 샌드박스를 가리키는 레거시 절대경로를 그대로
+        // 저장하면 깨진 이미지가 export로 전파된다(X4-08). 아래 '아카이브에 없음' 분기와 같이
+        // 빈 값으로 지운다.
+        cardJson[key] = '';
+        continue;
+      }
 
       // archive 인덱스 또는 raw ZIP 인덱스에 존재하면 경로 변환
       if (zipFileIndex.containsKey(fileName) ||
@@ -561,124 +597,156 @@ class MemkImportService {
     }
   }
 
+  /// ArchiveFile 하나를 `<localPath>.tmp`에 스트리밍으로 풀고 rename한다.
+  /// writeContent(freeMemory: true)는 압축해제 결과를 ArchiveFile에 캐시하지 않는다.
+  static Future<void> _writeArchiveFileAtomically(
+      ArchiveFile zipFile, String localPath) async {
+    final tmpPath = '$localPath.tmp';
+    final out = OutputFileStream(tmpPath);
+    try {
+      zipFile.writeContent(out);
+    } finally {
+      out.closeSync();
+    }
+    await File(tmpPath).rename(localPath);
+  }
+
   /// archive 패키지가 누락한 ZIP 항목을 직접 추출
   /// Central Directory에서 compSize/compression/localOffset를 읽고
   /// Local File Header에서 데이터 위치만 계산하여 추출
   /// (LFH의 compSize는 data descriptor 사용 시 0일 수 있으므로 CD 값 사용)
+  ///
+  /// 파일을 통째로 읽지 않는다 — EOCD·Central Directory·대상 항목만 RandomAccessFile로
+  /// 읽어 피크 메모리가 "가장 큰 항목 하나"로 묶인다(X6-03).
   static Future<int> _extractMissingImages({
-    required Uint8List zipBytes,
+    required String zipPath,
     required Set<String> missingFileNames,
     required String appDocDir,
   }) async {
     if (missingFileNames.isEmpty) return 0;
 
-    if (zipBytes.length < 22) return 0; // 최소 ZIP 크기 검증
-    final bd = ByteData.sublistView(zipBytes);
-    // EOCD 찾기
-    int eocdPos = -1;
-    for (int i = zipBytes.length - 22; i >= 0; i--) {
-      if (i + 3 >= zipBytes.length) continue; // bounds 안전
-      if (zipBytes[i] == 0x50 && zipBytes[i + 1] == 0x4b &&
-          zipBytes[i + 2] == 0x05 && zipBytes[i + 3] == 0x06) {
-        eocdPos = i;
-        break;
+    final raf = await File(zipPath).open();
+    try {
+      final fileLen = await raf.length();
+      if (fileLen < 22) return 0; // 최소 ZIP 크기 검증
+
+      // EOCD는 파일 끝에서 최대 65535(주석)+22바이트 안에 있다.
+      final tailLen = fileLen < 65557 ? fileLen : 65557;
+      await raf.setPosition(fileLen - tailLen);
+      final tail = await raf.read(tailLen);
+      int eocdPos = -1;
+      for (int i = tail.length - 22; i >= 0; i--) {
+        if (tail[i] == 0x50 && tail[i + 1] == 0x4b &&
+            tail[i + 2] == 0x05 && tail[i + 3] == 0x06) {
+          eocdPos = i;
+          break;
+        }
       }
+      if (eocdPos < 0) return 0;
+      final tailBd = ByteData.sublistView(tail);
+      final cdSize = tailBd.getUint32(eocdPos + 12, Endian.little);
+      final cdOffset = tailBd.getUint32(eocdPos + 16, Endian.little);
+      if (cdSize <= 0 || cdOffset < 0 || cdOffset + cdSize > fileLen) return 0;
+
+      // Central Directory만 메모리에 올린다 (항목당 46바이트+이름 — 수만 항목이라도 수 MB)
+      await raf.setPosition(cdOffset);
+      final cd = await raf.read(cdSize);
+      final bd = ByteData.sublistView(cd);
+
+      // Central Directory에서 메타데이터 수집 (compSize, compression 포함)
+      final targets = <String, ({int localOffset, int compSize, int compression})>{};
+      int pos = 0;
+      while (pos + 46 <= cd.length) {
+        if (cd[pos] != 0x50 || cd[pos + 1] != 0x4b ||
+            cd[pos + 2] != 0x01 || cd[pos + 3] != 0x02) {
+          break;
+        }
+        final compression = bd.getUint16(pos + 10, Endian.little);
+        final compSize = bd.getUint32(pos + 20, Endian.little);
+        final fnameLen = bd.getUint16(pos + 28, Endian.little);
+        final extraLen = bd.getUint16(pos + 30, Endian.little);
+        final commentLen = bd.getUint16(pos + 32, Endian.little);
+        final localOffset = bd.getUint32(pos + 42, Endian.little);
+
+        if (fnameLen > 0 && pos + 46 + fnameLen <= cd.length) {
+          final fname = utf8.decode(
+              cd.sublist(pos + 46, pos + 46 + fnameLen),
+              allowMalformed: true);
+          final bareName = fname.split('/').last;
+          if (missingFileNames.contains(fname) ||
+              missingFileNames.contains(bareName)) {
+            final key = bareName.isNotEmpty ? bareName : fname;
+            targets[key] = (
+              localOffset: localOffset,
+              compSize: compSize,
+              compression: compression,
+            );
+          }
+        }
+        pos += 46 + fnameLen + extraLen + commentLen;
+      }
+
+      debugPrint('[IMPORT] _extractMissingImages: ${targets.length} targets found in CD for ${missingFileNames.length} missing files');
+
+      // Local File Header에서 데이터 위치만 계산 (fnameLen, extraLen)
+      // compSize와 compression은 CD에서 가져온 값 사용
+      int extracted = 0;
+      for (final entry in targets.entries) {
+        try {
+          final fileName = entry.key;
+          final t = entry.value;
+          final offset = t.localOffset;
+          if (offset < 0 || offset + 30 > fileLen) continue;
+
+          // deflate(8)/store(0) 외의 압축 방식은 풀 수 없다 — 예전엔 전부 '무압축'으로 보고
+          // 압축 바이트를 그대로 .jpg로 저장해 영구히 깨진 이미지를 만들었다(X6-02).
+          if (t.compression != 0 && t.compression != 8) {
+            debugPrint('[IMPORT] unsupported compression ${t.compression} for $fileName — skipped');
+            continue;
+          }
+
+          await raf.setPosition(offset);
+          final lfh = await raf.read(30);
+          if (lfh.length < 30) continue;
+          final lbd = ByteData.sublistView(lfh);
+          final localSig = lbd.getUint32(0, Endian.little);
+          if (localSig != 0x04034b50) {
+            debugPrint('[IMPORT] bad LFH signature at $offset for $fileName');
+            continue;
+          }
+
+          final localFnameLen = lbd.getUint16(26, Endian.little);
+          final localExtraLen = lbd.getUint16(28, Endian.little);
+          final dataStart = offset + 30 + localFnameLen + localExtraLen;
+          final compSize = t.compSize;
+          // 단일 파일 100MB 제한 (악의적 ZIP 대응)
+          if (compSize > 100 * 1024 * 1024 || dataStart + compSize > fileLen) {
+            debugPrint('[IMPORT] data out of bounds for $fileName: start=$dataStart size=$compSize total=$fileLen');
+            continue;
+          }
+
+          await raf.setPosition(dataStart);
+          final compressedData = await raf.read(compSize);
+          if (compressedData.length != compSize) continue;
+
+          final Uint8List fileData = t.compression == 8
+              ? Uint8List.fromList(ZLibCodec(raw: true).decode(compressedData))
+              : compressedData;
+
+          final localPath = localImagePath(appDocDir, fileName);
+          // 임시 파일에 먼저 쓰고 rename — 쓰기 도중 강제종료돼도 최종 경로에는
+          // 완전한 파일만 존재하게 되어 손상 파일이 남지 않음
+          final tmpFile = File('$localPath.tmp');
+          await tmpFile.writeAsBytes(fileData);
+          await tmpFile.rename(localPath);
+          extracted++;
+        } catch (e) {
+          debugPrint('[IMPORT] raw extraction failed: ${entry.key} — $e');
+        }
+      }
+      return extracted;
+    } finally {
+      await raf.close();
     }
-    if (eocdPos < 0) return 0;
-
-    int cdSize = bd.getUint32(eocdPos + 12, Endian.little);
-    int cdOffset = bd.getUint32(eocdPos + 16, Endian.little);
-
-    // Central Directory에서 메타데이터 수집 (compSize, compression 포함)
-    final targets = <String, ({int localOffset, int compSize, int compression})>{};
-    int pos = cdOffset;
-    final cdEnd = cdOffset + cdSize;
-    while (pos + 46 <= cdEnd && pos + 46 <= zipBytes.length) {
-      if (pos + 3 >= zipBytes.length) break;
-      if (zipBytes[pos] != 0x50 || zipBytes[pos + 1] != 0x4b ||
-          zipBytes[pos + 2] != 0x01 || zipBytes[pos + 3] != 0x02) {
-        break;
-      }
-      final compression = bd.getUint16(pos + 10, Endian.little);
-      final compSize = bd.getUint32(pos + 20, Endian.little);
-      final fnameLen = bd.getUint16(pos + 28, Endian.little);
-      final extraLen = bd.getUint16(pos + 30, Endian.little);
-      final commentLen = bd.getUint16(pos + 32, Endian.little);
-      final localOffset = bd.getUint32(pos + 42, Endian.little);
-
-      if (fnameLen > 0 && pos + 46 + fnameLen <= zipBytes.length) {
-        final fname = utf8.decode(
-            zipBytes.sublist(pos + 46, pos + 46 + fnameLen),
-            allowMalformed: true);
-        final bareName = fname.split('/').last;
-        if (missingFileNames.contains(fname) ||
-            missingFileNames.contains(bareName)) {
-          final key = bareName.isNotEmpty ? bareName : fname;
-          targets[key] = (
-            localOffset: localOffset,
-            compSize: compSize,
-            compression: compression,
-          );
-        }
-      }
-      pos += 46 + fnameLen + extraLen + commentLen;
-    }
-
-    debugPrint('[IMPORT] _extractMissingImages: ${targets.length} targets found in CD for ${missingFileNames.length} missing files');
-
-    // Local File Header에서 데이터 위치만 계산 (fnameLen, extraLen)
-    // compSize와 compression은 CD에서 가져온 값 사용
-    int extracted = 0;
-    for (final entry in targets.entries) {
-      try {
-        final fileName = entry.key;
-        final t = entry.value;
-        final offset = t.localOffset;
-        if (offset < 0 || offset + 30 > zipBytes.length) continue;
-
-        final localSig = bd.getUint32(offset, Endian.little);
-        if (localSig != 0x04034b50) {
-          debugPrint('[IMPORT] bad LFH signature at $offset for $fileName');
-          continue;
-        }
-
-        // LFH에서 가변 길이 필드만 읽기 (bounds 안전)
-        final localFnameLen = bd.getUint16(offset + 26, Endian.little);
-        final localExtraLen = bd.getUint16(offset + 28, Endian.little);
-        if (localFnameLen > 0xFFFF || localExtraLen > 0xFFFF) continue;
-
-        final dataStart = offset + 30 + localFnameLen + localExtraLen;
-        if (dataStart < offset) continue; // 정수 오버플로우 감지
-        final compSize = t.compSize;
-        // 단일 파일 100MB 제한 (악의적 ZIP 대응)
-        if (compSize > 100 * 1024 * 1024 || dataStart + compSize > zipBytes.length) {
-          debugPrint('[IMPORT] data out of bounds for $fileName: start=$dataStart size=$compSize total=${zipBytes.length}');
-          continue;
-        }
-
-        final compressedData = zipBytes.sublist(dataStart, dataStart + compSize);
-
-        Uint8List fileData;
-        if (t.compression == 8) {
-          // Deflate
-          fileData = Uint8List.fromList(
-              ZLibCodec(raw: true).decode(compressedData));
-        } else {
-          // Store (compression == 0)
-          fileData = Uint8List.fromList(compressedData);
-        }
-
-        final localPath = localImagePath(appDocDir, fileName);
-        // 임시 파일에 먼저 쓰고 rename — 쓰기 도중 강제종료돼도 최종 경로에는
-        // 완전한 파일만 존재하게 되어 손상 파일이 남지 않음
-        final tmpFile = File('$localPath.tmp');
-        await tmpFile.writeAsBytes(fileData);
-        await tmpFile.rename(localPath);
-        extracted++;
-      } catch (e) {
-        debugPrint('[IMPORT] raw extraction failed: ${entry.key} — $e');
-      }
-    }
-    return extracted;
   }
 }

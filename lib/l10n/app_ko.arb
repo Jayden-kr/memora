@@ -63,6 +63,7 @@
   },
 
   "homeOnlyMemkSnack": ".mra 또는 .memk 파일만 가져올 수 있습니다.",
+  "homeSharedFileUnreadable": "이 파일을 읽을 수 없습니다. 파일 앱에서 '공유'로 보내거나 가져오기 버튼으로 선택해 주세요.",
   "homeOnlyMemkPickSnack": ".mra 또는 .memk 파일만 선택할 수 있습니다.",
   "homeNoFolderFirst": "폴더를 먼저 만들어주세요.",
   "homePickerCardFolderTitle": "카드를 추가할 폴더",
@@ -239,6 +240,7 @@
   "importRenameTitle": "새 이름으로 가져오기",
   "importRenameSubtitle": "이름 끝에 _1 등을 붙여 새 폴더 생성",
   "importGenericFail": "Import 실패: {error}",
+  "importErrorNotArchive": "Memora 아카이브 파일이 아닙니다 (folders.json / cards.json이 없거나 읽을 수 없음).",
   "@importGenericFail": {
     "placeholders": {
       "error": { "type": "String" }
@@ -371,6 +373,7 @@
   },
   "fileRenameOverwriteSubtitle": "기존 파일을 교체",
   "fileRenameFail": "파일 이름 변경에 실패했습니다.",
+  "fileRenameInvalidName": "사용할 수 없는 이름입니다. 슬래시·따옴표·< > : | ? * 등은 쓸 수 없습니다.",
   "fileSavedToDownloads": "다운로드 폴더에 저장됨: {name}",
   "@fileSavedToDownloads": {
     "placeholders": {

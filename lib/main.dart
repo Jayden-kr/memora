@@ -32,6 +32,9 @@ void main() async {
   //   UI와 동시에 돌므로 GC 쪽에 최근 파일 보호·마커 배치별 재검사·스캔 시점 id 상한
   //   안전장치가 있다(database_helper 참고).
   _startupMediaCleanupOnce();
+  // 폴더 card_count 캐시를 실제 COUNT와 맞춘다(fire-and-forget) — 홈 타일(캐시)과 카드 목록
+  // 앱바(실시간)가 다른 숫자를 보이던 어긋남 정리(X3-06).
+  _resyncFolderCardCountsOnce();
 
   // 저장된 테마 모드 로드
   try {
@@ -126,6 +129,15 @@ void main() async {
 
 /// 앱 시작 시 미디어 정리 2단계를 순서대로 수행 (fire-and-forget).
 /// ①깨진 경로 정리(참조는 있는데 파일 없음) → ②고아 파일 정리(파일은 있는데 참조 없음).
+Future<void> _resyncFolderCardCountsOnce() async {
+  try {
+    final fixed = await DatabaseHelper.instance.resyncFolderCardCounts();
+    if (fixed > 0) debugPrint('[STARTUP] folder card_count resynced: $fixed');
+  } catch (e) {
+    debugPrint('[STARTUP] folder card_count resync failed: $e');
+  }
+}
+
 Future<void> _startupMediaCleanupOnce() async {
   await _cleanupBrokenImagePathsOnce();
   await _cleanupOrphanMediaFilesOnce();

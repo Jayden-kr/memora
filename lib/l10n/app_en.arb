@@ -43,6 +43,7 @@
   "folderCountSuffix": "{count}",
 
   "homeOnlyMemkSnack": "Only .mra or .memk files can be imported.",
+  "homeSharedFileUnreadable": "Can't read this file. Share it from the file app instead, or pick it with the Import button.",
   "homeOnlyMemkPickSnack": "Only .mra or .memk files can be selected.",
   "homeNoFolderFirst": "Create a folder first.",
   "homePickerCardFolderTitle": "Folder to add card",
@@ -142,6 +143,7 @@
   "importRenameTitle": "Import with new name",
   "importRenameSubtitle": "Add _1 etc. to create a new folder",
   "importGenericFail": "Import failed: {error}",
+  "importErrorNotArchive": "This file is not a Memora archive (folders.json / cards.json missing or unreadable).",
   "importAnalyzing": "Analyzing file...",
   "importFolderCount": "{count} folder(s)",
   "importTargetLocation": "Import to",
@@ -224,6 +226,7 @@
   "fileRenameOverwriteBody": "\"{name}\" already exists. Overwrite?",
   "fileRenameOverwriteSubtitle": "Replace existing file",
   "fileRenameFail": "Failed to rename file.",
+  "fileRenameInvalidName": "Invalid name. Slashes, quotes and characters like < > : | ? * are not allowed.",
   "fileSavedToDownloads": "Saved to Downloads: {name}",
   "fileSaveFail": "Save failed: {error}",
   "fileBatchSaved": "Saved {count} file(s) to Downloads.",

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -122,6 +123,9 @@ class _FileListScreenState extends State<FileListScreen> {
           SnackBar(content: Text(t.fileDeleteFail(e.toString()))),
         );
       }
+      // 파일이 남았는데 행만 지우면 UI로는 영영 못 지우는 고아 파일이 된다(D7-07) — 행을
+      // 남겨 두고 사용자가 다시 시도하게 한다.
+      return;
     }
 
     await DatabaseHelper.instance.deleteExportedFile(file['id'] as int);
@@ -182,9 +186,30 @@ class _FileListScreenState extends State<FileListScreen> {
       ),
     );
     if (newName == null || newName.isEmpty || newName == nameWithoutExt) return;
+    if (!mounted) return;
+
+    // 경로 구분자·제어문자·예약 이름을 거른다 — 예전엔 '../백업'이 exports/ 밖으로 나가고
+    // 같은 확장자의 다른 파일을 말없이 덮을 수 있었다(D7-05).
+    if (!_isValidFileStem(newName)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.fileRenameInvalidName)),
+      );
+      return;
+    }
+
+    // 원본이 없으면 여기서 끝 — 예전엔 '덮어쓰기'를 물어 대상 파일과 행을 지운 뒤 rename만
+    // 조용히 건너뛰어 멀쩡한 백업 하나가 사라졌다(X4-01).
+    final f = File(filePath);
+    if (!await f.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.fileNotFound)),
+      );
+      return;
+    }
 
     final newFileName = '$newName$ext';
-    final dir = File(filePath).parent.path;
+    final dir = f.parent.path;
     final newFilePath = '$dir/$newFileName';
 
     if (newFilePath != filePath && await File(newFilePath).exists()) {
@@ -210,11 +235,8 @@ class _FileListScreenState extends State<FileListScreen> {
       } catch (_) {}
     }
 
-    final f = File(filePath);
     try {
-      if (await f.exists()) {
-        await f.rename(newFilePath);
-      }
+      await f.rename(newFilePath);
     } catch (e) {
       debugPrint('[FILE_LIST] rename failed: $e');
       if (!mounted) return;
@@ -232,6 +254,15 @@ class _FileListScreenState extends State<FileListScreen> {
 
     if (!mounted) return;
     await _loadFiles();
+  }
+
+  /// 이름 변경에 허용되는 stem — 구분자·제어문자·Windows 예약문자 금지, `.`/`..` 금지,
+  /// 파일시스템 이름 한도(255바이트) 안.
+  static bool _isValidFileStem(String stem) {
+    if (stem.isEmpty || stem == '.' || stem == '..') return false;
+    if (RegExp(r'[<>:"/\\|?*\x00-\x1F]').hasMatch(stem)) return false;
+    if (utf8.encode(stem).length > 200) return false;
+    return true;
   }
 
   Future<void> _saveToDevice(Map<String, dynamic> file) async {
@@ -392,23 +423,39 @@ class _FileListScreenState extends State<FileListScreen> {
 
     _isDeleting = true;
     try {
-      // ⚡ DB는 단일 transaction으로 batch delete (수십~수백 ms)
-      final ids = selected.map((f) => f['id'] as int).toList();
-      await DatabaseHelper.instance.deleteExportedFilesBatch(ids);
-      if (!mounted) return;
-
-      // commit 직후 UI 즉시 정리
-      setState(() {
-        _files.removeWhere((f) => ids.contains(f['id'] as int));
-        _selectedIds.clear();
-      });
-
-      // 🔄 .mra 파일 시스템 삭제는 fire-and-forget. DB는 이미 commit.
+      // 파일을 먼저 지우고, 실제로 사라진 것들의 행만 지운다. 예전엔 행을 먼저 지운 뒤
+      // `!mounted`면 파일 삭제 루프를 통째로 건너뛰어(뒤로가기 한 번이면 충분했다) exports/에
+      // UI로 못 지우는 파일이 남았다(X4-05, D7-07의 형제 경로). unlink는 크기와 무관하게
+      // 빠르므로 순차 await로 충분하다.
+      final gone = <int>[];
+      var failed = 0;
       for (final file in selected) {
         final filePath = file['file_path'] as String?;
-        if (filePath != null) {
-          File(filePath).delete().ignore();
+        try {
+          if (filePath != null) {
+            final f = File(filePath);
+            if (await f.exists()) await f.delete();
+          }
+          gone.add(file['id'] as int);
+        } catch (e) {
+          failed++;
+          debugPrint('[FILE_LIST] file delete failed: $filePath — $e');
         }
+      }
+      if (gone.isNotEmpty) {
+        // ⚡ DB는 단일 transaction으로 batch delete (수십~수백 ms)
+        await DatabaseHelper.instance.deleteExportedFilesBatch(gone);
+      }
+      if (!mounted) return;
+
+      setState(() {
+        _files.removeWhere((f) => gone.contains(f['id'] as int));
+        _selectedIds.clear();
+      });
+      if (failed > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.fileDeleteFail('$failed'))),
+        );
       }
     } catch (e) {
       debugPrint('[FILE_LIST] batch file delete failed: $e');

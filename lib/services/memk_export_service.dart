@@ -73,6 +73,9 @@ class MemkExportService {
     // 카드 조회 + JSON + 이미지 파일명 수집
     final cardsJsonList = <Map<String, dynamic>>[];
     final imageFileNames = <String>{}; // ZIP에 포함할 이미지 파일명
+    final imageDirPath = '$appDocDir/${AppConstants.imageDir}';
+    // 파일 존재 여부 캐시 — 같은 파일을 여러 카드가 참조할 수 있어 stat을 이름당 한 번만.
+    final imageExists = <String, bool>{};
     int processed = 0;
 
     if (folderIds != null) {
@@ -98,7 +101,7 @@ class MemkExportService {
             if (card == null) continue; // 스냅샷 이후 삭제된 카드
             final json = card.toJson();
             json['folderName'] = folderName;
-            _convertToMemkPaths(json, imageFileNames);
+            _convertToMemkPaths(json, imageFileNames, imageDirPath, imageExists);
             cardsJsonList.add(json);
             processed++;
           }
@@ -140,7 +143,7 @@ class MemkExportService {
           if (card == null) continue; // 스냅샷 이후 삭제된 카드
           final json = card.toJson();
           json['folderName'] = folderNameMap[card.folderId] ?? '';
-          _convertToMemkPaths(json, imageFileNames);
+          _convertToMemkPaths(json, imageFileNames, imageDirPath, imageExists);
           cardsJsonList.add(json);
           processed++;
         }
@@ -246,10 +249,14 @@ class MemkExportService {
         message: _isEn ? 'Export complete' : 'Export 완료'));
   }
 
-  /// JSON 맵의 로컬 이미지 경로를 .memk 호환 경로로 변환
+  /// JSON 맵의 로컬 이미지 경로를 .memk 호환 경로로 변환.
+  /// 파일이 디스크에 없는 참조는 빈 값으로 내보낸다 — 참조만 싣고 파일은 빠뜨리면 import 쪽이
+  /// ''로 바꿔 그 슬롯이 유령 썸네일로 굳고, 어느 쪽에서도 경고가 없었다(X4-02).
   void _convertToMemkPaths(
     Map<String, dynamic> cardJson,
     Set<String> imageFileNames,
+    String imageDirPath,
+    Map<String, bool> imageExists,
   ) {
     for (final key in cardJson.keys.toList()) {
       if (!key.contains('Path')) continue;
@@ -260,6 +267,12 @@ class MemkExportService {
       final fileName = value.split('/').last.split('\\').last;
       if (fileName.isEmpty) continue;
 
+      final exists = imageExists.putIfAbsent(
+          fileName, () => File('$imageDirPath/$fileName').existsSync());
+      if (!exists) {
+        cardJson[key] = '';
+        continue;
+      }
       imageFileNames.add(fileName);
       cardJson[key] = '${AppConstants.legacyImagePrefix}$fileName';
     }
