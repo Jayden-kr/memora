@@ -1,17 +1,35 @@
 /// 앱 전체가 쓰는 "이름순" 비교 규칙.
 ///
-/// 기준은 잠금화면 네이티브가 쓰는 `java.text.Collator`(SECONDARY 강도 = 대소문자
-/// 무시)다. Dart에는 로케일 콜레이션이 없으므로 그 결과를 실질적으로 재현한다:
-/// 먼저 소문자로 접어 비교하고, 그래도 같으면 원문으로 갈라 순서를 고정한다.
+/// 짝이 되는 SQL은 `question COLLATE NOCASE ASC, question ASC`다. 두 규칙은 **정확히
+/// 같은 순서**를 내야 한다 — 그래서 여기서도 SQLite의 `NOCASE`와 똑같이 ASCII A~Z만
+/// 접는다. `String.toLowerCase()`는 유니코드 전체를 접어서, 예컨대 켈빈 기호(U+212A)를
+/// 'k'로 바꾸고 'É'를 'é'로 바꾼다. SQLite는 둘 다 그대로 두므로, 유니코드 접기를 쓰면
+/// 같은 이름이 화면마다 다른 자리에 놓인다(리뷰 A-01에서 실측).
 ///
-/// 한글 음절(U+AC00~U+D7A3)은 코드포인트 순서가 곧 가나다 순서라 접기와 무관하게
-/// Collator와 같은 결과가 나온다. 영문은 접기 덕에 대소문자를 섞어도 사전 순으로
-/// 붙는다 — 예전엔 카드 목록만 SQL `question ASC`(바이트 순)를 써서 `Apple`,
-/// `Zebra`, `apple` 처럼 대문자가 전부 앞에 몰렸고, 같은 덱을 잠금화면에서 보면
-/// 순서가 달랐다.
+/// 접었을 때 같으면 원문으로 갈라 순서를 고정한다(전순서 보장).
 ///
-/// SQL 쪽 짝은 `question COLLATE NOCASE ASC, question ASC`다(같은 규칙).
+/// 잠금화면 네이티브는 `java.text.Collator`(SECONDARY)를 쓴다. 한글과 순수 ASCII
+/// 영문에서는 세 규칙이 모두 같은 결과를 낸다 — 한글 음절은 코드포인트 순서가 곧
+/// 가나다 순서이고, 영문은 대소문자만 다르기 때문이다. 악센트가 붙은 라틴 문자처럼
+/// 진짜 언어별 콜레이션이 필요한 입력에서는 Collator만 다른 답을 낸다. Dart에는
+/// 로케일 콜레이션이 없어 그 차이는 그대로 둔다.
 int compareNamesForSort(String a, String b) {
-  final folded = a.toLowerCase().compareTo(b.toLowerCase());
+  final folded = _foldAscii(a).compareTo(_foldAscii(b));
   return folded != 0 ? folded : a.compareTo(b);
+}
+
+/// ASCII 대문자만 소문자로 내린다. 나머지 코드포인트는 손대지 않는다
+/// (= SQLite `NOCASE`의 정의).
+String _foldAscii(String s) {
+  StringBuffer? buf;
+  for (var i = 0; i < s.length; i++) {
+    final c = s.codeUnitAt(i);
+    if (c >= 0x41 && c <= 0x5A) {
+      buf ??= StringBuffer(s.substring(0, i));
+      buf.writeCharCode(c + 0x20);
+    } else {
+      buf?.writeCharCode(c);
+    }
+  }
+  return buf?.toString() ?? s;
 }

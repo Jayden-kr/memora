@@ -671,7 +671,14 @@ class DatabaseHelper {
 
       // 배치 이동과 같은 규칙: 대상 폴더 맨 뒤로 새 번호를 준다(감사 D3-03).
       // 호출자가 sequence를 명시했으면 그 값을 존중한다.
-      final nextSeq = (extra != null && extra.containsKey('sequence'))
+      //
+      // 같은 폴더로의 "이동"은 번호를 건드리지 않는다: MAX(sequence)가 아직 옮기지 않은
+      // 자기 자신을 포함하므로, 그대로 두면 아무것도 안 바뀌어야 할 호출이 카드를 맨 뒤로
+      // 밀어버린다. 지금은 두 호출부 모두 현재 폴더를 대상에서 빼지만, 그 가드가 빠지면
+      // 바로 새는 자리다(리뷰 B-02).
+      final skipRenumber = (extra != null && extra.containsKey('sequence')) ||
+          oldFolderId == newFolderId;
+      final nextSeq = skipRenumber
           ? null
           : (Sqflite.firstIntValue(await txn.rawQuery(
                     'SELECT MAX(sequence) FROM ${AppConstants.tableCards} WHERE folder_id = ?',

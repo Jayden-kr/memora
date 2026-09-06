@@ -39,8 +39,24 @@ void main() {
       expect(sorted(['b', '', 'a']), ['', 'a', 'b']);
     });
 
+    test('SQL COLLATE NOCASE와 같이 ASCII만 접는다', () {
+      // SQLite NOCASE는 ASCII A~Z만 접는다. Dart의 toLowerCase()는 유니코드 전체를
+      // 접어 켈빈 기호(U+212A)를 'k'로, 'É'를 'é'로 바꾼다 — 그 차이 때문에 같은 이름이
+      // 카드 목록(SQL)과 홈 폴더 목록(Dart)에서 다른 자리에 놓였다(리뷰 A-01).
+      // 아래 기대값은 sqlite에서 `ORDER BY question COLLATE NOCASE, question`으로
+      // 실측 대조했다.
+      const kelvin = 'K'; // 켈빈 기호. 눈으로는 'K'와 똑같다.
+      expect(compareNamesForSort(kelvin, 'zebra'), greaterThan(0));
+      expect(compareNamesForSort('É', 'e'), greaterThan(0));
+      expect(compareNamesForSort('É', 'é'), lessThan(0));
+      expect(compareNamesForSort('B', 'a'), greaterThan(0));
+    });
+
     test('전순서다 — 어떤 두 원소든 부호가 대칭이고 자기 자신과는 0', () {
-      const samples = ['Apple', 'apple', 'banana', '가', '한글', '', 'Zebra', '1'];
+      const samples = [
+        'Apple', 'apple', 'banana', '가', '한글', '', 'Zebra', '1',
+        'É', 'é', 'K',
+      ];
       for (final a in samples) {
         expect(compareNamesForSort(a, a), 0, reason: 'self compare: $a');
         for (final b in samples) {
