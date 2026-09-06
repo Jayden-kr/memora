@@ -544,12 +544,23 @@ class ImportExportController {
         }
 
         if (overwriting) {
-          // 여기까지 왔다는 건 새 파일이 완성됐다는 뜻 — 이제야 옛 파일을 치운다.
-          try { await File(outputPath).delete(); } catch (_) {}
+          // 여기까지 왔다는 건 새 파일이 완성됐다는 뜻이다. 옛 파일을 **먼저 지우지
+          // 않는다**: POSIX rename(2)은 대상이 있어도 원자적으로 덮어쓰므로 삭제는
+          // 불필요하고, 삭제와 rename 사이에 rename이 실패하면 멀쩡하던 백업만
+          // 사라진 채 완성된 파일은 .tmp로 남아 목록에도 안 뜬다(리뷰 P1-01 —
+          // 이 커밋이 없애려던 바로 그 창을 좁혀만 놓고 남겨뒀었다).
+          try {
+            await File(writePath).rename(outputPath);
+          } catch (e) {
+            // 교체 실패 — 옛 파일은 그대로 살아 있다. 완성됐지만 자리를 못 잡은
+            // .tmp만 치우고 이 폴더를 실패로 넘긴다.
+            try { await File(writePath).delete(); } catch (_) {}
+            rethrow;
+          }
+          // 교체가 끝난 뒤에야 옛 파일의 DB 기록을 지운다.
           try {
             await DatabaseHelper.instance.deleteExportedFileByPath(outputPath);
           } catch (_) {}
-          await File(writePath).rename(outputPath);
         }
 
         // exported_files DB 기록 — 크기 조회 실패로 배치를 멈추지 않는다(파일은 이미 만들어졌다).
@@ -732,11 +743,17 @@ class ImportExportController {
         }
 
         if (overwriting) {
-          try { await File(outputPath).delete(); } catch (_) {}
+          // .mra 경로와 같은 규칙(리뷰 P1-01): 지우고 나서 옮기지 않는다.
+          // rename이 대상을 원자적으로 덮어쓰므로 옛 파일은 성공하는 순간에만 사라진다.
+          try {
+            await File(writePath).rename(outputPath);
+          } catch (e) {
+            try { await File(writePath).delete(); } catch (_) {}
+            rethrow;
+          }
           try {
             await DatabaseHelper.instance.deleteExportedFileByPath(outputPath);
           } catch (_) {}
-          await File(writePath).rename(outputPath);
         }
 
         // exported_files DB 기록

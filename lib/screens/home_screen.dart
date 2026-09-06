@@ -41,6 +41,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   StreamSubscription<List<SharedMediaFile>>? _intentSub;
   String _sortMode = 'sequence'; // sequence, name_asc, oldest, newest
   int _totalCardCount = 0;
+  /// 서랍 요약용 폴더 총 개수(묶음 포함, 홈에서 감춘 자식도 포함).
+  int _totalFolderCount = 0;
   bool _isPickingFile = false;
 
   // 다중 선택
@@ -148,6 +150,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final allFolders = await DatabaseHelper.instance.getAllFolders();
       // 총 카드 수는 숨김과 무관하게 전부 센다 — 묶음 안의 카드도 내 카드다.
       final totalCards = allFolders.fold<int>(0, (sum, f) => sum + f.cardCount);
+      // 서랍 요약의 폴더 수도 카드 수와 같이 라이브러리 전체 기준이다. 화면에 보이는
+      // 개수를 쓰면 묶음을 만든 순간 "10장 · 2폴더"처럼 카드는 전체, 폴더는 화면
+      // 기준이 되어 두 숫자가 서로 다른 것을 센다(기기 검증에서 확인).
+      final totalFolders = allFolders.length;
       // 묶음에 들어간 폴더는 최상위 목록에서 감춘다. 묶음 타일을 눌러 그 안에서 본다
       // — 예전엔 묶음과 그 자식이 홈에 나란히 떠서 같은 폴더가 두 번 보였다.
       //
@@ -169,6 +175,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         if (savedSort != null) _sortMode = savedSort;
         _folders = _sortFolders(folders);
         _totalCardCount = totalCards;
+        _totalFolderCount = totalFolders;
         _loading = false;
       });
     } catch (e) {
@@ -590,10 +597,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return;
     }
 
-    // Optimistic UI update
+    // Optimistic UI update.
+    // 합계는 화면 목록에서 다시 세지 않고 "지운 만큼 뺀다" — 목록은 묶음 자식을
+    // 감추므로 다시 세면 묶음 안의 카드가 통째로 빠진 숫자가 나온다.
+    // 묶음을 지우면 자식은 삭제되지 않고 최상위로 올라오므로, 묶음 자체가 들고 있는
+    // 카드 수(0)만 빠지는 것이 맞다. 어차피 아래 _loadFolders()가 곧 정정한다.
+    final removedCards =
+        selected.fold<int>(0, (sum, f) => sum + f.cardCount);
     setState(() {
       _folders.removeWhere((f) => _selectedFolderIds.contains(f.id));
-      _totalCardCount = _folders.fold<int>(0, (sum, f) => sum + f.cardCount);
+      _totalCardCount =
+          (_totalCardCount - removedCards).clamp(0, _totalCardCount);
+      _totalFolderCount =
+          (_totalFolderCount - selected.length).clamp(0, _totalFolderCount);
     });
 
     try {
@@ -921,7 +937,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     )),
                 const SizedBox(height: 4),
                 Text(
-                  t.homeDrawerSummary(_totalCardCount, _folders.length),
+                  t.homeDrawerSummary(_totalCardCount, _totalFolderCount),
                   style: TextStyle(
                     fontSize: 13,
                     color: Theme.of(context).colorScheme.onPrimaryContainer,

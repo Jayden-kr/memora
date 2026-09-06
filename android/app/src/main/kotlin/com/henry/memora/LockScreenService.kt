@@ -119,21 +119,26 @@ class LockScreenService : Service() {
 
     // 설정 — loadSettings()는 메인 스레드에서 쓰고, 덱 조회·배경 디코딩은 bgHandler에서
     // 읽는다. @Volatile이 없으면 백그라운드 글랜스가 옛 값을 볼 수 있다(감사 X2-02).
+    //
+    // 이 블록의 필드는 예외 없이 전부 @Volatile이다. 일부에만 붙이면, 지금은 우연히
+    // 메인 스레드로 되돌아와 읽는 필드가 나중에 bgHandler 안에서 직접 읽히는 순간
+    // 컴파일러도 리뷰어도 신호를 주지 못한다(리뷰 P1-02). 새 설정 필드를 여기 넣을
+    // 땐 같이 붙일 것.
     @Volatile private var folderIds: List<Int> = emptyList()
     // 기본(수동 선택) 폴더 = 라디오 선택값 = 스케줄 미매치/OFF 시 폴백
     @Volatile private var baseFolderIds: List<Int> = emptyList()
-    private var scheduleEnabled: Boolean = false
-    private var schedule: List<FolderSchedule.Slot> = emptyList()
+    @Volatile private var scheduleEnabled: Boolean = false
+    @Volatile private var schedule: List<FolderSchedule.Slot> = emptyList()
     @Volatile private var finishedFilter: Int = -1
     @Volatile private var sortOrder: String = "sequence"
     @Volatile private var reversed: Boolean = false
     @Volatile private var bgColor: Int = 0xFF1A1A2E.toInt()
     // "auto"(기본, BgContrast로 자동 판정) | "light" | "dark" — 강제 오버라이드.
-    private var bgTextMode: String = "auto"
+    @Volatile private var bgTextMode: String = "auto"
     // Stage 3: 배경 이미지. 빈 문자열 = 이미지 없음(오늘과 동일한 단색 배경).
-    private var bgImagePath: String = ""
-    private var bgImageAlpha: Int = 255
-    private var bgScrimAlpha: Int = 102
+    @Volatile private var bgImagePath: String = ""
+    @Volatile private var bgImageAlpha: Int = 255
+    @Volatile private var bgScrimAlpha: Int = 102
     // 현재 cards가 어느 폴더 조합으로 로드됐는지. null="한 번도 로드 안 됨" — 기본 폴더가
     // 빈 리스트인 사용자와 구분되게 일부러 non-null 기본값을 쓰지 않는다.
     @Volatile private var loadedFolderIds: List<Int>? = null
