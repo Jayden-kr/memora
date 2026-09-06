@@ -499,6 +499,9 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
     final totalMerged = batch.fold<int>(0, (s, e) => s + e.mergedFolders);
 
     final custom = _customEntries;
+    // 중지로 건너뛴 파일 수. 0이면 평소대로 "완료"로 보여준다.
+    final skipped =
+        batch.where((e) => e.error == _cancelledErrorMarker).length;
 
     return Center(
       child: Padding(
@@ -506,11 +509,28 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.check_circle,
-                size: 64, color: Theme.of(context).colorScheme.primary),
+            Icon(skipped > 0 ? Icons.stop_circle_outlined : Icons.check_circle,
+                size: 64,
+                color: skipped > 0
+                    ? Theme.of(context).colorScheme.onSurfaceVariant
+                    : Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            Text(t.multiImportDoneTitle,
-                style: Theme.of(context).textTheme.headlineSmall),
+            Text(
+                skipped > 0
+                    ? t.multiImportCancelledTitle
+                    : t.multiImportDoneTitle,
+                style: Theme.of(context).textTheme.headlineSmall,
+                textAlign: TextAlign.center),
+            if (skipped > 0) ...[
+              const SizedBox(height: 8),
+              Text(
+                t.multiImportCancelledNote(skipped),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 24),
             _row(t.importDoneNewCards, t.cardCountSuffix(totalNewCards)),
             _row(t.importDoneNewFolders,

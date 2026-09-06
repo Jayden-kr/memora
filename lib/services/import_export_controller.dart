@@ -211,10 +211,17 @@ class ImportExportController {
     final failedNote = _batchFailed == 0
         ? ''
         : (isEn ? ', $_batchFailed failed' : ', 실패 $_batchFailed개');
+    // 사용자가 중지해서 남은 파일을 건너뛴 배치를 "완료"로 포장하지 않는다 —
+    // 단일 파일 가져오기·내보내기와 같은 규칙이다(리뷰 R2-01).
     final body = isEn
         ? 'Imported $_batchNewCards card(s) from $_batchFiles file(s) (${secs}s)$failedNote'
         : '$_batchFiles개 파일에서 $_batchNewCards장 가져옴 ($secs초)$failedNote';
-    await _complete(isEn ? 'Import complete' : 'Import 완료', body);
+    await _complete(
+      _batchCancelled
+          ? (isEn ? 'Import stopped' : 'Import 중지됨')
+          : (isEn ? 'Import complete' : 'Import 완료'),
+      body,
+    );
   }
 
   // ─── Foreground Service 제어 ───

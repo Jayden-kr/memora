@@ -174,6 +174,9 @@ class MemkExportService {
               : '카드 정보 준비 중... $processed / $totalCards',
         ));
         await Future.delayed(Duration.zero);
+        // 폴더 지정 분기와 같은 자리 — 형제 경로에 빠뜨리면 전체 내보내기에서만
+        // 중지가 안 먹는다(지금은 이 분기를 쓰는 호출부가 없지만 규칙은 같이 둔다).
+        checkCancel();
       }
     }
     final cardsJsonStr = jsonEncode(cardsJsonList);
