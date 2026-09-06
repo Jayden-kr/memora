@@ -12,9 +12,8 @@ import '../services/lock_screen_contrast.dart';
 /// lib/services/lock_screen_contrast.dart의 [isDarkPalette]를 그대로 쓴다(네이티브
 /// BgContrast.kt와 동일 공식, 계약 테스트로 감시됨).
 ///
-/// 색만 실제 오버레이와 맞추면 되므로, QUESTION/ANSWER 라벨은 네이티브 쪽
-/// (createOverlayLayout)과 마찬가지로 하드코딩된 영문 대문자를 그대로 쓴다 —
-/// 실제 잠금화면도 로케일과 무관하게 항상 "QUESTION"/"ANSWER"로 뜬다.
+/// 질문/정답 라벨은 네이티브와 같은 문구를 쓴다 — 양쪽 다 앱 언어를 따른다
+/// (네이티브는 strings.xml의 lock_label_question/answer, 여기는 같은 뜻의 l10n 키).
 ///
 /// Stage 3: [bgImagePath]가 비어있지 않으면 이미지를 배경에 얹고 그 위에 반투명
 /// 검정 스크림을 덮어 네이티브(LayerDrawable: 색 + 이미지 + 스크림)를 근사한다.
@@ -118,7 +117,7 @@ class LockScreenPreview extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 Text(
-                  'QUESTION',
+                  t.lockLabelQuestion,
                   style: TextStyle(
                     color: _coral,
                     fontSize: 9,
@@ -137,7 +136,7 @@ class LockScreenPreview extends StatelessWidget {
                 Container(height: 1, color: overlayFaint),
                 const SizedBox(height: 12),
                 Text(
-                  'ANSWER',
+                  t.lockLabelAnswer,
                   style: TextStyle(
                     color: _coral,
                     fontSize: 9,

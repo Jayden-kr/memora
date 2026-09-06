@@ -891,7 +891,10 @@ class DatabaseHelper {
       case 'oldest':
         orderBy = 'id ASC';
       case 'name_asc':
-        orderBy = 'question ASC';
+        // 대소문자를 접어 비교한다 — 잠금화면의 Collator(SECONDARY)와 같은 규칙.
+        // 두 번째 키는 접었을 때 같은 문자열의 순서를 고정하기 위한 것이다.
+        // (lib/utils/name_sort.dart 참고)
+        orderBy = 'question COLLATE NOCASE ASC, question ASC';
       case 'random':
         orderBy = 'RANDOM()';
       default:
@@ -1232,7 +1235,10 @@ class DatabaseHelper {
       case 'oldest':
         orderBy = 'id ASC';
       case 'name_asc':
-        orderBy = 'question ASC';
+        // 대소문자를 접어 비교한다 — 잠금화면의 Collator(SECONDARY)와 같은 규칙.
+        // 두 번째 키는 접었을 때 같은 문자열의 순서를 고정하기 위한 것이다.
+        // (lib/utils/name_sort.dart 참고)
+        orderBy = 'question COLLATE NOCASE ASC, question ASC';
       case 'random':
         orderBy = 'RANDOM()';
       default:

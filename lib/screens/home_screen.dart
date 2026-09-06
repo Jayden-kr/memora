@@ -10,6 +10,7 @@ import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../utils/folder_label.dart';
+import '../utils/name_sort.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
 import 'bundle_folder_screen.dart';
@@ -181,7 +182,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final sorted = List<Folder>.from(folders);
     switch (_sortMode) {
       case 'name_asc':
-        sorted.sort((a, b) => a.name.compareTo(b.name));
+        sorted.sort((a, b) => compareNamesForSort(a.name, b.name));
       case 'oldest':
         sorted.sort((a, b) => (a.id ?? 0).compareTo(b.id ?? 0));
       case 'newest':

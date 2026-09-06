@@ -430,6 +430,8 @@
   "lockBgImageOpacity": "이미지 불투명도",
   "lockBgScrimOpacity": "어둡게 덮기",
   "lockBgImagePickFail": "이미지를 불러오지 못했습니다",
+  "lockLabelQuestion": "질문",
+  "lockLabelAnswer": "정답",
   "lockPreviewSampleQuestion": "프랑스의 수도는?",
   "lockPreviewSampleAnswer": "파리",
 

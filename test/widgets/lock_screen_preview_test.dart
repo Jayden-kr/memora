@@ -20,8 +20,8 @@ import 'package:memora/l10n/app_localizations.dart';
 import 'package:memora/widgets/lock_screen_preview.dart';
 
 void main() {
-  Widget wrap(Widget child) => MaterialApp(
-    locale: const Locale('en'),
+  Widget wrap(Widget child, {Locale locale = const Locale('en')}) => MaterialApp(
+    locale: locale,
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
     home: Scaffold(body: child),
@@ -83,6 +83,21 @@ void main() {
       expect(find.text('ANSWER'), findsOneWidget);
       expect(find.text('What is the capital of France?'), findsOneWidget);
       expect(find.text('Paris'), findsOneWidget);
+    });
+
+    testWidgets('질문/정답 라벨이 앱 언어를 따른다(한국어)', (tester) async {
+      // 네이티브 오버레이도 strings.xml의 lock_label_question/answer를 쓴다 —
+      // 예전엔 양쪽 다 로케일과 무관하게 영문 대문자로 굳어 있었다.
+      await tester.pumpWidget(
+        wrap(
+          const LockScreenPreview(bgColor: darkDefaultBg, bgTextMode: 'auto'),
+          locale: const Locale('ko'),
+        ),
+      );
+      expect(find.text('질문'), findsOneWidget);
+      expect(find.text('정답'), findsOneWidget);
+      expect(find.text('QUESTION'), findsNothing);
+      expect(find.text('ANSWER'), findsNothing);
     });
   });
 

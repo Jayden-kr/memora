@@ -732,7 +732,8 @@ class LockScreenService : Service() {
                     ))
                 }
             }
-            // kotlin 측 정렬 — name_asc는 locale Collator, random은 잠금마다 새로 셔플(고정 seed 폐기)
+            // kotlin 측 정렬 — name_asc는 locale Collator, random은 잠금마다 새로 셔플(고정 seed 폐기).
+            // 앱 쪽 이름순도 이 규칙(대소문자 접기)에 맞춰져 있다 — lib/utils/name_sort.dart 참고.
             val sorted: List<CardData> = when (sortOrder) {
                 "newest" -> result.sortedByDescending { it.id }
                 "oldest" -> result.sortedBy { it.id }
@@ -1582,14 +1583,18 @@ class LockScreenService : Service() {
         val qText: String; val aText: String
         val qImages: List<String>; val aImages: List<String>
         val qLabel: String; val aLabel: String
+        // 라벨은 앱 언어를 따른다 — 예전엔 로케일과 무관하게 영문 대문자로 굳어 있었다.
+        val labelRes = AppLang.wrap(this)
+        val questionLabel = labelRes.getString(R.string.lock_label_question)
+        val answerLabel = labelRes.getString(R.string.lock_label_answer)
         if (!reversed) {
             qText = card.question; aText = card.answer
             qImages = card.questionImages; aImages = card.answerImages
-            qLabel = "QUESTION"; aLabel = "ANSWER"
+            qLabel = questionLabel; aLabel = answerLabel
         } else {
             qText = card.answer; aText = card.question
             qImages = card.answerImages; aImages = card.questionImages
-            qLabel = "ANSWER"; aLabel = "QUESTION"
+            qLabel = answerLabel; aLabel = questionLabel
         }
 
         // 프로그레스 바 업데이트
