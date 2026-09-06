@@ -1298,9 +1298,11 @@ class DatabaseHelper {
       try {
         final file = File(path);
         if (!await file.exists()) {
-          // 원본 파일이 없으면 경로를 비운다 — 그대로 두면 두 카드가 같은 경로를 가리켜,
-          // 재import로 그 파일이 되살아난 뒤 한쪽 삭제가 다른 쪽 이미지를 지웠다(X4-04).
-          dbMap[key] = null;
+          // 파일이 아직 없어도 경로는 그대로 둔다. 예전엔 비웠는데(X4-04), 그건 "두 카드가
+          // 같은 경로를 가리키면 한쪽 삭제가 다른 쪽 파일을 지운다"는 이유였다. 지금은 삭제가
+          // [deleteUnreferencedMediaFiles]로 **살아있는 DB 참조**를 먼저 확인하므로 공유 자체가
+          // 위험하지 않다. 경로를 살려 두면 재import(uuid 복구)로 파일이 돌아왔을 때 원본과
+          // 복제본이 함께 되살아난다 — 비워 두면 복제본만 영영 빈 슬롯으로 남았다(리뷰 P-04).
           continue;
         }
         final dir = file.parent.path;
@@ -1310,9 +1312,9 @@ class DatabaseHelper {
         await file.copy(newPath);
         dbMap[key] = newPath;
       } catch (e) {
-        // 복사 실패 시 null로 설정 — 원본과 파일 공유 시 삭제 연쇄 문제 방지
+        // 복사 실패 시에도 원본 경로를 유지한다 — 위와 같은 이유로 공유는 이제 안전하고,
+        // 비우면 복제본이 이미지 없는 카드가 된다(리뷰 P-04).
         debugPrint('[DB] _duplicateFiles copy failed for $key: $e');
-        dbMap[key] = null;
       }
     }
   }

@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../database/database_helper.dart';
-import '../services/audio_playback_controller.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../widgets/folder_tile.dart';
@@ -633,18 +632,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
-  /// 파일 경로 리스트의 파일들을 디스크에서 삭제 (card_list_screen과 동일 패턴)
-  Future<void> _deleteFiles(List<String> paths) async {
-    for (final path in paths) {
-      // 감사 D2-07: 지우려는 파일이 지금 재생 중이면 먼저 멈춘다(사라진 파일을 가리키는
-      // 재생기가 남지 않게).
-      await AudioPlaybackController.instance.stopIfPlaying(path);
-      try {
-        final f = File(path);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
-    }
-  }
+  /// 삭제된 폴더의 미디어 파일 정리. 다른 폴더의 카드가 아직 참조하는 파일은 남긴다 —
+  /// 레거시 .memk import나 카드 복제로 여러 카드가 같은 파일을 가리킬 수 있어서, 폴더 하나를
+  /// 지웠다고 남의 카드 이미지를 뺏으면 안 된다(카드 삭제 경로와 같은 규칙으로 통일).
+  /// 재생 중인 파일 정지도 그 안에서 함께 처리한다(감사 D2-07).
+  Future<void> _deleteFiles(List<String> paths) =>
+      DatabaseHelper.instance.deleteUnreferencedMediaFiles(paths);
 
   void _exportSelectedFolders() {
     final nonBundleIds = _folders

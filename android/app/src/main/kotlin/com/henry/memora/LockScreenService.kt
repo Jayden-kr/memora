@@ -1356,6 +1356,26 @@ class LockScreenService : Service() {
      * 실패(파일 없음/손상/OOM 등 Throwable 전부)하면 null을 반환한다 — 호출부가
      * 단색으로 조용히 강등한다.
      */
+    /**
+     * [bmp]에 알파가 255 미만인 픽셀이 하나라도 있는지 정확히 판정한다(리뷰 N-05).
+     * 한 행씩 `getPixels`로 읽어 발견 즉시 중단 — 임시 배열은 이미지 폭 크기 하나뿐이고,
+     * 픽셀 순회는 네이티브 복사라 화면 크기 이미지에서도 수십 ms 안쪽이다.
+     * 반드시 bgHandler(백그라운드 스레드)에서만 호출한다.
+     */
+    private fun hasTransparentPixel(bmp: Bitmap): Boolean {
+        if (!bmp.hasAlpha()) return false
+        val w = bmp.width
+        if (w <= 0 || bmp.height <= 0) return false
+        val row = IntArray(w)
+        for (y in 0 until bmp.height) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            for (px in row) {
+                if ((px ushr 24) and 0xFF != 0xFF) return true
+            }
+        }
+        return false
+    }
+
     private fun decodeBackgroundBitmap(path: String, screenW: Int, screenH: Int): Bitmap? {
         return try {
             val file = java.io.File(path)
@@ -1414,10 +1434,17 @@ class LockScreenService : Service() {
             val dx = (screenW - scaledW) / 2f
             val dy = (screenH - scaledH) / 2f
 
-            // 감사 D4-07: 실제로 투명 픽셀이 있는 이미지만 상주 캐시를 ARGB_8888로 잡는다.
-            // hasAlpha()가 false면(불투명 PNG·JPEG) 예전과 같은 RGB_565라 메모리도 그대로다.
+            // 감사 D4-07 + 리뷰 N-05: 상주 캐시(전체화면 크기)는 **정말 투명 픽셀이 있을 때만**
+            // ARGB_8888로 잡는다. hasAlpha()는 "알파 채널이 있다"일 뿐이라 전부 불투명한 PNG도
+            // true여서, 그것만 믿으면 메모리를 근거 없이 두 배 쓴다. 표본 검사는 드문드문 있는
+            // 투명 픽셀을 놓쳐 검은 얼룩을 만들 수 있으므로, 한 줄씩 정확히 훑는다(백그라운드
+            // 스레드 1회, 폭 크기 임시 배열만 사용).
             val targetConfig =
-                if (decoded.hasAlpha()) Bitmap.Config.ARGB_8888 else Bitmap.Config.RGB_565
+                if (decoded.hasAlpha() && hasTransparentPixel(decoded)) {
+                    Bitmap.Config.ARGB_8888
+                } else {
+                    Bitmap.Config.RGB_565
+                }
             val target = Bitmap.createBitmap(screenW, screenH, targetConfig)
             val canvas = Canvas(target)
             val matrix = Matrix().apply {
