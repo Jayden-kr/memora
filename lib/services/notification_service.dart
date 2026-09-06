@@ -475,38 +475,51 @@ class NotificationService {
     const none = (removedRules: 0, pushDisabled: false);
     if (folderIdsToRemove.isEmpty) return none;
     try {
-      final settings = await DatabaseHelper.instance.getAllSettings();
-      final rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
-      if (rules.isEmpty) return none;
-
       final removeSet = folderIdsToRemove.toSet();
-      // folderId == allFolders(-1)은 실제 폴더 id가 아니므로 removeSet에 절대
-      // 포함되지 않는다 — "전체 폴더" 규칙은 이 pruning으로 지워지지 않는다.
-      final prunedRules =
-          rules.where((r) => !removeSet.contains(r.folderId)).toList();
-      if (prunedRules.length == rules.length) {
-        return none; // 변경 없음 — 이 삭제와 무관
-      }
 
-      await DatabaseHelper.instance.upsertSetting(
-          PushSchedule.settingRulesKey, PushSchedule.encode(prunedRules));
+      // 읽기·거르기·쓰기를 한 트랜잭션 안에서 한다. 화면 쪽이 정리 호출을 줄 세우고
+      // 있지만(home_screen.cleanupAfterFolderDelete), 그 줄이 두 번이나 무너져
+      // 지운 폴더의 규칙이 되살아난 적이 있다(리뷰 R2-A/R3-1). 데이터 층에서 한 겹 더
+      // 막는다 — 여기가 마지막 방어선이다.
+      var removedCount = 0;
+      var noRulesLeft = false;
+      await DatabaseHelper.instance.updateSettingAtomically(
+        PushSchedule.settingRulesKey,
+        (current) {
+          final rules = PushSchedule.decode(current);
+          if (rules.isEmpty) return null;
+          // folderId == allFolders(-1)은 실제 폴더 id가 아니므로 removeSet에 절대
+          // 포함되지 않는다 — "전체 폴더" 규칙은 이 pruning으로 지워지지 않는다.
+          final prunedRules =
+              rules.where((r) => !removeSet.contains(r.folderId)).toList();
+          if (prunedRules.length == rules.length) return null; // 이 삭제와 무관
+          removedCount = rules.length - prunedRules.length;
+          noRulesLeft = prunedRules.isEmpty;
+          return PushSchedule.encode(prunedRules);
+        },
+      );
+      if (removedCount == 0) return none; // 변경 없음
 
       // 규칙이 있었는데 이번 pruning으로 전부 사라진 경우에만 마스터 스위치를 끈다
       // — 규칙 0개인데 스위치 ON인 상태는 불변식 위반이기 때문. 그 외(규칙이 하나라도
       // 남는 경우)엔 사용자가 설정한 enabled 값을 그대로 둔다.
-      final wasEnabled =
-          (settings['notification_enabled'] ?? '').toLowerCase() == 'true';
-      final pushDisabled = prunedRules.isEmpty && wasEnabled;
-      if (prunedRules.isEmpty) {
-        await DatabaseHelper.instance
-            .upsertSetting('notification_enabled', 'false');
+      //
+      // 스위치도 같은 이유로 트랜잭션 안에서 읽고 쓴다 — 규칙을 지운 뒤 따로 읽으면
+      // 그 사이 사용자가 설정 화면에서 켠 값을 못 볼 수 있다.
+      var pushDisabled = false;
+      if (noRulesLeft) {
+        await DatabaseHelper.instance.updateSettingAtomically(
+          'notification_enabled',
+          (current) {
+            if ((current ?? '').toLowerCase() != 'true') return null;
+            pushDisabled = true;
+            return 'false';
+          },
+        );
       }
 
       await rescheduleAll();
-      return (
-        removedRules: rules.length - prunedRules.length,
-        pushDisabled: pushDisabled,
-      );
+      return (removedRules: removedCount, pushDisabled: pushDisabled);
     } catch (e) {
       debugPrint('[NOTIF] removeFoldersFromPushSchedule 실패: $e');
       return none;

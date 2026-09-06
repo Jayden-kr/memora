@@ -1129,14 +1129,27 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
   // 뒷사람의 쓰기를 덮는다 — 없애려던 그 경쟁이 타임아웃 경로로 되살아난다
   // (리뷰 R2-A, Dart로 재현됨). `Future.timeout`은 대상을 취소하지 못한다.
   //
-  // 호출자는 결과를 끝까지 기다린다. 어차피 fire-and-forget으로 불리므로 기다려도
-  // 화면이 멈추지 않고, 중간에 포기하면 "규칙이 지워졌다"는 안내만 삼키게 된다.
-  // 상한은 큐에만 건다 — 네이티브가 영영 답을 안 주는 최악의 경우에도 뒷사람이
-  // 영구히 막히지는 않게. 그 지점에선 경쟁을 감수하는 쪽이 낫다.
+  // ⚠️ 지켜야 할 세 가지가 서로 잡아당긴다. 세 번 갈아엎고 나서야 셋을 다 만족하는
+  // 모양을 찾았으니, 아래 순서를 바꾸지 말 것.
+  //
+  //  ① **자리 예약은 await보다 먼저.** `await`는 이미 끝난 Future라도 continuation을
+  //     다음 마이크로태스크로 미룬다. 자리 예약을 `await previous` 뒤에 두면, 내가
+  //     기다리는 동안 _cleanupChain에는 아직 앞사람 링크가 들어 있어서 세 번째 호출이
+  //     나와 같은 것을 기다리다 함께 깨어난다 — 줄이 무너진다(리뷰 R3-1, 동시 writer
+  //     2를 Dart로 재현).
+  //  ② **큐는 "실제 작업"이 끝나야 풀린다.** 내가 기다리다 지쳤다고 풀어주면, 고아가
+  //     된 앞 작업이 나중에 옛 스냅샷으로 뒷사람의 쓰기를 덮는다(리뷰 R2-A).
+  //  ③ **호출자는 무한정 기다리지 않는다.** 네이티브가 영영 답을 안 주면 `await`가
+  //     영영 안 끝나고, 그 continuation이 State를 붙들어 GC도 안 되고 안내도 못 뜬다
+  //     (리뷰 R3-C). ③은 ②와 충돌하지 않는다 — 큐는 여전히 실제 작업을 본다.
   const queueBackstop = Duration(minutes: 5);
+  const callerLimit = Duration(seconds: 30);
   const failed =
       (removedRules: 0, pushDisabled: false, lockScreenDisabled: false);
+
   final previous = _cleanupChain;
+  final slot = Completer<void>();
+  _cleanupChain = slot.future; // ① await보다 먼저
   try {
     await previous;
   } catch (e) {
@@ -1147,12 +1160,18 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
     needsPushReschedule: needsPushReschedule,
     filePaths: filePaths,
   );
-  // 큐는 결과값이 아니라 "끝났다"만 필요하다. 실패·타임아웃도 통과시킨다.
-  _cleanupChain = work.timeout(queueBackstop).then<void>((_) {}, onError: (e) {
+  // ② 자리는 실제 작업이 끝날 때(또는 백스톱) 비워진다. 결과값은 필요 없다.
+  unawaited(work.timeout(queueBackstop).then<void>((_) {}, onError: (e) {
     debugPrint('[HOME] cleanup chain link failed: $e');
-  });
+  }).whenComplete(() {
+    if (!slot.isCompleted) slot.complete();
+  }));
   try {
-    return await work;
+    // ③ 결과 보고만 포기한다. 큐는 위에서 실제 작업을 계속 지켜본다.
+    return await work.timeout(callerLimit, onTimeout: () {
+      debugPrint('[HOME] post-delete cleanup slow — 결과 보고 생략');
+      return failed;
+    });
   } catch (e) {
     debugPrint('[HOME] post-delete cleanup failed: $e');
     return failed;

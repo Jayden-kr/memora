@@ -1013,6 +1013,39 @@ class DatabaseHelper {
     );
   }
 
+  /// Settings 테이블: 한 키를 **읽고 고쳐서 다시 쓰는 것을 하나의 트랜잭션으로** 한다.
+  ///
+  /// 여러 화면이 동시에 같은 키를 "전부 읽고 → 걸러내고 → 전부 되쓰기" 하면, 늦게
+  /// 끝난 쪽이 옛 스냅샷으로 먼저 끝난 쪽의 쓰기를 덮는다. 화면 쪽에서 호출을 줄
+  /// 세우고 있지만(home_screen.cleanupAfterFolderDelete), 그 줄이 어떤 이유로든
+  /// 무너져도 데이터가 깨지지 않도록 여기서 한 겹 더 막는다.
+  ///
+  /// [transform]은 현재 값(없으면 null)을 받아 새 값을 돌려준다. null을 돌려주면
+  /// 아무것도 쓰지 않는다. **트랜잭션 안에서 불리므로 DB를 다시 건드리면 안 된다.**
+  Future<String?> updateSettingAtomically(
+    String key,
+    String? Function(String? current) transform,
+  ) async {
+    final db = await database;
+    return await db.transaction<String?>((txn) async {
+      final rows = await txn.query(
+        AppConstants.tableSettings,
+        where: 'key = ?',
+        whereArgs: [key],
+        limit: 1,
+      );
+      final current = rows.isEmpty ? null : rows.first['value'] as String?;
+      final next = transform(current);
+      if (next == null) return null;
+      await txn.insert(
+        AppConstants.tableSettings,
+        {'key': key, 'value': next},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      return next;
+    });
+  }
+
   /// Settings 테이블: 단일 key 삭제
   Future<void> deleteSetting(String key) async {
     final db = await database;
