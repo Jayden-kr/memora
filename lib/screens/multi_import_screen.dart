@@ -37,6 +37,10 @@ class _FileEntry {
 }
 
 class _MultiImportScreenState extends State<MultiImportScreen> {
+  /// 다른 작업이 끼어들어 이 파일을 건너뛰었음을 나타내는 내부 표식. 목록에서
+  /// "읽기 실패"가 아니라 "다른 작업 진행 중" 문구를 보여주기 위해 구분한다.
+  static const _busyErrorMarker = '__busy__';
+
   final _controller = ImportExportController.instance;
 
   _Stage _stage = _Stage.loading;
@@ -203,12 +207,19 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
                 .map((f) => (f['name'] as String?) ?? '')
                 .where((s) => s.isNotEmpty)
                 .toList();
-            await _controller.startImport(
+            final started = await _controller.startImport(
               filePath: entry.filePath,
               selectedFolderNames: allFolderNames,
               folderMapping: null,
               conflictPolicy: conflictPolicy,
             );
+            if (!started) {
+              // 배치 안에서는 락을 이미 이 배치가 쥐고 있어야 정상이다. 그렇지 않다면
+              // 다른 작업이 끼어든 것이므로 이 파일은 건너뛴 것으로 기록한다 —
+              // 예전엔 0장 가져온 성공처럼 보였다.
+              entry.error = _busyErrorMarker;
+              continue;
+            }
             final result = _controller.lastImportResult;
             if (result != null) {
               entry.newCards = result.newCards;
@@ -363,7 +374,10 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
                   ),
                 ),
                 subtitle: hasError
-                    ? Text(t.multiImportReadFail,
+                    ? Text(
+                        e.error == _busyErrorMarker
+                            ? t.opBusyIgnored
+                            : t.multiImportReadFail,
                         style: TextStyle(color: cs.error))
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,

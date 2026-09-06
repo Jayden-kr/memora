@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'app.dart';
 import 'database/database_helper.dart';
+import 'l10n/app_localizations.dart';
 import 'models/card.dart';
 import 'models/folder.dart';
 import 'screens/card_edit_screen.dart';
@@ -191,6 +192,18 @@ Future<void> _cleanupBrokenImagePathsOnce() async {
 /// Cold-start 시 navigator 준비 전에 도착한 설정 네비게이션 대상
 String? _pendingSettingsTarget;
 
+/// 편집 화면이 열려 있어 화면 이동을 건너뛰었다는 안내. 예전엔 탭해도 아무 일이
+/// 일어나지 않아 사용자에겐 알림이 고장 난 것처럼 보였다(감사: 조용한 무시).
+/// 화면 밖에서 호출되므로 전역 [scaffoldMessengerKey]를 쓴다.
+void _notifyNavSkippedByEditor() {
+  final messenger = scaffoldMessengerKey.currentState;
+  final context = navigatorKey.currentContext;
+  if (messenger == null || context == null) return;
+  messenger.showSnackBar(
+    SnackBar(content: Text(AppLocalizations.of(context).navSkippedWhileEditing)),
+  );
+}
+
 /// 반환값 false = "아직 못 갔다, 다시 불러라"(네이티브 콜드스타트 재시도 신호, 감사 D4-11).
 /// 의도적으로 건너뛴 경우(편집 화면이 열려 있음 등)는 재시도해도 소용없으므로 true다.
 Future<bool> _handleNotificationNav(NotificationNavEvent event) async {
@@ -244,6 +257,7 @@ Future<bool> _doNavigate(
     // 편집 중인 내용을 조용히 날려버린다 — 편집 중엔 알림 네비게이션을 건너뛴다.
     if (CardEditScreen.isOpen) {
       debugPrint('[MAIN] CardEditScreen open, skipping notification navigation');
+      _notifyNavSkippedByEditor();
       return true; // 의도적 건너뜀 — 재시도 대상 아님
     }
     debugPrint('[MAIN] navigating to folder="${resolvedFolder.name}" scrollToCard=${card.id}');
@@ -304,6 +318,7 @@ Future<bool> _doEditNavigate(
     // 우회해 편집 중인 내용을 조용히 날려버린다 — 이 경우 편집 네비게이션을 건너뛴다.
     if (CardEditScreen.isOpen) {
       debugPrint('[MAIN] CardEditScreen open, skipping edit navigation');
+      _notifyNavSkippedByEditor();
       return true; // 의도적 건너뜀
     }
     nav.popUntil((route) => route.isFirst);
@@ -380,6 +395,7 @@ void _handleSettingsNavigation(String target) {
   // 편집 중인 내용을 조용히 날려버린다 — 편집 중엔 설정 네비게이션을 건너뛴다.
   if (CardEditScreen.isOpen) {
     debugPrint('[MAIN] CardEditScreen open, skipping settings navigation');
+    _notifyNavSkippedByEditor();
     return;
   }
 

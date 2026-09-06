@@ -622,11 +622,25 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // push_alarms.folder_id(전역 기본 폴더)만 추적해서, 푸시 시간대 슬롯에만
       // 걸린 삭제(기본 폴더는 안 건드리고 슬롯 하나가 가리키던 폴더만 지운 경우)를
       // 놓친다.
-      await NotificationService.removeFoldersFromPushSchedule(regularIds);
+      final pruned =
+          await NotificationService.removeFoldersFromPushSchedule(regularIds);
       if (needsPushReschedule) {
         await NotificationService.rescheduleAll();
       }
       await _deleteFiles(filePaths);
+
+      // 폴더를 지우면 그 폴더를 가리키던 알림 시간대도 함께 사라진다 — 예전엔
+      // 아무 말 없이 사라져서, 알림이 안 오는 이유를 사용자가 알 수 없었다.
+      if (pruned.removedRules > 0 && mounted) {
+        final t = AppLocalizations.of(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(pruned.pushDisabled
+                ? t.homePushRulesRemovedAllOff(pruned.removedRules)
+                : t.homePushRulesRemoved(pruned.removedRules)),
+          ),
+        );
+      }
     } catch (e) {
       debugPrint('[HOME] post-delete cleanup error: $e');
     }

@@ -224,14 +224,17 @@ class ImportExportController {
 
   // ─── Import ───
 
-  Future<void> startImport({
+  /// 반환값 false = 다른 가져오기/내보내기가 진행 중이라 이번 요청을 무시했다.
+  /// 호출 화면이 그 사실을 사용자에게 알려야 한다 — 예전엔 조용히 아무 일도
+  /// 일어나지 않아 버튼이 고장 난 것처럼 보였다.
+  Future<bool> startImport({
     required String filePath,
     required List<String> selectedFolderNames,
     Map<int, int?>? folderMapping,
     String conflictPolicy = 'merge',
   }) async {
     // 동시 실행 방지 (Completer 기반 락)
-    if (_operationLock != null && !_operationLock!.isCompleted) return;
+    if (_operationLock != null && !_operationLock!.isCompleted) return false;
     _operationLock = Completer<void>();
 
     isRunning = true;
@@ -308,7 +311,7 @@ class ImportExportController {
         _batchFiles++;
         _batchNewCards += result.newCards;
         _batchDuration += result.duration;
-        return;
+        return true;
       }
       final body = isEn
           ? 'Imported ${result.newCards} card(s) (${result.duration.inSeconds}s)'
@@ -317,6 +320,7 @@ class ImportExportController {
         isEn ? 'Import complete' : 'Import 완료',
         body,
       );
+      return true;
     } catch (e) {
       isRunning = false;
       currentOperation = null;
@@ -364,12 +368,14 @@ class ImportExportController {
     return sanitized.isEmpty ? 'export' : sanitized;
   }
 
-  Future<void> startMemkPerFolderExport({
+  /// 반환값 false = 다른 가져오기/내보내기가 진행 중이라 이번 요청을 무시했다
+  /// (규약은 [startImport]와 같다).
+  Future<bool> startMemkPerFolderExport({
     required List<Folder> selectedFolders,
     required String exportDirPath,
     String conflictPolicy = 'rename',
   }) async {
-    if (_operationLock != null && !_operationLock!.isCompleted) return;
+    if (_operationLock != null && !_operationLock!.isCompleted) return false;
     _operationLock = Completer<void>();
 
     final isEn = LocaleService.currentLanguageCode() == 'en';
@@ -504,6 +510,8 @@ class ImportExportController {
         body,
         type: 'export',
       );
+      // 시작은 됐다 — 개별 폴더 실패는 lastExportError로 별도 보고한다.
+      return true;
     } catch (e) {
       // 부분 결과 보존 (중간 실패 시 성공한 파일 접근 가능)
       if (createdFileNames.isNotEmpty) {
@@ -516,6 +524,7 @@ class ImportExportController {
       _releaseLock();
       _notify();
       await _cancel();
+      return true;
     }
   }
 
@@ -562,12 +571,14 @@ class ImportExportController {
   int _pdfTotalFolders = 1;
   String _pdfCurrentFolderName = '';
 
-  Future<void> startPdfExport({
+  /// 반환값 false = 다른 가져오기/내보내기가 진행 중이라 이번 요청을 무시했다
+  /// (규약은 [startImport]와 같다).
+  Future<bool> startPdfExport({
     required List<Folder> selectedFolders,
     required String exportDirPath,
     String conflictPolicy = 'rename',
   }) async {
-    if (_operationLock != null && !_operationLock!.isCompleted) return;
+    if (_operationLock != null && !_operationLock!.isCompleted) return false;
     _operationLock = Completer<void>();
 
     final isEn = LocaleService.currentLanguageCode() == 'en';
@@ -670,6 +681,8 @@ class ImportExportController {
         body,
         type: 'export',
       );
+      // 시작은 됐다 — 개별 폴더 실패는 lastExportError로 별도 보고한다.
+      return true;
     } catch (e) {
       if (createdFileNames.isNotEmpty) {
         lastExportFileNames = List.from(createdFileNames);
@@ -681,6 +694,7 @@ class ImportExportController {
       _releaseLock();
       _notify();
       await _cancel();
+      return true;
     }
   }
 }

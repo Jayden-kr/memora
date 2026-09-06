@@ -11,6 +11,11 @@ final ValueNotifier<ThemeMode> themeModeNotifier =
 /// 전역 네비게이터 키 (알림 탭 시 화면 이동용)
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+/// 화면 밖(알림·잠금화면 콜백)에서 SnackBar를 띄우기 위한 전역 키. 이 경로들은
+/// 특정 화면의 BuildContext를 갖고 있지 않다.
+final GlobalKey<ScaffoldMessengerState> scaffoldMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
+
 /// 전역 RouteObserver (RouteAware 위젯에서 화면 복귀 감지용)
 final RouteObserver<ModalRoute<void>> routeObserver =
     RouteObserver<ModalRoute<void>>();
@@ -29,6 +34,7 @@ class MemoraApp extends StatelessWidget {
             return MaterialApp(
               title: 'Memora',
               navigatorKey: navigatorKey,
+              scaffoldMessengerKey: scaffoldMessengerKey,
               navigatorObservers: [routeObserver],
               theme: ThemeData(
                 colorSchemeSeed: const Color(0xFFFF6B6B),

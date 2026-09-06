@@ -466,13 +466,18 @@ class NotificationService {
   /// home_screen의 폴더 삭제 사후 정리에서 `needsPushReschedule` 플래그와 무관하게
   /// 항상 호출돼야 한다 — 그 플래그는 push_alarms.folder_id(옛 전역 기본 폴더)만
   /// 추적해서, 규칙 하나가 가리키던 폴더만 지운 경우를 놓친다.
-  static Future<void> removeFoldersFromPushSchedule(
-      List<int> folderIdsToRemove) async {
-    if (folderIdsToRemove.isEmpty) return;
+  ///
+  /// 반환값은 화면이 사용자에게 알리기 위한 것이다(감사: 규칙이 조용히 사라졌다).
+  /// `removedRules`는 이번에 사라진 규칙 수, `pushDisabled`는 그 결과 알림 스위치가
+  /// 꺼졌는지. 실패하거나 무관한 삭제였으면 둘 다 0/false다.
+  static Future<({int removedRules, bool pushDisabled})>
+      removeFoldersFromPushSchedule(List<int> folderIdsToRemove) async {
+    const none = (removedRules: 0, pushDisabled: false);
+    if (folderIdsToRemove.isEmpty) return none;
     try {
       final settings = await DatabaseHelper.instance.getAllSettings();
       final rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
-      if (rules.isEmpty) return;
+      if (rules.isEmpty) return none;
 
       final removeSet = folderIdsToRemove.toSet();
       // folderId == allFolders(-1)은 실제 폴더 id가 아니므로 removeSet에 절대
@@ -480,7 +485,7 @@ class NotificationService {
       final prunedRules =
           rules.where((r) => !removeSet.contains(r.folderId)).toList();
       if (prunedRules.length == rules.length) {
-        return; // 변경 없음 — 이 삭제와 무관
+        return none; // 변경 없음 — 이 삭제와 무관
       }
 
       await DatabaseHelper.instance.upsertSetting(
@@ -489,14 +494,22 @@ class NotificationService {
       // 규칙이 있었는데 이번 pruning으로 전부 사라진 경우에만 마스터 스위치를 끈다
       // — 규칙 0개인데 스위치 ON인 상태는 불변식 위반이기 때문. 그 외(규칙이 하나라도
       // 남는 경우)엔 사용자가 설정한 enabled 값을 그대로 둔다.
+      final wasEnabled =
+          (settings['notification_enabled'] ?? '').toLowerCase() == 'true';
+      final pushDisabled = prunedRules.isEmpty && wasEnabled;
       if (prunedRules.isEmpty) {
         await DatabaseHelper.instance
             .upsertSetting('notification_enabled', 'false');
       }
 
       await rescheduleAll();
+      return (
+        removedRules: rules.length - prunedRules.length,
+        pushDisabled: pushDisabled,
+      );
     } catch (e) {
       debugPrint('[NOTIF] removeFoldersFromPushSchedule 실패: $e');
+      return none;
     }
   }
 }

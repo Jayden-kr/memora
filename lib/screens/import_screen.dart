@@ -193,12 +193,20 @@ class _ImportScreenState extends State<ImportScreen> {
     setState(() => _stage = _ImportStage.importing);
 
     try {
-      await _controller.startImport(
+      final started = await _controller.startImport(
         filePath: _stableFilePath ?? widget.filePath,
         selectedFolderNames: _selectedFolderNames.toList(),
         folderMapping: mapping,
         conflictPolicy: conflictPolicy,
       );
+      // 다른 작업이 진행 중이면 컨트롤러가 조용히 무시한다 — 화면이 "가져오는 중"에
+      // 멈춘 것처럼 보이지 않게 선택 화면으로 되돌리고 이유를 말해준다.
+      if (!started && mounted) {
+        setState(() => _stage = _ImportStage.folderSelect);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppLocalizations.of(context).opBusyIgnored)),
+        );
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
