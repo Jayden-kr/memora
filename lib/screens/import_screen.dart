@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_label.dart';
 import '../services/import_export_controller.dart';
 import '../widgets/overwrite_dialog.dart';
 
@@ -430,7 +431,8 @@ class _ImportScreenState extends State<ImportScreen> {
                               items: _localFolders.map((f) {
                                 return DropdownMenuItem(
                                   value: f.id,
-                                  child: Text(f.name),
+                                  child: Text(folderDisplayPath(f),
+                                      overflow: TextOverflow.ellipsis),
                                 );
                               }).toList(),
                               onChanged: (v) {
