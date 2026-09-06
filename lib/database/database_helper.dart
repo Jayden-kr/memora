@@ -813,6 +813,30 @@ class DatabaseHelper {
     if (unique.isEmpty) return {};
     final db = await database;
     final found = <String>{};
+    final uniqueSet = unique.toSet();
+    // 경로가 많으면(카드 수백 장 일괄 삭제) 청크마다 스캔하는 것보다 테이블을 한 번만 훑는 게
+    // 싸다 — 청크 방식은 스캔 횟수가 경로 수에 비례한다. 한 번에 다 읽으면 Binder 1MB 한계에
+    // 걸리므로 id 기준 keyset 페이징으로 500행씩 읽는다(LIMIT/OFFSET은 동시 삽입에 밀린다).
+    if (uniqueSet.length > 100) {
+      var lastId = 0;
+      while (true) {
+        final rows = await db.rawQuery(
+          'SELECT id, ${_pathColumns.join(', ')} FROM ${AppConstants.tableCards} '
+          'WHERE id > ? ORDER BY id LIMIT 500',
+          [lastId],
+        );
+        if (rows.isEmpty) break;
+        for (final r in rows) {
+          for (final col in _pathColumns) {
+            final p = r[col] as String?;
+            if (p != null && uniqueSet.contains(p)) found.add(p);
+          }
+        }
+        lastId = rows.last['id'] as int;
+        if (rows.length < 500) break;
+      }
+      return found;
+    }
     // 40개 컬럼을 컬럼마다 따로 조회하면(인덱스가 없어 전부 풀스캔) 카드 한 장 지울 때마다
     // 스캔이 40번 돈다 — 1만 장대 라이브러리에서 눈에 띄게 느리고 쓰기 락도 오래 문다
     // (리뷰 P-01). 한 번의 스캔으로 40컬럼을 동시에 본다. 대신 바인딩 변수가

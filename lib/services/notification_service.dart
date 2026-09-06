@@ -310,18 +310,33 @@ class NotificationService {
 
   // ─── Foreground Service 제어 ───
 
-  /// 이 설치에서 푸시 서비스를 한 번이라도 실제로 켠 적이 있는지. 메인 프로세스가 소유하는
-  /// 앱 DB에 둔다 — `push_notif_prefs`의 `running`은 `:push` 프로세스가 쓰기 때문에 여기서
-  /// 읽으면 프로세스별 캐시로 stale 값을 볼 수 있다(#3의 원인). 이 플래그는 "중지 요청을
-  /// 보낼 필요가 있는가"만 판정한다(감사 D10-07 / 리뷰 N-01).
+  /// "중지 요청(STOP)을 보낼 필요가 있는가"를 판정하는 상태 3종. 전부 메인 프로세스가
+  /// 소유하는 앱 DB에 둔다 — `push_notif_prefs`의 `running`은 `:push` 프로세스가 쓰기 때문에
+  /// 여기서 읽으면 프로세스별 캐시로 stale 값을 볼 수 있다(#3의 원인).
+  /// STOP은 무해하지 않다: 네이티브가 startForegroundService로 보내므로 **없던 `:push`
+  /// 프로세스를 새로 띄운다**(감사 D10-07). 그렇다고 "프로세스가 죽었으면 생략"으로 판정하면
+  /// running=false 기록과 알람 취소가 STOP 분기에만 있어서 알림이 되살아난다(리뷰 N-01).
   static const _settingPushEverStarted = 'push_service_ever_started';
+  /// 마지막 STOP 이후 서비스를 다시 시작한 적이 없다(=이미 멈춰 있다). 리뷰 PG-01:
+  /// everStarted만 보면 한 번이라도 켠 사용자는 실행마다 STOP을 보내 프로세스가 계속 떴다.
+  static const _settingPushStopRequested = 'push_stop_requested';
+  /// 이 로직이 들어온 뒤 한 번은 무조건 STOP을 보냈다(과거 상태를 알 수 없는 설치 정리용).
+  static const _settingPushStopMigrated = 'push_stop_migrated';
+
+  /// 이 프로세스에서 서비스를 시작한 적이 있는지. DB 쓰기가 실패해도 같은 세션의
+  /// "켰다가 끄기"는 반드시 STOP이 나가게 하는 안전망(리뷰 PG-03).
+  static bool _pushStartedThisProcess = false;
 
   static Future<void> _markPushEverStarted() async {
+    _pushStartedThisProcess = true;
     try {
       await DatabaseHelper.instance
           .upsertSetting(_settingPushEverStarted, 'true');
+      // 다시 시작했으므로 "이미 멈춰 있음"은 더 이상 사실이 아니다.
+      await DatabaseHelper.instance
+          .upsertSetting(_settingPushStopRequested, 'false');
     } catch (e) {
-      debugPrint('[NOTIF] push_service_ever_started 기록 실패: $e');
+      debugPrint('[NOTIF] push 시작 플래그 기록 실패: $e');
     }
   }
 
@@ -355,16 +370,49 @@ class NotificationService {
       // ⚠️ "프로세스가 살아있나"로 판정하면 안 된다 — running=false와 알람 취소를 하는
       // 곳이 바로 이 STOP 분기라서, 죽어 있다고 건너뛰면 다음 TICK이 running=true를 보고
       // 알림을 되살린다(리뷰 N-01).
-      final settings = await DatabaseHelper.instance.getAllSettings();
-      final everStarted = (settings[_settingPushEverStarted] ?? '') == 'true';
-      final enabled =
-          (settings['notification_enabled'] ?? '').toLowerCase() == 'true';
-      if (!everStarted && !enabled) {
-        debugPrint('[NOTIF] 푸시를 켠 적 없음 — 중지 요청 생략(:push 생성 방지)');
-        return;
+      // 설정을 못 읽으면 보내는 쪽으로 기운다 — 생략은 "알림이 안 꺼지는" 실패라
+      // 읽기 실패로 조용히 생략해선 안 된다(리뷰 PG-02).
+      Map<String, String>? settings;
+      try {
+        settings = await DatabaseHelper.instance.getAllSettings();
+      } catch (e) {
+        debugPrint('[NOTIF] 설정 읽기 실패 — 중지 요청은 그대로 보냄: $e');
+      }
+      if (settings != null) {
+        final everStarted = (settings[_settingPushEverStarted] ?? '') == 'true';
+        final enabled =
+            (settings['notification_enabled'] ?? '').toLowerCase() == 'true';
+        final stopRequested =
+            (settings[_settingPushStopRequested] ?? '') == 'true';
+        final migrated = (settings[_settingPushStopMigrated] ?? '') == 'true';
+        final hasRules =
+            (settings[PushSchedule.settingRulesKey] ?? '').isNotEmpty;
+        // 이 로직 이전 설치의 과거 상태(이미 껐는지, 알람이 남았는지)는 알 수 없다.
+        // 흔적이 하나라도 있으면 딱 한 번은 STOP을 보내 정리한다(리뷰 PG-04).
+        final needsMigration =
+            !migrated && (everStarted || enabled || hasRules);
+        // 멈출 게 없다고 확신할 수 있는 경우에만 생략한다.
+        final nothingToStop = !needsMigration &&
+            !enabled &&
+            !_pushStartedThisProcess &&
+            (!everStarted || stopRequested);
+        if (nothingToStop) {
+          debugPrint('[NOTIF] 멈출 푸시 서비스 없음 — 중지 요청 생략(:push 생성 방지)');
+          return;
+        }
       }
       await _pushNotifChannel.invokeMethod('stopService');
       debugPrint('[NOTIF] 서비스 중지 요청 전송');
+      // 보냈다는 사실을 남겨 다음 실행부터는 생략할 수 있게 한다. 이 시점의 앱은 포그라운드
+      // (설정 토글) 또는 시작 직후라 startForegroundService가 막히지 않는다.
+      try {
+        await DatabaseHelper.instance
+            .upsertSetting(_settingPushStopRequested, 'true');
+        await DatabaseHelper.instance
+            .upsertSetting(_settingPushStopMigrated, 'true');
+      } catch (e) {
+        debugPrint('[NOTIF] 중지 플래그 기록 실패: $e');
+      }
     } catch (e) {
       debugPrint('[NOTIF] 서비스 중지 실패: $e');
     }
