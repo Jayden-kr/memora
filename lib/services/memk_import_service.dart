@@ -335,6 +335,22 @@ class MemkImportService {
 
     // 카드 배치 처리
     final batch = <CardModel>[];
+    Future<void> flushBatch() async {
+      if (batch.isEmpty) return;
+      try {
+        final result = await db.insertCardsBatch(batch);
+        newCards += result.inserted;
+        skippedCards += result.skipped;
+      } catch (e) {
+        // 배치 전체가 실패(대상 폴더가 import 도중 삭제돼 FK 위반 등)하면 그 배치는 건너뛴다 —
+        // 예전엔 batch를 비우지 않아 다음 카드마다 같은 배치를 다시 던져 O(N²)로 멈춘 듯
+        // 보이다가 결국 한 장도 안 들어갔다(D1-02).
+        debugPrint('[IMPORT] batch insert failed, ${batch.length} cards skipped: $e');
+        skippedCards += batch.length;
+      }
+      batch.clear();
+    }
+
     for (int i = 0; i < selectedCards.length; i++) {
       try {
         final cardJson = Map<String, dynamic>.from(selectedCards[i]);
@@ -381,10 +397,7 @@ class MemkImportService {
 
         // 배치 insert (UUID 중복은 건너뜀)
         if (batch.length >= AppConstants.importBatchSize) {
-          final result = await db.insertCardsBatch(batch);
-          newCards += result.inserted;
-          skippedCards += result.skipped;
-          batch.clear();
+          await flushBatch();
 
           // 진행률은 '처리한' 카드 수(i+1)다 — '삽입된' 수(newCards)로 세면 재import처럼
           // 전부 건너뛰는 경우 0/N에 멈춰 보였다(D7-08).
@@ -408,12 +421,7 @@ class MemkImportService {
     }
 
     // 남은 배치 처리
-    if (batch.isNotEmpty) {
-      final result = await db.insertCardsBatch(batch);
-      newCards += result.inserted;
-      skippedCards += result.skipped;
-      batch.clear();
-    }
+    await flushBatch();
 
     onProgress(ImportProgress(
       phase: 'images',

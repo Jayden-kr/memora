@@ -615,7 +615,18 @@ class LockScreenService : Service() {
         loadedFolderIds = requested
     }
 
+    /** [queryCardsIntoOnce]를 잠금(BUSY) 예외에 한해 재시도한다 — 읽기 전용 핸들엔 WAL 설정이
+     *  무효라 Flutter 쪽 대량 쓰기와 겹치면 그 회차의 덱이 조용히 비었다(D8-05). */
     private fun queryCardsInto(ids: List<Int>) {
+        try {
+            DbReadRetry.run(TAG) { queryCardsIntoOnce(ids) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load cards after retries", e)
+            cards = emptyList()
+        }
+    }
+
+    private fun queryCardsIntoOnce(ids: List<Int>) {
         val dbFile = findDbFile()
         if (dbFile == null) {
             cards = emptyList()
@@ -626,7 +637,6 @@ class LockScreenService : Service() {
         var db: SQLiteDatabase? = null
         try {
             db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
-            try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용
             val whereParts = mutableListOf<String>()
             val whereArgs = mutableListOf<String>()
 
@@ -693,6 +703,8 @@ class LockScreenService : Service() {
             }
             cards = if (reversed) sorted.reversed() else sorted
             Log.d(TAG, "Loaded ${cards.size} cards from DB (sort=$sortOrder, reversed=$reversed)")
+        } catch (e: android.database.sqlite.SQLiteDatabaseLockedException) {
+            throw e // 바깥 DbReadRetry가 재시도
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load cards", e)
             cards = emptyList()

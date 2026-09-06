@@ -175,6 +175,30 @@ class CardModel {
         answerImagePath5,
       ].where((p) => p != null && p.isNotEmpty).cast<String>().toList();
 
+  /// 카드가 참조하는 모든 미디어 파일 경로(이미지·손글씨·음성 40개 컬럼, 빈 값 제외).
+  /// 삭제/정리 경로가 전부 이걸 써야 "흔적 0"이 유지된다 — 편집화면 단일 삭제만 11개 컬럼을
+  /// 보던 구멍(D8-08)을 여기로 모았다.
+  List<String> get allMediaPaths => [
+        ...questionImagePaths,
+        ...answerImagePaths,
+        for (final p in [
+          questionHandImagePath, questionHandImagePath2, questionHandImagePath3,
+          questionHandImagePath4, questionHandImagePath5,
+          answerHandImagePath, answerHandImagePath2, answerHandImagePath3,
+          answerHandImagePath4, answerHandImagePath5,
+          questionVoiceRecordPath, questionVoiceRecordPath2,
+          questionVoiceRecordPath3, questionVoiceRecordPath4,
+          questionVoiceRecordPath5, questionVoiceRecordPath6,
+          questionVoiceRecordPath7, questionVoiceRecordPath8,
+          questionVoiceRecordPath9, questionVoiceRecordPath10,
+          answerVoiceRecordPath, answerVoiceRecordPath2, answerVoiceRecordPath3,
+          answerVoiceRecordPath4, answerVoiceRecordPath5, answerVoiceRecordPath6,
+          answerVoiceRecordPath7, answerVoiceRecordPath8, answerVoiceRecordPath9,
+          answerVoiceRecordPath10,
+        ])
+          if (p != null && p.isNotEmpty) p,
+      ];
+
   /// 앞면 이미지 비율 리스트 (경로와 1:1 매칭 — non-null path에 대응하는 ratio만)
   List<double?> get questionImageRatios {
     final paths = [questionImagePath, questionImagePath2, questionImagePath3, questionImagePath4, questionImagePath5];

@@ -136,13 +136,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
   }
 
+  int _folderLoadGen = 0;
+
   Future<void> _loadFolders() async {
+    // 세대 토큰 — 로드 중에 정렬을 바꾸면 늦게 끝난 옛 로드가 저장돼 있던 옛 정렬로
+    // 화면을 되돌렸다(DB엔 새 값, 화면엔 옛 값 — X2-05).
+    final gen = ++_folderLoadGen;
     try {
       final folders = await DatabaseHelper.instance.getAllFolders();
       final totalCards = folders.fold<int>(0, (sum, f) => sum + f.cardCount);
       final settings = await DatabaseHelper.instance.getAllSettings();
       final savedSort = settings[_sortModeKey];
-      if (!mounted) return;
+      if (!mounted || gen != _folderLoadGen) return;
       setState(() {
         if (savedSort != null) _sortMode = savedSort;
         _folders = _sortFolders(folders);
@@ -338,7 +343,18 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return;
     }
 
-    await DatabaseHelper.instance.updateFolder(folder.copyWith(name: newName));
+    // 이름만 UPDATE — 스냅샷 전체 되쓰기는 옛 card_count/parent_folder_id를 덮었다(D1-03).
+    // 실패는 생성 경로와 같이 알린다(D1-05: 예전엔 무음).
+    try {
+      await DatabaseHelper.instance.renameFolder(folder.id!, newName);
+    } catch (e) {
+      debugPrint('[HOME] rename folder failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.homeFolderRenameFail)),
+      );
+      return;
+    }
     if (!mounted) return;
     await _loadFolders();
   }
@@ -455,6 +471,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final folder = _folders[i];
       if (folder.sequence != i && folder.id != null) {
         updates[folder.id!] = i;
+        // 로컬 객체도 바로 맞춘다 — 리로드 전에 두 번째 드래그가 오면 옛 sequence와 비교해
+        // 필요한 UPDATE를 건너뛰어 두 번째 이동이 조용히 되돌아갔다(D1-04).
+        _folders[i] = folder.copyWith(sequence: i);
       }
     }
     if (updates.isNotEmpty) {
@@ -492,6 +511,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   Future<void> _deleteSelectedFolders() async {
     if (_isDeleting) return; // 재진입 가드 (삭제 아이콘 연타 방지)
     final t = AppLocalizations.of(context);
+    // import가 도는 동안 대상 폴더를 지우면 배치 insert가 FK로 실패해 그 파일의 카드가
+    // 통째로 빠진다(D1-02) — 서비스 쪽 방어와 별개로 진입 자체를 막는다.
+    if (ImportExportController.instance.isBusy) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.importBusy)),
+      );
+      return;
+    }
     final selected =
         _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
     if (selected.isEmpty) return;

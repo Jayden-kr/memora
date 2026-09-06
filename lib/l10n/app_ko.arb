@@ -81,6 +81,7 @@
     }
   },
   "homeFolderCreateFail": "폴더 생성 실패: 이미 \"{name}\" 폴더가 있습니다.",
+  "homeFolderRenameFail": "폴더 이름 변경에 실패했습니다.",
   "@homeFolderCreateFail": {
     "placeholders": {
       "name": { "type": "String" }

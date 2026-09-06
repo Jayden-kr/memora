@@ -238,6 +238,10 @@ class CardAudioFieldState extends State<CardAudioField> {
   /// 녹음 진행 중인지 (부모의 미저장 변경 감지용 — 예: 뒤로가기 시 폐기 다이얼로그).
   bool get isRecording => _recording;
 
+  /// 정지 요청 후 recorder.stop()이 끝나기 전 — 이 사이 UI가 '음성 없음'으로 되돌아가 녹음
+  /// 버튼이 살아나면 새 녹음이 _activeRecordingPath를 덮어 이전 파일 추적이 끊겼다(D3-06).
+  bool _stopping = false;
+
   @override
   void initState() {
     super.initState();
@@ -297,6 +301,7 @@ class CardAudioFieldState extends State<CardAudioField> {
   }
 
   Future<void> _startRecording() async {
+    if (_recording || _stopping) return;
     final t = AppLocalizations.of(context);
     try {
       if (!await _recorder.hasPermission()) {
@@ -338,6 +343,8 @@ class CardAudioFieldState extends State<CardAudioField> {
     // 동시 진입하면 stop()이 두 번 불려 두 번째가 같은 경로를 echo→방금 커밋한
     // 파일을 삭제하는 경합이 생긴다. await 전에 플래그를 내려 2차 호출을 차단.
     if (!_recording) return;
+    final partialPath = _activeRecordingPath;
+    _stopping = true;
     if (mounted) {
       setState(() => _recording = false);
     } else {
@@ -346,19 +353,34 @@ class CardAudioFieldState extends State<CardAudioField> {
     _timer?.cancel();
     final durationMs = _elapsed.inMilliseconds;
     String? resultPath;
+    Object? stopError;
     try {
       resultPath = await _recorder.stop();
-    } catch (_) {
+    } catch (e) {
       resultPath = null;
+      stopError = e;
     }
     _activeRecordingPath = null;
+    _stopping = false;
     if (!mounted) {
       // 정지 완료를 기다리는 사이 위젯이 dispose됨 — 완성된 파일을 이제 아무도
       // 추적하지 않으므로(orphan) 즉시 삭제.
       if (resultPath != null) File(resultPath).delete().ignore();
       return;
     }
-    if (resultPath == null) return;
+    setState(() {});
+    if (resultPath == null) {
+      // 정지 실패(전화 수신·마이크 뺏김·저장공간 부족) — 부분 파일을 지우고, 커밋하려던
+      // 녹음이었으면 왜 사라졌는지 알린다(D3-07: 예전엔 무음으로 증발).
+      if (partialPath != null) File(partialPath).delete().ignore();
+      if (commit) {
+        final t = AppLocalizations.of(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(t.cardAudioRecordFail('${stopError ?? 'stop'}'))),
+        );
+      }
+      return;
+    }
     if (!commit) {
       File(resultPath).delete().ignore();
       return;
@@ -426,7 +448,8 @@ class CardAudioFieldState extends State<CardAudioField> {
     final cs = Theme.of(context).colorScheme;
 
     Widget content;
-    if (_recording) {
+    if (_recording || _stopping) {
+      // 정지가 끝날 때까지 이 줄을 유지한다(버튼만 비활성) — 녹음 버튼이 되살아나지 않게.
       content = Row(
         children: [
           Icon(Icons.fiber_manual_record, color: cs.error, size: 18),
@@ -436,7 +459,7 @@ class CardAudioFieldState extends State<CardAudioField> {
           FilledButton.tonalIcon(
             icon: const Icon(Icons.stop),
             label: Text(t.cardAudioStop),
-            onPressed: _stopRecording,
+            onPressed: _stopping ? null : _stopRecording,
           ),
         ],
       );

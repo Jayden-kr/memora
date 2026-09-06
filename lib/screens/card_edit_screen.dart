@@ -318,7 +318,17 @@ class _CardEditScreenState extends State<CardEditScreen>
     final ts = DateTime.now().millisecondsSinceEpoch;
     final fileName = 'R_$uuid-app-$ts.jpg';
     final destPath = p.join(imageDir.path, fileName);
-    await File(sourcePath).copy(destPath);
+    try {
+      await File(sourcePath).copy(destPath);
+    } catch (_) {
+      // 복사 도중 실패(저장공간 부족 등)하면 부분 파일을 여기서 지운다 — 호출자의 catch는
+      // 아직 경로를 모른다(D3-09).
+      try {
+        final partial = File(destPath);
+        if (await partial.exists()) await partial.delete();
+      } catch (_) {}
+      rethrow;
+    }
     return destPath;
   }
 
@@ -456,10 +466,13 @@ class _CardEditScreenState extends State<CardEditScreen>
     ];
     // 원본 음성도 교체/제거됐으면 삭제 대상에 포함
     final allOriginal = <String?>[...originalPaths, original.questionVoiceRecordPath];
-    for (final path in allOriginal) {
-      if (path != null && path.isNotEmpty && !currentPaths.contains(path)) {
-        File(path).delete().ignore();
-      }
+    final removed = <String>[
+      for (final path in allOriginal)
+        if (path != null && path.isNotEmpty && !currentPaths.contains(path)) path,
+    ];
+    // 다른 카드(복제본·레거시 공유)가 아직 참조하는 파일은 남긴다(Y4-01).
+    if (removed.isNotEmpty) {
+      DatabaseHelper.instance.deleteUnreferencedMediaFiles(removed).ignore();
     }
   }
 
@@ -493,12 +506,11 @@ class _CardEditScreenState extends State<CardEditScreen>
     try {
       await DatabaseHelper.instance.deleteCard(card.id!);
       await DatabaseHelper.instance.updateFolderCardCount(card.folderId);
-      // 🔄 image delete fire-and-forget — DB는 이미 commit됨, 사용자 시점에선 끝.
-      for (final path in [...card.questionImagePaths, ...card.answerImagePaths]) {
-        File(path).delete().ignore();
-      }
-      final vp = card.questionVoiceRecordPath;
-      if (vp != null && vp.isNotEmpty) File(vp).delete().ignore();
+      // 🔄 media delete fire-and-forget — DB는 이미 commit됨, 사용자 시점에선 끝.
+      // 목록 삭제와 같은 40개 경로 컬럼 전부(D8-08) + 공유 파일 보호(D8-04).
+      DatabaseHelper.instance
+          .deleteUnreferencedMediaFiles(card.allMediaPaths)
+          .ignore();
     } catch (e) {
       debugPrint('[CARD_EDIT] delete failed: $e');
       if (!mounted) return;
@@ -622,13 +634,16 @@ class _CardEditScreenState extends State<CardEditScreen>
         // uuid로 복구해 채운 경로(이 화면이 노출하지 않는 손글씨·음성 슬롯 포함)를 열 때의 옛
         // 값으로 되돌렸고, 그 파일은 다음 시작 GC가 지웠다(X3-02).
         final changed = CardEditScreen.changedDbFields(existing, updated);
+        final int updateRows;
         if (_currentFolderId != originalFolderId) {
-          // 폴더 변경은 moveCard로 원자적 처리 (트랜잭션 내 card_count 갱신 포함)
-          await DatabaseHelper.instance.moveCard(widget.existingCard!.id!, _currentFolderId);
-          changed.remove('folder_id'); // 이미 moveCard가 바꿨다
+          // 폴더 변경 + 내용 저장을 한 트랜잭션으로 (card_count 갱신 포함) — 따로 하면 이동만
+          // 커밋된 채 '저장 실패'가 떠 카드가 옛 내용으로 딴 폴더에 가 있었다(D3-11).
+          updateRows = await DatabaseHelper.instance.moveCard(
+              existing.id!, _currentFolderId, fields: changed);
+        } else {
+          updateRows = await DatabaseHelper.instance
+              .updateCardFields(existing.id!, changed);
         }
-        final updateRows = await DatabaseHelper.instance
-            .updateCardFields(existing.id!, changed);
         _cleanupRemovedImages(); // fire-and-forget, await 안 함
         resultCardId = widget.existingCard!.id;
 

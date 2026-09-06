@@ -514,43 +514,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   // ─── Card actions ───
 
   /// 카드의 모든 파일 경로를 수집 (이미지, handImage, voiceRecord)
-  List<String> _collectCardFilePaths(CardModel card) {
-    final paths = <String>[
-      ...card.questionImagePaths,
-      ...card.answerImagePaths,
-    ];
-    for (final p in [
-      card.questionHandImagePath, card.questionHandImagePath2,
-      card.questionHandImagePath3, card.questionHandImagePath4,
-      card.questionHandImagePath5,
-      card.answerHandImagePath, card.answerHandImagePath2,
-      card.answerHandImagePath3, card.answerHandImagePath4,
-      card.answerHandImagePath5,
-      card.questionVoiceRecordPath, card.questionVoiceRecordPath2,
-      card.questionVoiceRecordPath3, card.questionVoiceRecordPath4,
-      card.questionVoiceRecordPath5, card.questionVoiceRecordPath6,
-      card.questionVoiceRecordPath7, card.questionVoiceRecordPath8,
-      card.questionVoiceRecordPath9, card.questionVoiceRecordPath10,
-      card.answerVoiceRecordPath, card.answerVoiceRecordPath2,
-      card.answerVoiceRecordPath3, card.answerVoiceRecordPath4,
-      card.answerVoiceRecordPath5, card.answerVoiceRecordPath6,
-      card.answerVoiceRecordPath7, card.answerVoiceRecordPath8,
-      card.answerVoiceRecordPath9, card.answerVoiceRecordPath10,
-    ]) {
-      if (p != null && p.isNotEmpty) paths.add(p);
-    }
-    return paths;
-  }
+  List<String> _collectCardFilePaths(CardModel card) => card.allMediaPaths;
 
-  /// 파일 경로 리스트의 파일들을 디스크에서 삭제
-  Future<void> _deleteFiles(List<String> paths) async {
-    for (final path in paths) {
-      try {
-        final f = File(path);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
-    }
-  }
+  /// 파일 경로 리스트의 파일들을 디스크에서 삭제 — 다른 카드가 아직 참조하는 파일은 남긴다
+  /// (레거시 .memk는 여러 카드가 같은 파일을 가리킬 수 있다, D8-04). DB 삭제가 커밋된 뒤 호출.
+  Future<void> _deleteFiles(List<String> paths) =>
+      DatabaseHelper.instance.deleteUnreferencedMediaFiles(paths);
 
   Future<void> _deleteCard(CardModel card) async {
     final t = AppLocalizations.of(context);

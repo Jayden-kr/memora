@@ -56,6 +56,7 @@
   "homeNewNameHint": "New name",
   "homeFolderExists": "Folder \"{name}\" already exists.",
   "homeFolderCreateFail": "Failed to create folder: \"{name}\" already exists.",
+  "homeFolderRenameFail": "Failed to rename folder.",
   "homeRenameFolderTitle": "Rename folder",
   "homeFilePickFail": "File pick failed: {error}",
   "homeDeleteFolderTitle": "Delete folders",

@@ -50,8 +50,8 @@ class PdfGenerator(private val context: Context) {
         val res = AppLang.wrap(context)
         val db = openDb() ?: throw Exception("DB not found")
         try {
-            val name = folderName(db, folderId) ?: "Folder"
-            val cards = loadCards(db, folderId)
+            val name = DbReadRetry.run(TAG) { folderName(db, folderId) } ?: "Folder"
+            val cards = DbReadRetry.run(TAG) { loadCards(db, folderId) }
             val n = cards.size
 
             val doc = PdfDocument()
@@ -110,8 +110,8 @@ class PdfGenerator(private val context: Context) {
                 ImportExportService.updateProgress(context, res.getString(R.string.ie_exporting), "$name — $savingPdf", savePercent, 100, "export")
                 FileOutputStream(outputPath).use { doc.writeTo(it) }
                 Log.d(TAG, "PDF saved: $outputPath ($pn pages, $n cards)")
-            } catch (e: Exception) {
-                // 실패 시 불완전 PDF 파일 삭제
+            } catch (e: Throwable) {
+                // 실패 시 불완전 PDF 파일 삭제 (OOM 같은 Error도 — 안 잡으면 잘린 PDF가 남았다, D9-06)
                 try { java.io.File(outputPath).delete() } catch (_: Exception) {}
                 throw e
             } finally {
@@ -309,9 +309,10 @@ class PdfGenerator(private val context: Context) {
             File(context.filesDir, "app_flutter/memora.db"),
             context.getDatabasePath("memora.db"),
         )) { if (c.exists()) {
-            val db = SQLiteDatabase.openDatabase(c.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
-            try { db.enableWriteAheadLogging() } catch (_: Exception) {}
-            return db
+            // 읽기 전용 핸들엔 enableWriteAheadLogging()이 무효 — 대신 잠금(BUSY) 시 짧게 재시도(D8-05).
+            return DbReadRetry.run(TAG) {
+                SQLiteDatabase.openDatabase(c.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+            }
         } }
         return null
     }

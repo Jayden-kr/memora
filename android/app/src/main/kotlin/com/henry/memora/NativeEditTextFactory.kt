@@ -33,7 +33,10 @@ class NativeEditTextView(
     params: Map<*, *>
 ) : PlatformView {
 
-    private val density: Float = context.resources.displayMetrics.density
+    // 매번 읽는다 — 매니페스트가 density/screenSize 변경을 Activity 재생성 없이 처리하므로
+    // 생성 시점 값을 캐시하면 폴더블 펼침·글꼴 크기 변경 뒤 높이/커서 dp가 어긋났다(D3-10).
+    private val density: Float
+        get() = editText.resources.displayMetrics.density
     private var lastReportedHeightDp: Double = -1.0
     private var heightPostScheduled: Boolean = false
     private var lastCaretTopDp: Double = -1.0
@@ -82,6 +85,10 @@ class NativeEditTextView(
         isFocusable = true
         isFocusableInTouchMode = true
         isLongClickable = true
+        // 플랫폼 뷰는 시스템 로케일의 레이아웃 방향을 상속한다 — RTL 시스템(히브리어/아랍어)에서
+        // 이 두 필드만 우측 정렬돼 앱 언어(ko/en, LTR)를 따르는 Flutter UI와 어긋났다(X5-06).
+        // 문단 방향(textDirection)은 기본 FIRST_STRONG이라 히브리어 문장은 여전히 RTL로 그려진다.
+        layoutDirection = View.LAYOUT_DIRECTION_LTR
 
         if (isDark) {
             setTextColor(Color.parseColor("#E0E0E0"))
@@ -248,8 +255,11 @@ class NativeEditTextView(
         val layout = editText.layout ?: return
         val sel = editText.selectionEnd.coerceIn(0, editText.text?.length ?: 0)
         val line = layout.getLineForOffset(sel)
-        val topDp = (layout.getLineTop(line) + editText.paddingTop).toDouble() / density
-        val bottomDp = (layout.getLineBottom(line) + editText.paddingTop).toDouble() / density
+        // EditText 내부 스크롤(scrollY)을 뺀다 — 내용이 Dart 상한(2000dp)을 넘어 안에서
+        // 스크롤되는 긴 카드에서 이걸 빼지 않으면 뷰 밖 좌표를 보내 화면이 맨 아래로 튀었다(Z1-05).
+        val scrollY = editText.scrollY
+        val topDp = (layout.getLineTop(line) + editText.paddingTop - scrollY).toDouble() / density
+        val bottomDp = (layout.getLineBottom(line) + editText.paddingTop - scrollY).toDouble() / density
         // 같은 줄에서 좌우로만 움직인 경우는 스크롤할 이유가 없다.
         if (kotlin.math.abs(topDp - lastCaretTopDp) < 0.5 &&
             kotlin.math.abs(bottomDp - lastCaretBottomDp) < 0.5) return

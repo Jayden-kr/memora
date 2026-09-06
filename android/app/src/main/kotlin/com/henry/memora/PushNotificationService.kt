@@ -627,8 +627,10 @@ class PushNotificationService : Service() {
         val dbFile = findDbFile() ?: return
         var db: SQLiteDatabase? = null
         try {
-            db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
-            try { db.enableWriteAheadLogging() } catch (_: Exception) {} // WAL 모드: Flutter sqflite와 동시 읽기 허용 (별도 :push 프로세스)
+            // 읽기 전용 핸들엔 enableWriteAheadLogging()이 무효 — 조회를 잠금(BUSY) 시 재시도한다(D8-05).
+            db = DbReadRetry.run(TAG) {
+                SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+            }
 
             // 직전에 뜬 카드 재출현 방지용 최근 카드 ID 목록. push_notif_prefs는
             // :push 프로세스(이 서비스)만 읽고 쓴다.
@@ -642,7 +644,8 @@ class PushNotificationService : Service() {
             val recentCardIds = parseRecentIds(pushPrefs.getString("recentCardIds", null))
 
             // 랜덤 카드 조회 (규칙이 지정한 폴더 우선, 직전 카드들 제외)
-            var (cardId, cardFolderId, question) = queryRandomCard(db, targetFolderId, recentCardIds)
+            var (cardId, cardFolderId, question) =
+                DbReadRetry.run(TAG) { queryRandomCard(db, targetFolderId, recentCardIds) }
 
             // 카드 0건 폴백: 규칙이 가리키는 폴더가 삭제되었거나 카드가 비어 있으면
             // 전체 폴더로 1회 재조회 — 규칙 폴더가 무효해졌다고 알림 자체가 조용히
@@ -650,7 +653,7 @@ class PushNotificationService : Service() {
             // 결과가 같으므로 스킵.
             if (cardId <= 0 && targetFolderId != null) {
                 Log.w(TAG, "규칙 폴더($targetFolderId) 카드 없음, 전체 폴더로 재조회")
-                val fallback = queryRandomCard(db, null, recentCardIds)
+                val fallback = DbReadRetry.run(TAG) { queryRandomCard(db, null, recentCardIds) }
                 cardId = fallback.first
                 cardFolderId = fallback.second
                 question = fallback.third

@@ -191,7 +191,9 @@ class MainActivity : FlutterActivity() {
                                         try { result.success(true) }
                                         catch (e2: Exception) { Log.w(TAG, "Result already replied", e2) }
                                     }
-                                } catch (e: Exception) {
+                                } catch (e: Throwable) {
+                                    // Exception만 잡으면 OOM 같은 Error는 result 응답 없이 프로세스를
+                                    // 죽이고 Dart await가 영영 안 돌아왔다(D9-06).
                                     Log.e(TAG, "PDF generation failed", e)
                                     runOnUiThread {
                                         try { result.error("PDF_ERROR", e.message, null) }

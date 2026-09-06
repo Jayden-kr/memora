@@ -326,6 +326,18 @@ class DatabaseHelper {
     return Folder.fromDb(maps.first);
   }
 
+  /// 이름만 바꾼다 — updateFolder(스냅샷 전체 되쓰기)는 화면이 들고 있던 옛 card_count/
+  /// parent_folder_id를 DB에 덮어써 카드 수가 옛 값으로 굳고 묶음 소속이 풀렸다(D1-03/D8-09).
+  Future<int> renameFolder(int id, String newName) async {
+    final db = await database;
+    return await db.update(
+      AppConstants.tableFolders,
+      {'name': newName},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<int> updateFolder(Folder folder) async {
     final db = await database;
     final map = folder.toDb();
@@ -593,15 +605,13 @@ class DatabaseHelper {
 
   Future<void> updateFolderCardCount(int folderId) async {
     final db = await database;
-    final count = Sqflite.firstIntValue(await db.rawQuery(
-      'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
-      [folderId],
-    )) ?? 0;
-    await db.update(
-      AppConstants.tableFolders,
-      {'card_count': count},
-      where: 'id = ?',
-      whereArgs: [folderId],
+    // COUNT와 UPDATE를 한 문장으로 — 두 문장 사이에 다른 쓰기(import 마무리 vs 카드 추가/삭제)가
+    // 끼면 틀린 값이 굳었다(X2-06). 다른 카운트 갱신 경로는 전부 트랜잭션 안이었다.
+    await db.rawUpdate(
+      'UPDATE ${AppConstants.tableFolders} SET card_count = '
+      '(SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id = ?) '
+      'WHERE id = ?',
+      [folderId, folderId],
     );
   }
 
@@ -720,16 +730,33 @@ class DatabaseHelper {
   Future<int> countCardsByFolderIds(List<int> folderIds) async {
     if (folderIds.isEmpty) return 0;
     final db = await database;
-    final placeholders = List.filled(folderIds.length, '?').join(',');
-    return Sqflite.firstIntValue(await db.rawQuery(
-      'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id IN ($placeholders)',
-      folderIds,
-    )) ?? 0;
+    // 다른 배치 헬퍼와 같이 IN 절을 청크로 나눈다 — 폴더가 극단적으로 많으면 SQLite 변수
+    // 한도에 걸려 전체 export가 예외로 죽었다(D8-07).
+    var total = 0;
+    for (var i = 0; i < folderIds.length; i += _sqlInChunkSize) {
+      final end = (i + _sqlInChunkSize < folderIds.length)
+          ? i + _sqlInChunkSize
+          : folderIds.length;
+      final chunk = folderIds.sublist(i, end);
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      total += Sqflite.firstIntValue(await db.rawQuery(
+        'SELECT COUNT(*) FROM ${AppConstants.tableCards} WHERE folder_id IN ($placeholders)',
+        chunk,
+      )) ?? 0;
+    }
+    return total;
   }
 
-  Future<int> moveCard(int cardId, int newFolderId) async {
+  /// [fields]가 있으면 같은 트랜잭션에서 그 컬럼도 함께 UPDATE한다 — 편집 저장이 폴더 이동과
+  /// 내용 저장을 따로 하면 이동만 커밋된 채 '저장 실패'가 떠 카드가 옛 내용으로 딴 폴더에
+  /// 가 있었다(D3-11).
+  Future<int> moveCard(int cardId, int newFolderId,
+      {Map<String, Object?>? fields}) async {
     final db = await database;
     int result = 0;
+    final extra = fields == null ? null : (Map<String, Object?>.from(fields)
+      ..remove('id')
+      ..remove('folder_id'));
     await db.transaction((txn) async {
       // 이동 전 원래 폴더 ID 조회
       final card = await txn.query(
@@ -743,7 +770,7 @@ class DatabaseHelper {
 
       result = await txn.update(
         AppConstants.tableCards,
-        {'folder_id': newFolderId},
+        {'folder_id': newFolderId, ...?extra},
         where: 'id = ?',
         whereArgs: [cardId],
       );
@@ -775,6 +802,55 @@ class DatabaseHelper {
       'SELECT MAX(sequence) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
       [folderId],
     )) ?? 0;
+  }
+
+  /// [paths] 중 아직 어떤 카드가 참조하는 경로. 카드/이미지 삭제 뒤 파일을 지우기 전에 불러,
+  /// 여러 카드가 공유하는 파일(레거시 .memk가 같은 파일을 여러 카드에 심는다)을 남의 카드에서
+  /// 뺏지 않게 한다(D8-04/Y4-01). 호출 시점엔 삭제/수정이 이미 커밋돼 있어야 한다.
+  Future<Set<String>> referencedMediaPaths(Iterable<String> paths) async {
+    final unique = paths.where((p) => p.isNotEmpty).toSet().toList();
+    if (unique.isEmpty) return {};
+    final db = await database;
+    final found = <String>{};
+    for (var i = 0; i < unique.length; i += _sqlInChunkSize) {
+      final end = (i + _sqlInChunkSize < unique.length)
+          ? i + _sqlInChunkSize
+          : unique.length;
+      final chunk = unique.sublist(i, end);
+      final ph = List.filled(chunk.length, '?').join(',');
+      for (final col in _pathColumns) {
+        final rows = await db.rawQuery(
+          'SELECT DISTINCT $col AS p FROM ${AppConstants.tableCards} WHERE $col IN ($ph)',
+          chunk,
+        );
+        for (final r in rows) {
+          final p = r['p'] as String?;
+          if (p != null) found.add(p);
+        }
+      }
+    }
+    return found;
+  }
+
+  /// 카드 삭제/편집 뒤 미디어 파일 정리 — 다른 카드가 여전히 참조하는 파일은 남긴다.
+  Future<void> deleteUnreferencedMediaFiles(Iterable<String> paths) async {
+    final wanted = paths.where((p) => p.isNotEmpty).toSet();
+    if (wanted.isEmpty) return;
+    Set<String> keep;
+    try {
+      keep = await referencedMediaPaths(wanted);
+    } catch (e) {
+      // 참조 검사가 실패하면 지우지 않는다 — 고아 파일은 시작 GC가 회수하지만 남의 카드
+      // 이미지를 지우면 되돌릴 수 없다.
+      debugPrint('[DB] referencedMediaPaths failed, keeping files: $e');
+      return;
+    }
+    for (final path in wanted.difference(keep)) {
+      try {
+        final f = File(path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
   }
 
   /// 이미지/음성 경로 컬럼 목록 (import 시 복구용)
@@ -903,22 +979,19 @@ class DatabaseHelper {
   /// 랜덤 카드 1개 조회 (알림용, 미완료 카드 우선)
   Future<CardModel?> getRandomCard({int? folderId}) async {
     final db = await database;
-    // 미완료 카드 우선 선택, 없으면 전체에서 선택
-    final folderClause = folderId != null ? 'folder_id = ? AND ' : '';
-    final baseArgs = folderId != null ? [folderId] : <Object>[];
+    // 실제 푸시(PushNotificationService.queryRandomCard)와 같은 모집단 — 폴더 안 전체 카드에서
+    // 무작위, 폴더에 카드가 없으면 전체 폴더로 1회 폴백. 예전엔 여기만 '미완료 우선'이라
+    // 테스트 알림과 실제 알림이 다른 카드를 뽑았다(D8-11).
     var maps = await db.query(
       AppConstants.tableCards,
-      where: '${folderClause}finished = 0',
-      whereArgs: baseArgs,
+      where: folderId != null ? 'folder_id = ?' : null,
+      whereArgs: folderId != null ? [folderId] : null,
       orderBy: 'RANDOM()',
       limit: 1,
     );
-    if (maps.isEmpty) {
-      // 미완료 카드 없으면 전체에서 선택
+    if (maps.isEmpty && folderId != null) {
       maps = await db.query(
         AppConstants.tableCards,
-        where: folderId != null ? 'folder_id = ?' : null,
-        whereArgs: folderId != null ? [folderId] : null,
         orderBy: 'RANDOM()',
         limit: 1,
       );
@@ -1183,7 +1256,12 @@ class DatabaseHelper {
       if (path is! String || path.isEmpty) continue;
       try {
         final file = File(path);
-        if (!await file.exists()) continue;
+        if (!await file.exists()) {
+          // 원본 파일이 없으면 경로를 비운다 — 그대로 두면 두 카드가 같은 경로를 가리켜,
+          // 재import로 그 파일이 되살아난 뒤 한쪽 삭제가 다른 쪽 이미지를 지웠다(X4-04).
+          dbMap[key] = null;
+          continue;
+        }
         final dir = file.parent.path;
         final ext = p.extension(path);
         final ts = DateTime.now().microsecondsSinceEpoch;
