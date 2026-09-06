@@ -1124,18 +1124,38 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
   // "설정을 통째로 읽고 → Dart에서 걸러내고 → 통째로 되쓰기"라 두 개가 겹치면 나중
   // 것이 앞의 것을 덮어써, 이미 지운 폴더를 가리키는 규칙이 되살아난다(스윕 L-02).
   // 트랜잭션으로 감싸기엔 네이티브 채널까지 걸쳐 있어, 호출을 줄로 세운다.
+  //
+  // ⚠️ 줄을 세우는 순간 "하나가 멈추면 전부 멈춘다"가 된다. 이 안에서 부르는 것들은
+  // 전부 네이티브 채널 왕복이고, invokeMethod는 네이티브가 답을 안 주면 영영 완료되지
+  // 않는다. 타임아웃이 없으면 한 번의 행(hang)으로 이후 모든 폴더 삭제의 사후 정리가
+  // 프로세스가 죽을 때까지 조용히 큐에 쌓인다(리뷰 R-01). 앞사람을 기다리는 것과
+  // 내 작업 자체에 각각 상한을 둔다.
+  const limit = Duration(seconds: 30);
+  const failed =
+      (removedRules: 0, pushDisabled: false, lockScreenDisabled: false);
   final previous = _cleanupChain;
   final gate = Completer<void>();
   _cleanupChain = gate.future;
-  await previous;
+  try {
+    await previous.timeout(limit, onTimeout: () {});
+  } catch (e) {
+    debugPrint('[HOME] cleanup chain wait failed: $e');
+  }
   try {
     return await _cleanupAfterFolderDeleteImpl(
       regularIds: regularIds,
       needsPushReschedule: needsPushReschedule,
       filePaths: filePaths,
-    );
+    ).timeout(limit, onTimeout: () {
+      debugPrint('[HOME] post-delete cleanup timed out');
+      return failed;
+    });
+  } catch (e) {
+    debugPrint('[HOME] post-delete cleanup failed: $e');
+    return failed;
   } finally {
-    gate.complete();
+    // 어떤 경로로 빠져나가든 다음 사람을 반드시 풀어준다.
+    if (!gate.isCompleted) gate.complete();
   }
 }
 
@@ -1178,6 +1198,10 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
 void showPushRulesRemovedNotice(
     BuildContext context,
     ({int removedRules, bool pushDisabled, bool lockScreenDisabled}) pruned) {
+  // 정리를 줄 세운 뒤로는 이 안내가 몇 초 늦게 도착할 수 있다. mounted만 보면 위젯이
+  // 스택에 살아있기만 해도 통과해, 사용자가 이미 다른 화면으로 넘어간 뒤에 뜬다.
+  // 지금 보이는 화면일 때만 띄운다(리뷰 R-02).
+  if (ModalRoute.of(context)?.isCurrent != true) return;
   final t = AppLocalizations.of(context);
   final messenger = ScaffoldMessenger.of(context);
   if (pruned.removedRules > 0) {

@@ -480,8 +480,11 @@ class MemkImportService {
                 : '카드 처리 중... $processed / $totalCards',
           ));
 
-          // UI 갱신 기회
+          // UI 갱신 기회. 양보 중에 남이 카드를 넣었을 수 있으므로, 갱신은 양보
+          // "뒤"에 한 번 더 한다 — 양보 전에만 읽으면 그 틈에 들어온 값을 놓친다
+          // (리뷰 R-04).
           await Future.delayed(Duration.zero);
+          await refreshNextCardSeq();
         }
       } catch (e) {
         debugPrint('[IMPORT] card parse error: $e');

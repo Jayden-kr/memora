@@ -434,12 +434,19 @@ Future<void> _reconcileLockScreenFoldersOnce() async {
     // (스윕 S-02). 시작 시점이라 아직 화면이 없을 수 있어 첫 프레임 뒤로 미룬다.
     if (disabled) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final messenger = scaffoldMessengerKey.currentState;
-        final context = navigatorKey.currentContext;
-        if (messenger == null || context == null) return;
-        messenger.showSnackBar(SnackBar(
-          content: Text(AppLocalizations.of(context).homeLockScreenTurnedOff),
-        ));
+        // 이 콜백은 바깥 함수가 이미 반환한 뒤에 돈다 — 여기서 던지면 위의
+        // try/catch가 못 잡고 프레임을 깬다(리뷰 R-05). 안내 하나 때문에 그럴
+        // 이유가 없으니 여기서 삼킨다.
+        try {
+          final messenger = scaffoldMessengerKey.currentState;
+          final context = navigatorKey.currentContext;
+          if (messenger == null || context == null) return;
+          messenger.showSnackBar(SnackBar(
+            content: Text(AppLocalizations.of(context).homeLockScreenTurnedOff),
+          ));
+        } catch (e) {
+          debugPrint('[STARTUP] 잠금화면 종료 안내 실패: $e');
+        }
       });
     }
   } catch (e) {

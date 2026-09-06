@@ -150,6 +150,13 @@ class DatabaseHelper {
     await db.execute('''
       CREATE INDEX idx_cards_uuid ON ${AppConstants.tableCards}(uuid)
     ''');
+    // 병합 가져오기가 배치마다 `MAX(sequence) WHERE folder_id = ?`를 돈다. folder_id
+    // 단독 인덱스로는 해당 폴더의 행을 전부 훑어야 해서, 큰 폴더에 4만 장을 병합하면
+    // 전수 스캔이 수백 번 반복된다. (folder_id, sequence) 복합 인덱스면 그 집계가
+    // 인덱스 끝 한 번 읽기로 끝난다(리뷰 R-03).
+    await db.execute('''
+      CREATE INDEX idx_cards_folder_seq ON ${AppConstants.tableCards}(folder_id, sequence)
+    ''');
 
     await db.execute('''
       CREATE TABLE ${AppConstants.tableCounters} (
@@ -228,6 +235,16 @@ class DatabaseHelper {
           sound_enabled INTEGER DEFAULT 1
         )
       ''');
+    }
+    if (oldVersion < 4) {
+      // 인덱스 추가는 데이터를 건드리지 않는다 — 실패해도 기능은 그대로 돌아가므로
+      // (느려질 뿐) 업그레이드 전체를 실패시키지 않는다.
+      try {
+        await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_cards_folder_seq ON ${AppConstants.tableCards}(folder_id, sequence)');
+      } catch (e) {
+        debugPrint('[DB] idx_cards_folder_seq 생성 실패(무시): $e');
+      }
     }
     if (oldVersion < 3) {
       await db.execute(
