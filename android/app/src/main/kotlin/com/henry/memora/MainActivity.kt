@@ -283,14 +283,19 @@ class MainActivity : FlutterActivity() {
                                 } else {
                                     startService(intent)
                                 }
+                                result.success(true)
                             } catch (e: Exception) {
                                 // push_notif_prefs는 :push 프로세스와 공유되는 파일이다. SharedPreferences는
                                 // 프로세스별로 전체 맵을 메모리에 캐시했다가 commit() 시 통째로 다시 쓰므로,
                                 // 여기서 메인 프로세스가 커밋하면 :push가 그 사이 기록한 최신 스케줄
-                                // (nextFireTime 등)을 되돌려버릴 수 있다 — prefs는 건드리지 않고 로그만 남긴다.
+                                // (nextFireTime 등)을 되돌려버릴 수 있다 — prefs는 건드리지 않는다.
+                                // ⚠️ 실패를 성공으로 답하면 안 된다(리뷰 F-01): Dart가 "STOP 보냄"을
+                                // 영구 기록해 다음 실행부터 STOP을 영영 생략하고, 정작 서비스는
+                                // running=true인 채로 살아 있어 끈 뒤에도 알림이 계속 온다.
+                                // false를 돌려주면 Dart가 기록을 미뤄 다음 실행에서 다시 시도한다.
                                 Log.w(TAG, "Failed to send STOP to PushNotificationService: ${e.message}")
+                                result.success(false)
                             }
-                            result.success(true)
                         }
                         "isRunning" -> {
                             val prefs = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)

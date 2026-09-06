@@ -327,8 +327,13 @@ class NotificationService {
   /// "켰다가 끄기"는 반드시 STOP이 나가게 하는 안전망(리뷰 PG-03).
   static bool _pushStartedThisProcess = false;
 
+  /// 이 프로세스에서 STOP을 이미 성공적으로 보냈는지. DB 기록이 실패해도 같은 세션에서
+  /// 반복 발송(=`:push` 반복 생성)하지 않게 한다(리뷰 F-02).
+  static bool _pushStopRequestedThisProcess = false;
+
   static Future<void> _markPushEverStarted() async {
     _pushStartedThisProcess = true;
+    _pushStopRequestedThisProcess = false;
     try {
       await DatabaseHelper.instance
           .upsertSetting(_settingPushEverStarted, 'true');
@@ -395,16 +400,24 @@ class NotificationService {
         final nothingToStop = !needsMigration &&
             !enabled &&
             !_pushStartedThisProcess &&
-            (!everStarted || stopRequested);
+            (!everStarted || stopRequested || _pushStopRequestedThisProcess);
         if (nothingToStop) {
           debugPrint('[NOTIF] 멈출 푸시 서비스 없음 — 중지 요청 생략(:push 생성 방지)');
           return;
         }
       }
-      await _pushNotifChannel.invokeMethod('stopService');
+      // 네이티브는 STOP 인텐트 발송에 실패하면 false를 돌려준다(백그라운드 FGS 시작 제한 등).
+      // 그때 "보냈다"고 기록해 버리면 다음 실행부터 영영 생략하는데 정작 서비스는 running=true로
+      // 살아 있어, 끈 뒤에도 알림이 계속 온다(리뷰 F-01). 성공했을 때만 기록한다.
+      final sent = await _pushNotifChannel.invokeMethod<bool>('stopService');
+      if (sent != true) {
+        debugPrint('[NOTIF] 중지 요청 전송 실패 — 플래그 기록 보류(다음 실행에서 재시도)');
+        return;
+      }
       debugPrint('[NOTIF] 서비스 중지 요청 전송');
-      // 보냈다는 사실을 남겨 다음 실행부터는 생략할 수 있게 한다. 이 시점의 앱은 포그라운드
-      // (설정 토글) 또는 시작 직후라 startForegroundService가 막히지 않는다.
+      // 이 프로세스에서는 다시 보내지 않는다 — 아래 DB 기록이 실패해도 같은 세션에서
+      // 반복 발송하지 않게(리뷰 F-02). 다음 실행은 기록이 없으면 안전하게 다시 보낸다.
+      _pushStopRequestedThisProcess = true;
       try {
         await DatabaseHelper.instance
             .upsertSetting(_settingPushStopRequested, 'true');
