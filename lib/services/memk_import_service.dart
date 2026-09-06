@@ -461,8 +461,6 @@ class MemkImportService {
         // 배치 insert (UUID 중복은 건너뜀)
         if (batch.length >= AppConstants.importBatchSize) {
           await flushBatch();
-          // flush로 커밋된 값 + 그 사이 남이 끼워 넣은 값을 함께 반영한다(스윕 D-01).
-          await refreshNextCardSeq();
           if (shouldCancel?.call() ?? false) {
             cancelled = true;
             break;
@@ -480,10 +478,12 @@ class MemkImportService {
                 : '카드 처리 중... $processed / $totalCards',
           ));
 
-          // UI 갱신 기회. 양보 중에 남이 카드를 넣었을 수 있으므로, 갱신은 양보
-          // "뒤"에 한 번 더 한다 — 양보 전에만 읽으면 그 틈에 들어온 값을 놓친다
-          // (리뷰 R-04).
+          // UI 갱신 기회.
           await Future.delayed(Duration.zero);
+          // 순번 갱신은 **양보 뒤 한 번만** 한다. flush 직후에도 읽으면 그 사이엔
+          // 아무도 쓰지 않아 값이 같고, 폴더 수만큼 쿼리를 두 배로 돌린다. 정작
+          // 남이 끼어들 수 있는 자리는 이 양보이므로 여기서 읽는 것이 맞다
+          // (리뷰 R2-F). flush로 내가 넣은 것도 여기서 함께 반영된다.
           await refreshNextCardSeq();
         }
       } catch (e) {
