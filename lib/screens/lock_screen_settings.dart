@@ -139,7 +139,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     // 방어적 정리: lock_bg/ 디렉토리에 "최대 1개만 유지" 불변식을 이 화면을 열 때마다
     // 다시 강제한다 — 강제종료 등으로 교체 도중 파일이 두 개 남는 극히 드문 경우를
     // 스스로 회복시킨다. fire-and-forget, 실패해도 무시(다음 방문 때 재시도).
-    unawaited(_cleanupStaleBgImages(bgImagePath));
+    // getSettings가 실패하면 빈 맵을 돌려준다 — 그걸 "배경 없음"으로 읽고 정리를 돌리면
+    // 멀쩡한 배경 파일을 지운다(감사 X4-05). 값이 있을 때만 정리한다.
+    if (settings.isNotEmpty) {
+      unawaited(_cleanupStaleBgImages(bgImagePath));
+    }
 
     if (!mounted) return;
 

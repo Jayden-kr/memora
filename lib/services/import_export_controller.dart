@@ -54,7 +54,13 @@ class ImportExportController {
     lastExportError = null;
   }
 
-  /// 진행 중인 작업을 강제 취소 (OOM/stuck 복구용)
+  /// 진행 중인 작업 상태를 강제로 되돌린다(락 해제 + 알림 정리).
+  ///
+  /// ⚠️ 이름과 달리 **돌고 있는 작업 자체를 중단시키지는 못한다** — import/export 루프에
+  /// 취소 신호를 전달할 수단이 없어서, 이 함수는 컨트롤러 쪽 상태만 정리한다. 실제로
+  /// 호출되는 곳은 앱 시작의 [cleanupStaleState] 하나이며, 그 시점엔 이전 프로세스가
+  /// 이미 죽어 있어 "돌고 있는 작업"이 존재하지 않는다(감사 Y3-02: 예전 주석은 "OOM/stuck
+  /// 복구"라고 적어 두어, 진행 중 작업을 멈출 수 있는 것처럼 읽혔다).
   void forceCancel() {
     if (!isRunning) return;
     isRunning = false;
@@ -68,6 +74,10 @@ class ImportExportController {
   /// 앱 시작 시 잔여 상태 정리. main()이 await한다 — 시작 GC의 "import 중이면 스킵"
   /// 가드가 이 마커 정리와 순서가 고정돼야 하기 때문(둘 다 fire-and-forget이던 시절엔
   /// 가드가 실행마다 랜덤으로 켜졌다 꺼졌다 했다).
+  ///
+  /// 하는 일은 두 가지뿐이다. 지난 실행이 남긴 `import_in_progress` 마커를 지우고,
+  /// 그 흔적이 있었을 때만 진행 알림을 내린다. **반쯤 들어간 폴더·카드를 되돌리지는
+  /// 않는다**(감사 Y3-02: 예전 주석의 "OOM-recovery"는 그런 복구를 하는 것처럼 읽혔다).
   Future<void> cleanupStaleState() async {
     if (isRunning) forceCancel();
     // OOM-recovery: 이전 import가 중간에 죽었으면 stale marker 살아있음.
@@ -391,17 +401,15 @@ class ImportExportController {
         final safeName = _sanitizeFileName(folder.name);
         var fileName = '$safeName.mra';
         var outputPath = p.join(exportDirPath, fileName);
+        // 감사 Y4-01: 예전엔 기존 파일을 **먼저 지우고** 새로 만들었다. 새 내보내기가
+        // 실패하면(디스크 부족·중단) 멀쩡하던 백업만 사라졌다. 임시 파일에 다 쓴 뒤
+        // 성공했을 때만 교체한다.
+        final overwriting = conflictPolicy == 'overwrite' &&
+            !usedOutputPaths.contains(outputPath) &&
+            File(outputPath).existsSync();
         if (conflictPolicy == 'overwrite' &&
             !usedOutputPaths.contains(outputPath)) {
-          // 동일 이름 파일이 있으면 삭제 후 덮어쓰기 + DB 레코드도 정리
-          final existing = File(outputPath);
-          if (existing.existsSync()) {
-            try { await existing.delete(); } catch (_) {}
-            try {
-              await DatabaseHelper.instance
-                  .deleteExportedFileByPath(outputPath);
-            } catch (_) {}
-          }
+          // 교체는 아래(성공 후)에서 한다.
         } else {
           // 'rename' (기본값) 또는 이번 배치 내 이름 충돌: 숫자 접미사 추가
           // (overwrite 정책이라도 방금 이 배치에서 만든 파일을 지우면 안 됨)
@@ -415,8 +423,9 @@ class ImportExportController {
         }
         usedOutputPaths.add(outputPath);
 
+        final writePath = overwriting ? '$outputPath.tmp' : outputPath;
         await _exportService.exportMemk(
-          outputPath: outputPath,
+          outputPath: writePath,
           folderIds: [folder.id!],
           onProgress: (progress) {
             double subProgress;
@@ -453,6 +462,15 @@ class ImportExportController {
             );
           },
         );
+
+        if (overwriting) {
+          // 여기까지 왔다는 건 새 파일이 완성됐다는 뜻 — 이제야 옛 파일을 치운다.
+          try { await File(outputPath).delete(); } catch (_) {}
+          try {
+            await DatabaseHelper.instance.deleteExportedFileByPath(outputPath);
+          } catch (_) {}
+          await File(writePath).rename(outputPath);
+        }
 
         // exported_files DB 기록 — 크기 조회 실패로 배치를 멈추지 않는다(파일은 이미 만들어졌다).
         final fileSize = await _fileLengthOrZero(outputPath);
@@ -584,16 +602,13 @@ class ImportExportController {
         final safeName = _sanitizeFileName(folder.name);
         var fileName = '$safeName.pdf';
         var outputPath = p.join(exportDirPath, fileName);
+        // .mra 경로와 같은 이유로 임시 파일에 만든 뒤 교체한다(감사 Y4-01).
+        final overwriting = conflictPolicy == 'overwrite' &&
+            !usedOutputPaths.contains(outputPath) &&
+            File(outputPath).existsSync();
         if (conflictPolicy == 'overwrite' &&
             !usedOutputPaths.contains(outputPath)) {
-          final existing = File(outputPath);
-          if (existing.existsSync()) {
-            try { await existing.delete(); } catch (_) {}
-            try {
-              await DatabaseHelper.instance
-                  .deleteExportedFileByPath(outputPath);
-            } catch (_) {}
-          }
+          // 교체는 아래(성공 후)에서 한다.
         } else {
           // 'rename' (기본값) 또는 이번 배치 내 이름 충돌: 숫자 접미사 추가
           var counter = 1;
@@ -606,13 +621,22 @@ class ImportExportController {
         }
         usedOutputPaths.add(outputPath);
 
+        final writePath = overwriting ? '$outputPath.tmp' : outputPath;
         // Android 네이티브 PDF 생성 (Dart VM 힙 사용 안 함)
         await _channel.invokeMethod('generatePdf', {
-          'outputPath': outputPath,
+          'outputPath': writePath,
           'folderId': folder.id!,
           'folderIndex': i,
           'totalFolders': totalFolders,
         });
+
+        if (overwriting) {
+          try { await File(outputPath).delete(); } catch (_) {}
+          try {
+            await DatabaseHelper.instance.deleteExportedFileByPath(outputPath);
+          } catch (_) {}
+          await File(writePath).rename(outputPath);
+        }
 
         // exported_files DB 기록
         final fileSize = await _fileLengthOrZero(outputPath);

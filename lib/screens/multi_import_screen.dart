@@ -73,8 +73,9 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
     for (final path in widget.filePaths) {
       final entry = _FileEntry(path);
       try {
-        final folders =
-            await _controller.importService.readFolderList(path);
+        // 파일마다 아카이브를 물고 있지 않는다 — 이유는 readFolderList 문서 참고(감사 D7-02).
+        final folders = await _controller.importService
+            .readFolderList(path, cacheArchive: false);
         entry.folders = folders;
         entry.totalCards = folders.fold<int>(
           0,

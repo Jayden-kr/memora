@@ -109,6 +109,7 @@
   },
   "homeDeleteFolderBundleNote": "\n묶음 폴더의 하위 폴더는 삭제되지 않습니다.",
   "homeNoExportable": "내보낼 수 있는 폴더가 없습니다.",
+  "homeExportBundlesSkipped": "묶음 {count}개는 제외했습니다. 묶음은 카드가 아니라 폴더를 담습니다.",
   "homeSortTooltip": "정렬",
   "homeSortManual": "수동 (드래그)",
   "homeSortNameAsc": "가나다순",
@@ -172,6 +173,7 @@
   },
   "cardEditEmptyError": "앞면 또는 뒷면을 입력하세요.",
   "cardEditSaveFail": "저장 실패: {error}",
+  "cardEditSaveVerifyFail": "카드가 저장되지 않았습니다. 다시 시도해 주세요.",
   "@cardEditSaveFail": {
     "placeholders": {
       "error": { "type": "String" }

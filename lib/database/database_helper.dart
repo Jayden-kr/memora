@@ -257,16 +257,6 @@ class DatabaseHelper {
     return maps.map((m) => Folder.fromDb(m)).toList();
   }
 
-  Future<List<Folder>> getBundleFolders() async {
-    final db = await database;
-    final maps = await db.query(
-      AppConstants.tableFolders,
-      where: 'is_bundle = 1',
-      orderBy: 'sequence ASC',
-    );
-    return maps.map((m) => Folder.fromDb(m)).toList();
-  }
-
   Future<List<Folder>> getNonBundleFolders() async {
     final db = await database;
     final maps = await db.query(
@@ -351,16 +341,6 @@ class DatabaseHelper {
     );
   }
 
-  Future<int> updateFolderSequence(int folderId, int sequence) async {
-    final db = await database;
-    return await db.update(
-      AppConstants.tableFolders,
-      {'sequence': sequence},
-      where: 'id = ?',
-      whereArgs: [folderId],
-    );
-  }
-
   /// 폴더 시퀀스 일괄 업데이트 (트랜잭션 사용)
   Future<void> updateFolderSequencesBatch(
       Map<int, int> folderIdToSequence) async {
@@ -374,48 +354,6 @@ class DatabaseHelper {
           whereArgs: [entry.key],
         );
       }
-    });
-  }
-
-  Future<int> deleteFolder(int id) async {
-    final db = await database;
-    return await db.delete(
-      AppConstants.tableFolders,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  /// 삭제된 폴더를 참조하는 push_alarms의 folder_id를 NULL로 변경.
-  /// (알람 자체는 유지 — 사용자의 시간/간격 설정 보존, 동작은 '전체 폴더' 모드로 fallback)
-  /// 영향받은 행 수 반환.
-  Future<int> clearFolderRefInPushAlarms(int folderId) async {
-    final db = await database;
-    return await db.update(
-      AppConstants.tablePushAlarms,
-      {'folder_id': null},
-      where: 'folder_id = ?',
-      whereArgs: [folderId],
-    );
-  }
-
-  /// 묶음 폴더 삭제: 자식 폴더 해제 + 묶음 삭제를 원자적으로 실행
-  Future<void> deleteBundleFolder(int bundleId) async {
-    final db = await database;
-    await db.transaction((txn) async {
-      // 자식 폴더의 parent_folder_id 해제
-      await txn.update(
-        AppConstants.tableFolders,
-        {'parent_folder_id': null},
-        where: 'parent_folder_id = ?',
-        whereArgs: [bundleId],
-      );
-      // 묶음 폴더 삭제
-      await txn.delete(
-        AppConstants.tableFolders,
-        where: 'id = ?',
-        whereArgs: [bundleId],
-      );
     });
   }
 
@@ -630,30 +568,6 @@ class DatabaseHelper {
     return await db.insert(AppConstants.tableCards, card.toDb());
   }
 
-  Future<List<CardModel>> getCardsByFolderId(
-    int folderId, {
-    int? limit,
-    int? offset,
-    int? finished,
-  }) async {
-    final db = await database;
-    String where = 'folder_id = ?';
-    List<dynamic> whereArgs = [folderId];
-    if (finished != null) {
-      where += ' AND finished = ?';
-      whereArgs.add(finished);
-    }
-    final maps = await db.query(
-      AppConstants.tableCards,
-      where: where,
-      whereArgs: whereArgs,
-      orderBy: 'sequence ASC',
-      limit: limit,
-      offset: offset,
-    );
-    return maps.map((m) => CardModel.fromDb(m)).toList();
-  }
-
   Future<CardModel?> getCardById(int id) async {
     final db = await database;
     final maps = await db.query(
@@ -664,30 +578,6 @@ class DatabaseHelper {
     );
     if (maps.isEmpty) return null;
     return CardModel.fromDb(maps.first);
-  }
-
-  Future<CardModel?> getCardByUuid(String uuid) async {
-    final db = await database;
-    final maps = await db.query(
-      AppConstants.tableCards,
-      where: 'uuid = ?',
-      whereArgs: [uuid],
-      limit: 1,
-    );
-    if (maps.isEmpty) return null;
-    return CardModel.fromDb(maps.first);
-  }
-
-  Future<int> updateCard(CardModel card) async {
-    final db = await database;
-    final map = card.toDb();
-    map.remove('id'); // id는 WHERE 절에서 사용하므로 SET 절에서 제외
-    return await db.update(
-      AppConstants.tableCards,
-      map,
-      where: 'id = ?',
-      whereArgs: [card.id],
-    );
   }
 
   /// 지정한 컬럼만 UPDATE. 편집 저장이 쓴다 — 전체 컬럼 되쓰기는 동시에 도는 import의
@@ -966,31 +856,6 @@ class DatabaseHelper {
       }
     });
     return (inserted: inserted, skipped: skipped);
-  }
-
-  /// 모든 카드 조회 (export용 — 페이지네이션)
-  Future<List<CardModel>> getAllCards({int? limit, int? offset, String? sortBy}) async {
-    final db = await database;
-    String orderBy;
-    switch (sortBy) {
-      case 'newest':
-        orderBy = 'id DESC';
-      case 'oldest':
-        orderBy = 'id ASC';
-      case 'name_asc':
-        orderBy = 'question ASC';
-      case 'random':
-        orderBy = 'RANDOM()';
-      default:
-        orderBy = 'folder_id, sequence';
-    }
-    final maps = await db.query(
-      AppConstants.tableCards,
-      limit: limit,
-      offset: offset,
-      orderBy: orderBy,
-    );
-    return maps.map((m) => CardModel.fromDb(m)).toList();
   }
 
   /// 모든 카드의 id만 정렬 옵션으로 조회. allCards 모드 알림용 indexOf 계산.
@@ -1319,38 +1184,6 @@ class DatabaseHelper {
     }
   }
 
-  /// 정렬 옵션으로 카드 조회
-  Future<List<CardModel>> getCardsByFolderIdSorted(
-    int folderId,
-    String sortBy, {
-    int? limit,
-    int? offset,
-  }) async {
-    final db = await database;
-    String orderBy;
-    switch (sortBy) {
-      case 'newest':
-        orderBy = 'id DESC';
-      case 'oldest':
-        orderBy = 'id ASC';
-      case 'name_asc':
-        orderBy = 'question ASC';
-      case 'random':
-        orderBy = 'RANDOM()';
-      default:
-        orderBy = 'sequence ASC';
-    }
-    final maps = await db.query(
-      AppConstants.tableCards,
-      where: 'folder_id = ?',
-      whereArgs: [folderId],
-      orderBy: orderBy,
-      limit: limit,
-      offset: offset,
-    );
-    return maps.map((m) => CardModel.fromDb(m)).toList();
-  }
-
   /// id만 정렬 옵션으로 조회. 알림 진입 시 정확한 indexOf 계산용.
   /// (large query에서 row corruption이 발생해도 id 컬럼만이라면 transaction
   /// 한계를 충분히 회피한다)
@@ -1519,106 +1352,11 @@ class DatabaseHelper {
     );
   }
 
-  Future<Map<String, dynamic>?> getExportedFileByPath(String filePath) async {
-    final db = await database;
-    final maps = await db.query(
-      AppConstants.tableExportedFiles,
-      where: 'file_path = ?',
-      whereArgs: [filePath],
-      limit: 1,
-    );
-    if (maps.isEmpty) return null;
-    return maps.first;
-  }
-
   // ─── Push Alarms CRUD ───
-
-  Future<int> insertPushAlarm({
-    required String time,
-    int enabled = 1,
-    int? folderId,
-    String? days,
-    int soundEnabled = 1,
-    String mode = 'fixed',
-    String? startTime,
-    String? endTime,
-    int? intervalMin,
-  }) async {
-    final db = await database;
-    return await db.insert(AppConstants.tablePushAlarms, {
-      'time': time,
-      'enabled': enabled,
-      'folder_id': folderId,
-      'days': days,
-      'sound_enabled': soundEnabled,
-      'mode': mode,
-      'start_time': startTime,
-      'end_time': endTime,
-      'interval_min': intervalMin,
-    });
-  }
 
   Future<List<Map<String, dynamic>>> getAllPushAlarms() async {
     final db = await database;
     return await db.query(AppConstants.tablePushAlarms);
-  }
-
-  Future<int> updatePushAlarm(int id, Map<String, dynamic> values) async {
-    final db = await database;
-    return await db.update(
-      AppConstants.tablePushAlarms,
-      values,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  Future<int> deletePushAlarm(int id) async {
-    final db = await database;
-    return await db.delete(
-      AppConstants.tablePushAlarms,
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
-  /// interval 모드 알람을 삭제 + 삽입을 한 트랜잭션으로 원자적 교체.
-  /// 중간에 실패(또는 호출 화면이 dispose)해도 트랜잭션이 롤백되어
-  /// 기존 알람이 사라진 채 push_alarms가 비는 상태가 되지 않음.
-  Future<int> replaceIntervalAlarm({
-    required String time,
-    int enabled = 1,
-    int? folderId,
-    String? days,
-    int soundEnabled = 1,
-    required String startTime,
-    required String endTime,
-    required int intervalMin,
-  }) async {
-    final db = await database;
-    return await db.transaction((txn) async {
-      final existingAlarms = await txn.query(AppConstants.tablePushAlarms);
-      for (final alarm in existingAlarms) {
-        if ((alarm['mode'] as String? ?? 'fixed') == 'interval') {
-          await txn.delete(
-            AppConstants.tablePushAlarms,
-            where: 'id = ?',
-            whereArgs: [alarm['id'] as int],
-          );
-        }
-      }
-      return await txn.insert(AppConstants.tablePushAlarms, {
-        'time': time,
-        'enabled': enabled,
-        'folder_id': folderId,
-        'days': days,
-        'sound_enabled': soundEnabled,
-        'mode': 'interval',
-        'start_time': startTime,
-        'end_time': endTime,
-        'interval_min': intervalMin,
-      });
-    });
   }
 
   /// 존재하지 않는 이미지/음성 파일 경로를 DB에서 일괄 제거

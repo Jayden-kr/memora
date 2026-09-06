@@ -310,12 +310,6 @@ class LockScreenService {
     }
   }
 
-  /// 삭제된 폴더 ID 1개를 잠금화면 설정에서 제거.
-  /// repo 전체에 호출자가 없지만 공개 API 유지를 위해 존치 — pruning 로직(스케줄
-  /// 슬롯 포함)을 두 곳에 중복 구현하지 않도록 배치 버전에 위임한다.
-  static Future<void> removeFolderFromSettings(int folderId) =>
-      removeFoldersFromSettingsBatch([folderId]);
-
   /// 여러 폴더 ID를 잠금화면 설정의 folderIds와 시간대 스케줄 슬롯에서 한 번에 제거.
   /// settings read 1회 + write 1회로 N회 호출 대비 SharedPreferences I/O 최소화.
   /// - 남은 기본 폴더가 있고 서비스 실행 중이면: 갱신된 설정으로 재시작

@@ -38,4 +38,6 @@
     <string name="push_service_text_active">%1$s, notifications every %2$d min</string>
     <string name="push_service_text_idle">Notifications resume at %1$s</string>
     <string name="push_service_text_paused">Notifications paused — no time range set</string>
+    <!-- PDF: 폴더 행을 못 찾았을 때 제목 폴백(감사 D9-05, 예전엔 영어 "Folder" 하드코딩) -->
+    <string name="pdf_folder_fallback_name">Folder</string>
 </resources>

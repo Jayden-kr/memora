@@ -19,7 +19,8 @@ class SoftSegmentedControl<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final selectedIndex = segments.indexWhere((s) => s.value == selected);
-    const height = 42.0;
+    // 시스템 글꼴을 크게 쓰면 라벨이 잘린다 — 높이도 같은 배율로 늘린다(감사 D10-03).
+    final height = MediaQuery.textScalerOf(context).scale(42.0);
     const underlineH = 2.5;
 
     return LayoutBuilder(

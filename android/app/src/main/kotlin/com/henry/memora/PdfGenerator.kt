@@ -50,7 +50,8 @@ class PdfGenerator(private val context: Context) {
         val res = AppLang.wrap(context)
         val db = openDb() ?: throw Exception("DB not found")
         try {
-            val name = DbReadRetry.run(TAG) { folderName(db, folderId) } ?: "Folder"
+            val name = DbReadRetry.run(TAG) { folderName(db, folderId) }
+                ?: res.getString(R.string.pdf_folder_fallback_name)
             val cards = DbReadRetry.run(TAG) { loadCards(db, folderId) }
             val n = cards.size
 

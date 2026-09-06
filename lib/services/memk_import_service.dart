@@ -111,14 +111,24 @@ class MemkImportService {
   }
 
   /// ZIP에서 folders.json만 읽어 폴더 목록 반환 (UI에서 선택용)
-  /// Archive를 캐싱하여 importSelectedFolders에서 재사용
-  Future<List<Map<String, dynamic>>> readFolderList(String filePath) async {
+  /// [cacheArchive]가 true면 디코딩한 Archive를 들고 있다가 importSelectedFolders에서 재사용한다.
+  ///
+  /// 감사 D7-02: 다중 가져오기는 파일마다 이 함수를 부르는데, 캐시 슬롯이 하나뿐이라 마지막
+  /// 파일 말고는 전부 빗나갔다. 그렇다고 파일별 Map으로 바꾸면 메타데이터 단계에서 N개
+  /// 아카이브를 동시에 물게 되어 피크 메모리가 N배가 된다(클러스터 20에서 줄인 비용이 그대로
+  /// 되돌아온다). 그래서 캐싱 여부를 호출자가 정하게 하고, 다중 가져오기는 끄는 쪽을 택한다 —
+  /// 재디코딩 1회는 어차피 예전에도 N-1개 파일에서 일어나던 비용이고, 메모리 상한은 아카이브
+  /// 1개로 고정된다.
+  Future<List<Map<String, dynamic>>> readFolderList(String filePath,
+      {bool cacheArchive = true}) async {
     final bytes = await File(filePath).readAsBytes();
     // 메인 isolate에서 직접 디코딩 (compute 사용 시 isolate 전송 과정에서
     // 일부 ArchiveFile 항목이 손실되어 이미지 누락 발생)
     final archive = ZipDecoder().decodeBytes(bytes, verify: false);
-    _cachedArchive = archive;
-    _cachedFilePath = filePath;
+    if (cacheArchive) {
+      _cachedArchive = archive;
+      _cachedFilePath = filePath;
+    }
 
     // importSelectedFolders는 cards.json도 요구한다 — 여기서 같이 검사해야 "목록엔 뜨는데
     // 가져오기는 거부"가 안 된다(R20-05).

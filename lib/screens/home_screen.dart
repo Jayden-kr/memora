@@ -644,12 +644,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         .where((f) => _selectedFolderIds.contains(f.id) && !f.isBundle)
         .map((f) => f.id!)
         .toList();
+    final t = AppLocalizations.of(context);
     if (nonBundleIds.isEmpty) {
-      final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.homeNoExportable)),
       );
       return;
+    }
+    // 묶음은 카드를 직접 갖지 않아 내보내기 대상이 아니다. 섞여 있으면 조용히 빠뜨리지 않고
+    // 몇 개가 제외됐는지 알린다(감사 D1-03).
+    final skipped = _selectedFolderIds.length - nonBundleIds.length;
+    if (skipped > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.homeExportBundlesSkipped(skipped))),
+      );
     }
     _clearSelection();
     Navigator.push(

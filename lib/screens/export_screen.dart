@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart' show Share, XFile;
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/constants.dart';
 import '../services/import_export_controller.dart';
 import '../widgets/overwrite_dialog.dart';
 
@@ -187,7 +188,8 @@ class _ExportScreenState extends State<ExportScreen> {
     }
 
     final appDocDir = await getApplicationDocumentsDirectory();
-    final exportDir = Directory('${appDocDir.path}/exports');
+    final exportDir =
+        Directory(p.join(appDocDir.path, AppConstants.exportDir));
     if (!await exportDir.exists()) {
       await exportDir.create(recursive: true);
     }

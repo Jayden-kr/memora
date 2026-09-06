@@ -211,13 +211,22 @@ class ImportExportService : Service() {
             .setProgress(0, 0, true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                PROGRESS_NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(PROGRESS_NOTIFICATION_ID, notification)
+        // 감사 X1-01: STOP 분기는 try/catch로 감싸는데 여기만 노출돼 있었다. Android 12+에서
+        // ForegroundServiceStartNotAllowedException이 나면 import/export 시작만으로 앱이 죽는다.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    PROGRESS_NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(PROGRESS_NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ImportExportService", "startForeground 실패", e)
+            // 포그라운드 승격에 실패하면 서비스로 남아 있을 이유가 없다 — 진행 알림은
+            // updateProgress가 별도로 띄우므로 사용자에게 보이는 것은 그대로다.
+            stopSelf()
         }
 
         return START_NOT_STICKY

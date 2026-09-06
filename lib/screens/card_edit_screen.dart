@@ -663,6 +663,16 @@ class _CardEditScreenState extends State<CardEditScreen>
           debugPrint('[CARD_SAVE] !!! WRITE MISMATCH !!! '
               'expected.q="$question" db.q="$dbQ" '
               'expected.a="$answer" db.a="$dbA"');
+          // 감사 Y3-04: 예전엔 여기서 로그만 찍고 그대로 "저장됨"으로 화면을 닫았다.
+          // 검증까지 해 놓고 결과를 안 쓰면 검증이 아니다 — 저장이 실제로 반영되지
+          // 않았으면 화면을 닫지 말고 알린다(사용자가 다시 시도할 수 있게).
+          if (mounted) {
+            final t = AppLocalizations.of(context);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(t.cardEditSaveVerifyFail)),
+            );
+          }
+          return;
         }
       } else {
         final uuid =

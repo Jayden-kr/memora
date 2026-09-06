@@ -117,16 +117,17 @@ class LockScreenService : Service() {
     // 잠금화면 질문 음성 재생 (카드당 1개, 로컬 m4a). 메인 스레드에서만 접근.
     @Volatile private var voicePlayer: MediaPlayer? = null
 
-    // 설정
-    private var folderIds: List<Int> = emptyList()
+    // 설정 — loadSettings()는 메인 스레드에서 쓰고, 덱 조회·배경 디코딩은 bgHandler에서
+    // 읽는다. @Volatile이 없으면 백그라운드 글랜스가 옛 값을 볼 수 있다(감사 X2-02).
+    @Volatile private var folderIds: List<Int> = emptyList()
     // 기본(수동 선택) 폴더 = 라디오 선택값 = 스케줄 미매치/OFF 시 폴백
-    private var baseFolderIds: List<Int> = emptyList()
+    @Volatile private var baseFolderIds: List<Int> = emptyList()
     private var scheduleEnabled: Boolean = false
     private var schedule: List<FolderSchedule.Slot> = emptyList()
-    private var finishedFilter: Int = -1
-    private var sortOrder: String = "sequence"
-    private var reversed: Boolean = false
-    private var bgColor: Int = 0xFF1A1A2E.toInt()
+    @Volatile private var finishedFilter: Int = -1
+    @Volatile private var sortOrder: String = "sequence"
+    @Volatile private var reversed: Boolean = false
+    @Volatile private var bgColor: Int = 0xFF1A1A2E.toInt()
     // "auto"(기본, BgContrast로 자동 판정) | "light" | "dark" — 강제 오버라이드.
     private var bgTextMode: String = "auto"
     // Stage 3: 배경 이미지. 빈 문자열 = 이미지 없음(오늘과 동일한 단색 배경).
@@ -250,6 +251,9 @@ class LockScreenService : Service() {
                         ?.notify(NOTIFICATION_ID, createNotification())
                     return START_STICKY
                 }
+                // 앱(Dart)은 이 액션을 쓰지 않는다 — 중지는 MainActivity가 stopService()로 한다.
+                // 개발·검증용 진입점으로 남겨 둔다(adb로 `am start-foreground-service -a
+                // STOP_SERVICE`를 보내 오버레이를 정리할 수 있다, 감사 D4-04).
                 "STOP_SERVICE" -> {
                     setServiceRunning(false)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -823,6 +827,10 @@ class LockScreenService : Service() {
         // → 오버레이를 재생성하지 않고 "다음 카드"로 진행시킨다. 화면이 꺼진 동안
         //   갱신하므로 다시 켜면 새 카드가 보인다.
         if (overlayView != null) {
+            // 감사 D4-01: 오버레이가 떠 있는 동안에는 설정 화면에 갈 수 없으므로(오버레이가
+            // 화면을 덮는다) 이 조건은 현재 진입 경로가 없다. 다만 배경/텍스트 설정이 다른
+            // 경로로 바뀌었을 때의 안전망으로 남겨 둔다 — 지우면 그런 경로가 생겼을 때
+            // 오버레이가 옛 배경으로 굳는다.
             if (overlayVisualKey != currentVisualKey()) {
                 // 배경색/텍스트모드가 (설정 화면에서) 바뀌었다 → 뷰를 완전히 재생성해서
                 // 새 팔레트를 즉시 반영한다. currentIndex/cards는 절대 건드리지 않는다 —
@@ -1531,16 +1539,22 @@ class LockScreenService : Service() {
                 if (abs(diffX) > abs(diffY) && abs(diffX) > SWIPE_THRESHOLD && abs(velocityX) > SWIPE_VELOCITY_THRESHOLD) {
                     val localCards = cards // @Volatile snapshot
                     synchronized(this@LockScreenService) {
-                        if (diffX < 0) {
-                            if (currentIndex < localCards.size - 1) {
-                                currentIndex++
-                                updateCardDisplay()
+                        // 감사 Y2-02: 형제 호출부는 전부 try/catch로 감싸는데 여기만 없었다.
+                        // 여기서 예외가 새면 제스처 콜백을 타고 올라가 오버레이가 죽는다.
+                        try {
+                            if (diffX < 0) {
+                                if (currentIndex < localCards.size - 1) {
+                                    currentIndex++
+                                    updateCardDisplay()
+                                }
+                            } else {
+                                if (currentIndex > 0) {
+                                    currentIndex--
+                                    updateCardDisplay()
+                                }
                             }
-                        } else {
-                            if (currentIndex > 0) {
-                                currentIndex--
-                                updateCardDisplay()
-                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "카드 넘기기 실패", e)
                         }
                     }
                     return true

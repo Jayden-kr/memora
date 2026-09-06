@@ -1229,8 +1229,11 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
                   if (!mounted) return;
                   // 검색 모드에서 새 카드 생성 시 검색 초기화 (새 카드가 안 보이는 버그 방지)
                   if (_searchQuery.isNotEmpty) {
-                    _searchController.clear();
-                    _searchQuery = '';
+                    // setState 없이 지우면 검색창의 ✕ 아이콘이 한 프레임 남는다(감사 Y1-03).
+                    setState(() {
+                      _searchController.clear();
+                      _searchQuery = '';
+                    });
                     _loadCards();
                     return;
                   }
@@ -1421,8 +1424,10 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
                     .upsertSetting(_sortSettingKey, _sortOrder);
                 // 검색 모드에서 정렬 변경 시 검색 초기화 (정렬이 반영되도록)
                 if (_searchQuery.isNotEmpty) {
-                  _searchController.clear();
-                  _searchQuery = '';
+                  setState(() {
+                    _searchController.clear();
+                    _searchQuery = '';
+                  });
                 }
                 _loadCards();
               case 'fold_toggle':
