@@ -48,10 +48,16 @@ class ImportExportController {
   List<String>? lastExportFilePaths;
   Object? lastExportError;
 
+  /// 마지막 내보내기를 사용자가 중간에 멈췄는가. 완료 다이얼로그가 "완료" 대신
+  /// "중지됨"으로 말하기 위해 필요하다 — 예전엔 취소해도 "Export 완료 · 0개"였다
+  /// (리뷰 C-05).
+  bool lastExportCancelled = false;
+
   void clearExportResult() {
     lastExportFileNames = null;
     lastExportFilePaths = null;
     lastExportError = null;
+    lastExportCancelled = false;
   }
 
   /// 사용자가 "중지"를 눌렀다. 돌고 있는 루프가 다음 경계에서 스스로 멈춘다.
@@ -60,6 +66,11 @@ class ImportExportController {
   /// 진행 중인 작업을 사용자가 멈춰 달라고 요청했는가. 화면이 버튼 상태를 이걸로 잡는다.
   /// 작업이 끝나면 자동으로 false다 — 다음 작업 시작 전에 옛 요청이 남아 보이지 않는다.
   bool get isCancelRequested => isRunning && _cancelRequested;
+
+  /// 여러 파일 가져오기 도중 사용자가 중지를 눌렀다. 배치 루프가 이걸 보고 남은 파일을
+  /// 건너뛴다 — 예전엔 현재 파일만 끊기고 나머지가 전부 그대로 들어갔다(리뷰 C-01).
+  bool _batchCancelled = false;
+  bool get isBatchCancelled => _batchCancelled;
 
   /// 진행 중인 가져오기/내보내기 중단을 요청한다.
   ///
@@ -168,6 +179,10 @@ class ImportExportController {
   bool get isBusy => isRunning || _batchDepth > 0;
 
   void beginImportBatch() {
+    if (_batchDepth == 0) {
+      _cancelRequested = false;
+      _batchCancelled = false;
+    }
     if (_batchDepth++ == 0) {
       _batchFiles = 0;
       _batchFailed = 0;
@@ -263,7 +278,9 @@ class ImportExportController {
     if (_operationLock != null && !_operationLock!.isCompleted) return false;
     _operationLock = Completer<void>();
 
-    _cancelRequested = false;
+    // 배치 안에서는 지우지 않는다 — 사용자가 파일 3에서 누른 중지가 파일 4의 시작에서
+    // 리셋되면 배치 전체가 중지를 무시하고 끝까지 간다(리뷰 C-01).
+    if (_batchDepth == 0) _cancelRequested = false;
     isRunning = true;
     currentOperation = 'import';
     currentImportFilePath = filePath;
@@ -339,6 +356,7 @@ class ImportExportController {
         _batchFiles++;
         _batchNewCards += result.newCards;
         _batchDuration += result.duration;
+        if (result.cancelled) _batchCancelled = true;
         return true;
       }
       final body = result.cancelled
@@ -472,10 +490,12 @@ class ImportExportController {
         usedOutputPaths.add(outputPath);
 
         final writePath = overwriting ? '$outputPath.tmp' : outputPath;
-        await _exportService.exportMemk(
-          outputPath: writePath,
-          folderIds: [folder.id!],
-          onProgress: (progress) {
+        try {
+          await _exportService.exportMemk(
+            outputPath: writePath,
+            folderIds: [folder.id!],
+            shouldCancel: () => _cancelRequested,
+            onProgress: (progress) {
             double subProgress;
             switch (progress.phase) {
               case 'cards':
@@ -501,15 +521,20 @@ class ImportExportController {
             exportProgressMessage = msg;
             _notify();
 
-            _updateProgress(
-              exportTitle,
-              msg,
-              (overallProgress * 100).round(),
-              100,
-              type: 'export',
-            );
-          },
-        );
+              _updateProgress(
+                exportTitle,
+                msg,
+                (overallProgress * 100).round(),
+                100,
+                type: 'export',
+              );
+            },
+          );
+        } on ExportCancelledException {
+          // 만들다 만 .mra는 서비스가 이미 지웠다. 이 폴더는 결과에 넣지 않는다.
+          exportCancelled = true;
+          break;
+        }
 
         if (overwriting) {
           // 여기까지 왔다는 건 새 파일이 완성됐다는 뜻 — 이제야 옛 파일을 치운다.
@@ -539,6 +564,7 @@ class ImportExportController {
 
       lastExportFileNames = createdFileNames;
       lastExportFilePaths = createdFiles;
+      lastExportCancelled = exportCancelled;
       isRunning = false;
       currentOperation = null;
       _releaseLock();
@@ -725,6 +751,7 @@ class ImportExportController {
 
       lastExportFileNames = createdFileNames;
       lastExportFilePaths = createdFiles;
+      lastExportCancelled = exportCancelled;
       isRunning = false;
       currentOperation = null;
       _releaseLock();

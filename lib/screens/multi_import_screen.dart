@@ -41,6 +41,9 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
   /// "읽기 실패"가 아니라 "다른 작업 진행 중" 문구를 보여주기 위해 구분한다.
   static const _busyErrorMarker = '__busy__';
 
+  /// 사용자가 중지를 눌러 이 파일까지 가지 못했음을 나타내는 내부 표식.
+  static const _cancelledErrorMarker = '__cancelled__';
+
   final _controller = ImportExportController.instance;
 
   _Stage _stage = _Stage.loading;
@@ -226,6 +229,14 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
               entry.newFolders = result.newFolders;
               entry.mergedFolders = result.mergedFolders;
             }
+            if (_controller.isBatchCancelled) {
+              // 사용자가 중지를 눌렀다. 남은 파일은 손대지 않고 건너뛴 것으로 표시한다 —
+              // 예전엔 현재 파일만 끊기고 나머지가 그대로 다 들어갔다(리뷰 C-01).
+              for (var k = i + 1; k < batch.length; k++) {
+                batch[k].error = _cancelledErrorMarker;
+              }
+              break;
+            }
           } catch (e) {
             entry.error = e.toString();
           }
@@ -375,9 +386,11 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
                 ),
                 subtitle: hasError
                     ? Text(
-                        e.error == _busyErrorMarker
-                            ? t.opBusyIgnored
-                            : t.multiImportReadFail,
+                        switch (e.error) {
+                          _busyErrorMarker => t.opBusyIgnored,
+                          _cancelledErrorMarker => t.multiImportSkippedCancelled,
+                          _ => t.multiImportReadFail,
+                        },
                         style: TextStyle(color: cs.error))
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,

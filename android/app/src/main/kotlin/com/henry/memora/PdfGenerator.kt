@@ -29,6 +29,14 @@ class PdfGenerator(private val context: Context) {
             cancelRequested.set(true)
         }
 
+        /**
+         * 새 내보내기를 시작하기 직전에 플랫폼 스레드에서 부른다. 워커 스레드에서
+         * 리셋하면 그 사이 도착한 진짜 취소 요청을 지워버릴 수 있다(리뷰 C-03).
+         */
+        fun resetCancel() {
+            cancelRequested.set(false)
+        }
+
         private const val TAG = "PdfGenerator"
         private const val PW = 595   // A4 72dpi
         private const val PH = 842
@@ -56,18 +64,16 @@ class PdfGenerator(private val context: Context) {
      * 폴더 하나를 PDF로 만든다. 카드 루프에서 취소 플래그를 보고, 끊기면
      * [PdfCancelledException]을 던진다 — 아래 catch가 만들다 만 파일을 지운다.
      *
-     * @param resetCancel 배치의 첫 폴더에서만 true. 이전 실행이 남긴 플래그를 지운다.
-     *   중간 폴더에서 리셋하면 사용자가 방금 누른 취소가 무시된다.
+     * 플래그 리셋은 호출자가 플랫폼 스레드에서 [resetCancel]로 미리 한다 — 여기서
+     * 하면 그 사이 도착한 취소 요청을 지운다(리뷰 C-03).
      */
     fun generate(
         outputPath: String,
         folderId: Int,
         folderIndex: Int = 0,
         totalFolders: Int = 1,
-        resetCancel: Boolean = true,
         onProgress: (current: Int, total: Int, message: String) -> Unit,
     ) {
-        if (resetCancel) cancelRequested.set(false)
         if (cancelRequested.get()) throw PdfCancelledException()
         loadFonts()
         // PDF 본문·진행 알림 문구도 앱 설정 언어를 따른다(시스템 언어 아님).

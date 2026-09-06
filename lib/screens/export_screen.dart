@@ -53,10 +53,14 @@ class _ExportScreenState extends State<ExportScreen> {
       _loading = false;
     } else {
       // 새 Export 화면: 이전 결과 정리 (재진입 시 이전 완료 다이얼로그 방지).
-      // 다만 지난 내보내기가 파일 하나 없이 실패로 끝났다면 그 사실은 한 번은 보여주고
-      // 지운다 — 예전엔 메뉴로 이 화면을 열면 여기서 조용히 지워져서, 사용자가 실패를
-      // 영영 모른 채 "내보냈는데 파일이 없다"만 겪었다.
-      if (_controller.lastExportFileNames == null) {
+      // 다만 지난 내보내기가 실패로 끝났다면 그 사실은 한 번은 보여주고 지운다 —
+      // 예전엔 메뉴로 이 화면을 열면 여기서 조용히 지워져서, 사용자가 실패를 영영
+      // 모른 채 "내보냈는데 파일이 없다"만 겪었다.
+      //
+      // 파일이 일부 만들어진 부분 실패도 포함한다(리뷰 N-02) — 파일 개수와 무관하게
+      // 실패는 실패다. 완료 다이얼로그(공유 버튼 포함)를 여기서 되살리지는 않는다:
+      // 메뉴를 열 때마다 옛 내보내기의 공유 창이 뜨는 편이 더 나쁘다.
+      if (_controller.lastExportError != null) {
         _pendingExportError = _controller.lastExportError;
       }
       _controller.clearExportResult();
@@ -126,28 +130,37 @@ class _ExportScreenState extends State<ExportScreen> {
     // clearExportResult로 지워지기 전에 부분 실패 여부를 먼저 읽어둔다 —
     // 중간 실패 시에도 이미 만들어진 파일은 공유 가능하게 보여준다.
     final partialError = _controller.lastExportError;
+    final cancelled = _controller.lastExportCancelled;
     _controller.clearExportResult();
     final t = AppLocalizations.of(context);
-    final body = partialError == null
-        ? t.exportDoneBody(fileNames.length, fileNames.join('\n'))
-        : '${t.exportDoneBody(fileNames.length, fileNames.join('\n'))}\n\n'
-            '${t.exportFailSnack(partialError.toString())}';
+    // 취소했는데 "Export 완료 · 0개"라고 말하면 실패로 읽힌다(리뷰 C-05).
+    final head = fileNames.isEmpty && cancelled
+        ? t.exportCancelledNothing
+        : t.exportDoneBody(fileNames.length, fileNames.join('\n'));
+    final body = [
+      head,
+      if (cancelled && fileNames.isNotEmpty) t.exportCancelledDialogNote,
+      if (partialError != null) t.exportFailSnack(partialError.toString()),
+    ].join('\n\n');
 
     final shouldShare = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(t.exportDoneTitle),
+        title: Text(cancelled ? t.exportCancelledTitle : t.exportDoneTitle),
         content: Text(body),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
             child: Text(t.commonOk),
           ),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.share),
-            label: Text(t.exportShare),
-          ),
+          // 만들어진 파일이 없으면 공유할 것도 없다 — 빈 목록으로 공유 시트를 띄우면
+          // 아무 일도 안 일어나 고장처럼 보인다.
+          if (fileNames.isNotEmpty)
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              icon: const Icon(Icons.share),
+              label: Text(t.exportShare),
+            ),
         ],
       ),
     );
@@ -276,7 +289,9 @@ class _ExportScreenState extends State<ExportScreen> {
           );
     // 다른 작업이 진행 중이면 컨트롤러가 조용히 무시한다 — 버튼이 먹통인 것처럼
     // 보이지 않게 이유를 알린다.
-    if (!started) {
+    // 형제 화면들과 같이 mounted를 함께 본다 — 지금은 busy 판정이 첫 await 전에
+    // 동기로 끝나 새지 않지만, 그 가드가 뒤로 밀리면 바로 새는 자리다(리뷰 N-03).
+    if (!started && mounted) {
       messenger.showSnackBar(SnackBar(content: Text(busyMessage)));
     }
   }

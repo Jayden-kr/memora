@@ -170,8 +170,12 @@ class MainActivity : FlutterActivity() {
                             val folderIndex = call.argument<Int>("folderIndex") ?: 0
                             val totalFolders = call.argument<Int>("totalFolders") ?: 1
                             // 배치의 첫 폴더에서만 취소 플래그를 리셋한다 — 중간 폴더에서
-                            // 리셋하면 방금 누른 취소가 무시된다.
-                            val resetCancel = call.argument<Boolean>("resetCancel") ?: (folderIndex == 0)
+                            // 리셋하면 방금 누른 취소가 무시된다. 리셋은 반드시 이 플랫폼
+                            // 스레드에서 한다: 워커 스레드에서 하면 그 사이 채널로 도착한
+                            // cancelPdf를 덮어써 진짜 취소가 무시된다(리뷰 C-03).
+                            if (call.argument<Boolean>("resetCancel") ?: (folderIndex == 0)) {
+                                PdfGenerator.resetCancel()
+                            }
                             val channel = ieChannel
                             Thread {
                                 try {
@@ -180,7 +184,6 @@ class MainActivity : FlutterActivity() {
                                         folderId = folderId,
                                         folderIndex = folderIndex,
                                         totalFolders = totalFolders,
-                                        resetCancel = resetCancel,
                                         onProgress = { current, total, message ->
                                             runOnUiThread {
                                                 channel?.invokeMethod("pdfProgress", mapOf(

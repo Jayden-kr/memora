@@ -1272,10 +1272,19 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
 
   Future<void> _deleteSelected() async {
     if (_isDeleting) return;
+    final t = AppLocalizations.of(context);
+    // 홈 화면과 같은 가드 — import가 도는 동안 대상 폴더를 지우면 배치 insert가 FK로
+    // 실패해 그 파일의 카드가 통째로 빠진다(D1-02). 묶음 자식도 병합 대상이 될 수 있어
+    // 같은 사고가 난다(리뷰 B-01).
+    if (ImportExportController.instance.isBusy) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.importBusy)),
+      );
+      return;
+    }
     final selected =
         _children.where((f) => _selectedIds.contains(f.id)).toList();
     if (selected.isEmpty) return;
-    final t = AppLocalizations.of(context);
     final cardTotal = selected.fold<int>(0, (sum, f) => sum + f.cardCount);
     var message = t.homeDeleteFolderConfirm(selected.length);
     if (cardTotal > 0) message += t.homeDeleteFolderCardsNote(cardTotal);
@@ -1314,19 +1323,26 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
         regularFolderIds: ids,
         bundleFolderIds: const [],
       );
-      final pruned = await cleanupAfterFolderDelete(
-        regularIds: ids,
-        needsPushReschedule: result.pushReschedNeeded,
-        filePaths: result.filePaths,
-      );
-      if (!mounted) return;
-      showPushRulesRemovedNotice(context, pruned);
+      // 홈과 같이 fire-and-forget — 미디어 파일 I/O를 기다리느라 삭제 버튼이 몇 초
+      // 먹통처럼 보이지 않게 한다(트랜잭션은 이미 commit됐다).
+      unawaited(_cleanupAfterDelete(ids, result));
     } catch (e) {
       debugPrint('[BUNDLE] delete failed: $e');
     } finally {
       _isDeleting = false;
       if (mounted) await _loadChildren();
     }
+  }
+
+  Future<void> _cleanupAfterDelete(List<int> ids,
+      ({bool pushReschedNeeded, List<String> filePaths}) result) async {
+    final pruned = await cleanupAfterFolderDelete(
+      regularIds: ids,
+      needsPushReschedule: result.pushReschedNeeded,
+      filePaths: result.filePaths,
+    );
+    if (!mounted) return;
+    showPushRulesRemovedNotice(context, pruned);
   }
 
   AppBar _buildSelectionAppBar(AppLocalizations t) {

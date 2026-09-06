@@ -269,9 +269,21 @@ class DatabaseHelper {
     LEFT JOIN %t p ON p.id = f.parent_folder_id AND p.is_bundle = 1
   ''';
 
+  /// 정렬 규칙: 먼저 "홈에서 보이는 것"의 순서로 묶고, 그 안에서 자식 순서를 쓴다.
+  ///
+  /// sequence는 하나의 컬럼인데 이제 두 화면이 각자 0..n-1로 다시 매긴다(홈은 최상위
+  /// 항목만, 묶음 화면은 그 묶음의 자식만). 그래서 `ORDER BY f.sequence` 하나로는
+  /// 최상위 폴더와 남의 묶음 자식이 같은 번호로 뒤엉킨다 — 폴더 선택 목록의 순서가
+  /// 사용자가 정한 어떤 순서와도 무관해진다(리뷰 B-02).
+  ///
+  /// 자식은 자기 묶음의 sequence를 1차 키로 써서 그 묶음이 홈에서 있던 자리에 붙고,
+  /// 그 안에서만 자기 sequence로 줄을 선다. 마지막 id는 동률을 없애는 못이다.
   static String _folderSelect(String where) =>
       '${_folderSelectWithBundleName.replaceAll('%t', AppConstants.tableFolders)}'
-      ' WHERE $where ORDER BY f.sequence ASC';
+      ' WHERE $where'
+      ' ORDER BY COALESCE(p.sequence, f.sequence) ASC,'
+      ' CASE WHEN f.parent_folder_id IS NULL THEN 0 ELSE 1 END ASC,'
+      ' f.sequence ASC, f.id ASC';
 
   /// 묶음이 아닌 폴더 전부. 묶음에 속한 폴더는 [Folder.parentFolderName]에 그 묶음
   /// 이름이 채워져 온다(폴더 선택 화면들이 `묶음 > 폴더`로 표시하는 데 쓴다).
@@ -336,18 +348,6 @@ class DatabaseHelper {
       {'name': newName},
       where: 'id = ?',
       whereArgs: [id],
-    );
-  }
-
-  Future<int> updateFolder(Folder folder) async {
-    final db = await database;
-    final map = folder.toDb();
-    map.remove('id'); // id는 WHERE 절에서 사용하므로 SET 절에서 제외
-    return await db.update(
-      AppConstants.tableFolders,
-      map,
-      where: 'id = ?',
-      whereArgs: [folder.id],
     );
   }
 

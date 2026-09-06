@@ -26,6 +26,13 @@ class ExportProgress {
   });
 }
 
+/// 사용자가 내보내기를 중간에 멈췄다. 만들다 만 .mra 파일은 던지기 전에 지워진다.
+class ExportCancelledException implements Exception {
+  const ExportCancelledException();
+  @override
+  String toString() => 'ExportCancelledException';
+}
+
 class MemkExportService {
   /// 로컬 경로를 .memk 호환 경로로 변환
   static String toMemkImagePath(String localPath) {
@@ -36,11 +43,21 @@ class MemkExportService {
 
   /// DB 데이터를 .memk ZIP 파일로 export
   /// [folderIds]: null이면 전체, 있으면 해당 폴더만
+  ///
+  /// [shouldCancel]이 true를 돌려주면 [ExportCancelledException]을 던진다. 던지는
+  /// 지점은 이미 이벤트 루프를 양보하던 자리(카드 청크·이미지 20개·ZIP 마무리 직전)
+  /// 뿐이라 반쯤 쓴 파일이 남지 않고, 아래 catch가 미완성 ZIP을 지운다.
   Future<void> exportMemk({
     required String outputPath,
     required void Function(ExportProgress) onProgress,
     List<int>? folderIds,
+    bool Function()? shouldCancel,
   }) async {
+    void checkCancel() {
+      if (shouldCancel?.call() ?? false) throw const ExportCancelledException();
+    }
+
+    checkCancel();
     final db = DatabaseHelper.instance;
     final appDocDir = (await getApplicationDocumentsDirectory()).path;
 
@@ -114,6 +131,7 @@ class MemkExportService {
                 : '카드 정보 준비 중... $processed / $totalCards',
           ));
           await Future.delayed(Duration.zero);
+          checkCancel();
         }
         // 소량 카드 폴더에서도 진행률 갱신 보장
         if (processed > 0) {
@@ -175,6 +193,8 @@ class MemkExportService {
           : 'ZIP 파일 생성 중... (이미지 ${imageFileNames.length}개)',
     ));
 
+    checkCancel();
+
     // 스트리밍 ZIP 생성 — ZipFileEncoder는 파일을 디스크에서 직접 스트리밍하므로
     // 모든 이미지를 메모리에 올리지 않아 OOM 방지
     final zipEncoder = ZipFileEncoder();
@@ -218,6 +238,7 @@ class MemkExportService {
                   : '이미지 추가 중... $imageCount / ${imageFileNames.length}',
             ));
             await Future.delayed(Duration.zero);
+            checkCancel();
           }
         }
       }

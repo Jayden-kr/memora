@@ -565,10 +565,15 @@ class MemkImportService {
         zipPath: filePath,
         missingFileNames: missingOnDisk,
         appDocDir: appDocDir,
+        shouldCancel: shouldCancel,
       );
       imageCount += rawExtracted;
       debugPrint('[IMPORT] raw ZIP extraction recovered $rawExtracted / ${missingOnDisk.length} images');
     }
+
+    // 폴백은 파일 하나하나가 await 디스크 I/O라 그 사이에 취소가 들어올 수 있다.
+    // 여기서 한 번 더 읽지 않으면 "중지를 눌렀는데 완료로 보고"가 된다(리뷰 C-02).
+    if (!cancelled && (shouldCancel?.call() ?? false)) cancelled = true;
 
     // 폴더 카드 수 업데이트
     for (final localFolderId in folderIdMap.values.toSet()) {
@@ -695,6 +700,7 @@ class MemkImportService {
     required String zipPath,
     required Set<String> missingFileNames,
     required String appDocDir,
+    bool Function()? shouldCancel,
   }) async {
     if (missingFileNames.isEmpty) return 0;
 
@@ -765,6 +771,9 @@ class MemkImportService {
       // compSize와 compression은 CD에서 가져온 값 사용
       int extracted = 0;
       for (final entry in targets.entries) {
+        // 파일 경계에서 멈춘다 — 한 파일을 쓰다 마는 일이 없다(임시 파일 + rename이라
+        // 최종 경로엔 어차피 완전한 파일만 남지만, 여기서 끊어야 중지가 즉시 먹는다).
+        if (shouldCancel?.call() ?? false) break;
         try {
           final fileName = entry.key;
           final t = entry.value;
