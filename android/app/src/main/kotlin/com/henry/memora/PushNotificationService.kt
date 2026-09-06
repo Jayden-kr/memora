@@ -160,6 +160,22 @@ class PushNotificationService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            // 알림이 꺼진 상태인데 이 인텐트가 왔다면(비정상 종료로 남아 있던 상주 알림을
+            // 사용자가 스와이프한 경우) 서비스를 되살릴 이유가 없다 — 알람 체인도 없어서
+            // 아무도 멈춰 주지 않는 좀비 포그라운드 서비스가 된다. 여기서 스스로 정리한다.
+            if (!getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
+                    .getBoolean("running", false)
+            ) {
+                Log.d(TAG, "RECREATE_NOTIFICATION: 이미 꺼진 상태 — 정리하고 종료")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                stopSelf()
+                return START_NOT_STICKY
+            }
             return START_STICKY
         }
 
