@@ -475,6 +475,11 @@
   "pushExactAlarmTitle": "정확한 시간 알림 권한이 필요합니다",
   "pushExactAlarmBody": "복습 알림을 정확한 시간에 받으려면 '알람 및 리마인더' 권한을 허용해주세요. 허용하지 않으면 알림이 몇 분 늦게 도착할 수 있습니다.",
   "pushExactAlarmButton": "권한 허용하기",
+  "pushNotifPermissionTitle": "앱 알림이 꺼져 있습니다",
+  "pushNotifPermissionBody": "복습 알림은 켜져 있지만 앱 알림 권한이 꺼져 있어 알림이 오지 않습니다. 시스템 설정에서 알림을 허용해주세요.",
+  "pushNotifPermissionButton": "설정 열기",
+  "pushHideContent": "알림 내용 숨기기",
+  "pushHideContentDesc": "잠금화면에서는 카드 질문 대신 일반 문구만 표시합니다. 잠금을 풀면 질문 전문이 보입니다.",
 
   "pushRulesSection": "알림 시간대",
   "pushRulesGapHint": "{ranges}에는 알림이 오지 않습니다",

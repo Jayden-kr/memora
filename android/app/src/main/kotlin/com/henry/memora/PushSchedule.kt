@@ -90,4 +90,24 @@ object PushSchedule {
         }
         return 1440
     }
+
+    /**
+     * [now]에 활성인 규칙이 "더 이상 그 규칙이 아니게 되는" 시점까지 남은 분(1..1440).
+     * 규칙이 끝나거나, 겹침 우선순위 때문에 다른 규칙이 이기게 되는 순간을 모두 포함한다.
+     * [now]에 활성 규칙이 없으면 1440.
+     *
+     * 감사 D6-01: 다음 발화를 간격만으로 잡으면 그 시각이 현재 규칙의 창 밖으로 넘어갈 수
+     * 있다(예: 30분짜리 창에 60분 간격). 그러면 그 사이에 시작하는 다른 규칙이 있어도
+     * 아무도 깨우지 않아 통째로 건너뛴다. 경계에서 한 번은 반드시 재평가하도록 이 값으로
+     * 다음 알람을 앞당긴다. [minutesUntilNextStart]와 같은 1440분 브루트포스 —
+     * TICK당 1회 호출이라 비용은 무시 가능하고 자정랩·겹침을 케이스 분석 없이 처리한다.
+     */
+    fun minutesUntilRuleChange(now: Int, rules: List<Rule>): Int {
+        val current = activeRule(now, rules) ?: return 1440
+        for (d in 1..1440) {
+            val t = (now + d) % 1440
+            if (activeRule(t, rules) != current) return d
+        }
+        return 1440
+    }
 }

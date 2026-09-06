@@ -411,4 +411,94 @@ class PushScheduleTest {
             }
         }
     }
+
+    // ─────────────────────────────────────────────────────────
+    // minutesUntilRuleChange() — 감사 D6-01(규칙 경계 클램프)
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `minutesUntilRuleChange is 1440 when now has no active rule`() {
+        val rules = PushSchedule.parse("600:660:1:30")
+        assertEquals(1440, PushSchedule.minutesUntilRuleChange(0, rules))
+        assertEquals(1440, PushSchedule.minutesUntilRuleChange(700, rules))
+    }
+
+    @Test
+    fun `minutesUntilRuleChange is 1440 when there are no rules at all`() {
+        assertEquals(1440, PushSchedule.minutesUntilRuleChange(600, emptyList()))
+    }
+
+    @Test
+    fun `minutesUntilRuleChange counts minutes to the end of the active rule`() {
+        val rules = PushSchedule.parse("600:660:1:30")
+        assertEquals(60, PushSchedule.minutesUntilRuleChange(600, rules))
+        assertEquals(30, PushSchedule.minutesUntilRuleChange(630, rules))
+        assertEquals(1, PushSchedule.minutesUntilRuleChange(659, rules))
+    }
+
+    @Test
+    fun `minutesUntilRuleChange sees a handoff to an adjacent rule as a change`() {
+        // 600-660(폴더1) 뒤에 660-720(폴더2)이 이어붙는다. 660분에 재평가하지 않으면
+        // 새 규칙의 간격(10분)이 다음 주기까지 반영되지 않는다.
+        val rules = PushSchedule.parse("600:660:1:30,660:720:2:10")
+        assertEquals(60, PushSchedule.minutesUntilRuleChange(600, rules))
+        assertEquals(1, PushSchedule.minutesUntilRuleChange(659, rules))
+        assertEquals(60, PushSchedule.minutesUntilRuleChange(660, rules))
+    }
+
+    @Test
+    fun `minutesUntilRuleChange handles a midnight-crossing rule`() {
+        val rules = PushSchedule.parse("1380:120:1:30") // 23:00 - 02:00
+        assertEquals(180, PushSchedule.minutesUntilRuleChange(1380, rules))
+        assertEquals(121, PushSchedule.minutesUntilRuleChange(1439, rules))
+        assertEquals(120, PushSchedule.minutesUntilRuleChange(0, rules))
+        assertEquals(60, PushSchedule.minutesUntilRuleChange(60, rules))
+    }
+
+    @Test
+    fun `minutesUntilRuleChange returns the gap for a near-whole-day rule`() {
+        // 0:1439는 반열림이라 1439분 한 칸만 비어 있다. 브루트포스가 그 한 칸을
+        // 정확히 찾아내는지 본다.
+        val rules = PushSchedule.parse("0:1439:1:30")
+        assertEquals(1439, PushSchedule.minutesUntilRuleChange(0, rules))
+        assertEquals(1, PushSchedule.minutesUntilRuleChange(1438, rules))
+    }
+
+    @Test
+    fun `minutesUntilRuleChange exhaustive cross-check against activeRule`() {
+        val random = Random(20260906)
+        repeat(200) {
+            val n = 1 + random.nextInt(4)
+            val csv = (0 until n).joinToString(",") {
+                val s = random.nextInt(1440)
+                var e = random.nextInt(1440)
+                if (e == s) e = (e + 1) % 1440
+                "$s:$e:${random.nextInt(3)}:${5 + random.nextInt(120)}"
+            }
+            val rules = PushSchedule.parse(csv)
+            repeat(24) {
+                val now = random.nextInt(1440)
+                val current = PushSchedule.activeRule(now, rules)
+                val d = PushSchedule.minutesUntilRuleChange(now, rules)
+                assertTrue("d out of range: $d", d in 1..1440)
+                if (current == null) {
+                    assertEquals("no active rule must yield 1440 (csv=$csv now=$now)", 1440, d)
+                } else {
+                    for (k in 1 until d) {
+                        assertEquals(
+                            "rule changed before d (csv=$csv now=$now d=$d k=$k)",
+                            current,
+                            PushSchedule.activeRule((now + k) % 1440, rules),
+                        )
+                    }
+                    if (d < 1440) {
+                        assertTrue(
+                            "rule did not change at d (csv=$csv now=$now d=$d)",
+                            PushSchedule.activeRule((now + d) % 1440, rules) != current,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }

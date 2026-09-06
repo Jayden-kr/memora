@@ -255,6 +255,10 @@ class MemkImportService {
     // 이름 충돌 때문에 새 이름(_1, _2…)으로 만들어진 '복사본' 폴더의 로컬 id. 여기 들어가는
     // 카드는 원본과 uuid가 같으면 UNIQUE+ignore로 전부 건너뛰어 빈 폴더만 남으므로 새 uuid를 받는다.
     final renamedFolderIds = <int>{};
+    // 기존 폴더에 **병합**되는 대상의 로컬 id. 이 폴더의 카드는 아카이브 sequence를 그대로
+    // 쓰면 기존 카드 사이에 흩어져 끼고 번호가 겹친다 — 대상 폴더 맨 뒤로 새로 매긴다
+    // (감사 D7-04, 카드 이동 규칙과 동일).
+    final mergedFolderIds = <int>{};
     int newFolders = 0;
     int mergedFolders = 0;
 
@@ -271,6 +275,7 @@ class MemkImportService {
         final mappedId = folderMapping[memkFolderId];
         if (mappedId != null) {
           folderIdMap[memkFolderId] = mappedId;
+          mergedFolderIds.add(mappedId);
           mergedFolders++;
           continue;
         }
@@ -293,6 +298,7 @@ class MemkImportService {
       if (mergeTarget != null) {
         // 기존 폴더에 병합
         folderIdMap[memkFolderId] = mergeTarget.id!;
+        mergedFolderIds.add(mergeTarget.id!);
         mergedFolders++;
       } else {
         // 새 폴더 생성 (id를 제거하여 autoincrement 사용)
@@ -331,6 +337,7 @@ class MemkImportService {
           final retryFolder = await db.getNonBundleFolderByName(targetName);
           if (retryFolder != null) {
             folderIdMap[memkFolderId] = retryFolder.id!;
+            mergedFolderIds.add(retryFolder.id!);
             mergedFolders++;
           }
         }
@@ -353,6 +360,12 @@ class MemkImportService {
 
     // 필요한 이미지 파일명 수집
     final neededImageFiles = <String>{};
+
+    // 병합 대상 폴더별 다음 sequence — 대상 폴더의 현재 최대값에서 이어 붙인다(D7-04).
+    final nextCardSeq = <int, int>{};
+    for (final fid in mergedFolderIds) {
+      nextCardSeq[fid] = await db.getMaxSequence(fid);
+    }
 
     // 카드 배치 처리
     final batch = <CardModel>[];
@@ -404,7 +417,13 @@ class MemkImportService {
         // '새 이름으로 가져오기'(또는 묶음과 이름 충돌)로 만들어진 복사본 폴더의 카드는
         // 새 uuid를 받는다. 원본과 같은 uuid면 insertCardsBatch의 UNIQUE+ignore가 전부
         // 건너뛰어 "카드 0장짜리 빈 폴더"만 남고, uuid 복구 분기는 원본 폴더의 카드를 건드렸다.
-        if (renamedFolderIds.contains(cardJson['folderId'] as int)) {
+        final localFolderId = cardJson['folderId'] as int;
+        final seq = nextCardSeq[localFolderId];
+        if (seq != null) {
+          nextCardSeq[localFolderId] = seq + 1;
+          cardJson['sequence'] = seq + 1;
+        }
+        if (renamedFolderIds.contains(localFolderId)) {
           cardJson['uuid'] =
               '${const Uuid().v4()}-import-${DateTime.now().microsecondsSinceEpoch}';
         }

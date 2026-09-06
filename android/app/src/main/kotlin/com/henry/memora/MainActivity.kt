@@ -261,6 +261,7 @@ class MainActivity : FlutterActivity() {
                                 // startService 호출 경로가 향후 생겼을 때 사용자의 규칙이
                                 // 조용히 지워진다.
                                 (args["rulesCsv"] as? String)?.let { putExtra("rulesCsv", it) }
+                                (args["hideContent"] as? Boolean)?.let { putExtra("hideContent", it) }
                             }
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                 startForegroundService(intent)

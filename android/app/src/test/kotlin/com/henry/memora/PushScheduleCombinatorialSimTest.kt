@@ -111,7 +111,8 @@ class PushScheduleCombinatorialSimTest {
             val nowOfDay = nowAbs.floorMod1440()
             val rule = PushSchedule.activeRule(nowOfDay, rules)
             val delay = if (rule != null) {
-                rule.intervalMin
+                // 프로덕션 delayMsForNow()와 같은 클램프(감사 D6-01).
+                minOf(rule.intervalMin, PushSchedule.minutesUntilRuleChange(nowOfDay, rules))
             } else {
                 minOf(
                     PushSchedule.minutesUntilNextStart(nowOfDay, rules),
@@ -132,7 +133,13 @@ class PushScheduleCombinatorialSimTest {
             val nowOfDay = now.floorMod1440()
             val rule = PushSchedule.activeRule(nowOfDay, rules)
             if (rule != null) {
-                nextFireAbs = now + rule.intervalMin
+                // 프로덕션 computeNextFireTime()의 경계 클램프(감사 D6-01). 알람이 항상
+                // 정각에 처리되는 이 모델에선 savedFireTime == now이므로
+                // min(now + interval, now + minutesUntilRuleChange)와 같다.
+                nextFireAbs = now + minOf(
+                    rule.intervalMin,
+                    PushSchedule.minutesUntilRuleChange(nowOfDay, rules)
+                )
                 fires.add(now to rule)
             } else {
                 val gapMin = minOf(
@@ -239,23 +246,30 @@ class PushScheduleCombinatorialSimTest {
                     + " — 전환 지연이 '나가는 슬롯 1주기 이내'라는 설계 보장을 넘음",
                 staleness < outgoing.intervalMin
             )
+            // 감사 D6-01 이후: 경계 클램프 덕에 지연이 '1주기 이내'를 넘어 '0'이 됐다.
+            // 어떤 위상에서 켜도 새 규칙은 경계 그 분에 첫 발화를 한다.
+            assertEquals(
+                "phase=$phase: 경계 클램프가 걸렸다면 전환 지연은 정확히 0이어야 한다",
+                0, staleness
+            )
         }
     }
 
     // ─────────────────────────────────────────────────────────
-    // S8 — 슬롯(10분)이 자기 간격(30분)보다 짧으면, 특정 위상에서 그 슬롯 안에서
-    // 한 번도 안 울릴 수 있다 — 설계상 허용된 동작(버그 아님)임을 위상을 직접
-    // 통제해 실증한다. (Dart 쪽 S8은 이 부분을 "정적으로는 유효한 선언"까지만
-    // 확인하고, 위상 의존적인 "실제로 스킵될 수 있다"는 주장은 여기서 증명한다.)
+    // S8 — 슬롯(10분)이 자기 간격(30분)보다 짧아도, 경계 클램프(감사 D6-01) 덕에
+    // 그 슬롯 안에서 정확히 한 번은 울린다. v1.4.1 이전에는 위상에 따라 슬롯이
+    // 통째로 건너뛰어졌고 그것을 "설계상 허용"으로 문서화했었다 — 이 테스트는 그
+    // 옛 동작이 되살아나지 않는지를 지킨다.
     // ─────────────────────────────────────────────────────────
 
     @Test
-    fun `S8 변형 — 짧은 슬롯을 감싸는 두 규칙의 간격이 위상에 따라 그 슬롯을 통째로 건너뛸 수 있다(설계상 허용)`() {
+    fun `S8 변형 — 자기 간격보다 짧은 슬롯도 경계 클램프 덕에 슬롯 시작 시각에 정확히 한 번 발화한다`() {
         // rule7: 00:00-09:00(0-540) interval=12분. rule1: 09:00-09:10(540-550, 10분짜리
         // 짧은 슬롯) interval=30분. rule9: 09:10-24:00(550-0, wrap) interval=100분.
-        // 위상을 10분으로 고정하면 rule7의 틱이 10,22,34,...,538로 진행하다가 538+12=550으로
-        // 점프해 540-550 슬롯을 통째로 건너뛴다(538<540이고 550>=550이라 슬롯 안의 어떤
-        // 분도 틱과 만나지 않음).
+        // 위상 10분이 옛 구현에서 슬롯을 건너뛰던 바로 그 위상이다: 틱이 10,22,...,538로
+        // 진행하다 538+12=550으로 점프해 540-550 안의 어떤 분도 만나지 못했다.
+        // 이제 538분 틱이 규칙 경계(540)로 클램프돼 540에 깨어나고, 그 자리에서 rule1이
+        // 발화한 뒤 다시 550으로 클램프된다.
         val csv = "0:540:7:12,540:550:1:30,550:0:9:100"
         val rules = PushSchedule.parse(csv)
         val sim = TickSimulator(rules)
@@ -268,14 +282,18 @@ class PushScheduleCombinatorialSimTest {
             sim.fires.any { it.first == 538 && it.second.folderId == 7 }
         )
         assertTrue(
-            "538분 다음 발화가 550분(folder=9)이어야 함(540-550 슬롯을 건너뜀) — 실제 발화 목록: ${sim.fires}",
-            sim.fires.any { it.first == 550 && it.second.folderId == 9 }
+            "540분(짧은 슬롯 시작)에 folder=1이 발화했어야 함 — 경계 클램프가 빠지면"
+                + " 이 발화가 사라진다(옛 스킵 동작). 실제 발화 목록: ${sim.fires}",
+            sim.fires.any { it.first == 540 && it.second.folderId == 1 }
+        )
+        assertEquals(
+            "짧은 슬롯(540-550, 간격 30분)은 창보다 간격이 길므로 정확히 한 번만 울려야 한다"
+                + " — 실제 발화 목록: ${sim.fires}",
+            1, sim.fires.count { it.second.folderId == 1 }
         )
         assertTrue(
-            "짧은 슬롯(folder=1, 540-550)은 이 위상에서 단 한 번도 발화하지 않아야 한다"
-                + " — 슬롯(10분) < 간격(30분)일 때 설계상 허용되는 동작이지 버그가 아니다."
-                + " 실제 발화 목록: ${sim.fires}",
-            sim.fires.none { it.second.folderId == 1 }
+            "550분에 folder=9로 넘어갔어야 함 — 실제 발화 목록: ${sim.fires}",
+            sim.fires.any { it.first == 550 && it.second.folderId == 9 }
         )
     }
 }

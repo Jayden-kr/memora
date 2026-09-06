@@ -659,9 +659,22 @@ class DatabaseHelper {
       );
       final oldFolderId = card.isNotEmpty ? card.first['folder_id'] as int? : null;
 
+      // 배치 이동과 같은 규칙: 대상 폴더 맨 뒤로 새 번호를 준다(감사 D3-03).
+      // 호출자가 sequence를 명시했으면 그 값을 존중한다.
+      final nextSeq = (extra != null && extra.containsKey('sequence'))
+          ? null
+          : (Sqflite.firstIntValue(await txn.rawQuery(
+                    'SELECT MAX(sequence) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
+                    [newFolderId],
+                  )) ??
+                  0) +
+              1;
+      final values = <String, Object?>{'folder_id': newFolderId};
+      if (nextSeq != null) values['sequence'] = nextSeq;
+      if (extra != null) values.addAll(extra);
       result = await txn.update(
         AppConstants.tableCards,
-        {'folder_id': newFolderId, ...?extra},
+        values,
         where: 'id = ?',
         whereArgs: [cardId],
       );
@@ -1052,6 +1065,12 @@ class DatabaseHelper {
     final db = await database;
     await db.transaction((txn) async {
       final oldFolderIds = <int>{};
+      // 대상 폴더의 현재 최대 sequence — 여기서부터 이어 붙인다.
+      var nextSeq = Sqflite.firstIntValue(await txn.rawQuery(
+            'SELECT MAX(sequence) FROM ${AppConstants.tableCards} WHERE folder_id = ?',
+            [newFolderId],
+          )) ??
+          0;
 
       for (var i = 0; i < cardIds.length; i += _sqlInChunkSize) {
         final chunk = cardIds.sublist(
@@ -1068,11 +1087,15 @@ class DatabaseHelper {
         );
         oldFolderIds.addAll(affected.map((r) => r['folder_id'] as int));
 
-        // 청크별 UPDATE
-        await txn.rawUpdate(
-          'UPDATE ${AppConstants.tableCards} SET folder_id = ? WHERE id IN ($placeholders)',
-          [newFolderId, ...chunk],
-        );
+        // 청크별 UPDATE. sequence도 대상 폴더 맨 뒤로 새로 매긴다 — 원래 번호를 그대로
+        // 들고 가면 기존 카드 사이에 흩어져 끼고 번호가 겹친다(감사 D2-03/D8-01).
+        // 새 카드 생성이 쓰는 규칙(getMaxSequence+1)과 같게 맞춘다.
+        for (final id in chunk) {
+          await txn.rawUpdate(
+            'UPDATE ${AppConstants.tableCards} SET folder_id = ?, sequence = ? WHERE id = ?',
+            [newFolderId, ++nextSeq, id],
+          );
+        }
       }
 
       // 원본 + 대상 폴더 card_count 갱신

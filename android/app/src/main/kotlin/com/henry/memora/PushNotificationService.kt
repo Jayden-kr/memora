@@ -119,6 +119,13 @@ class PushNotificationService : Service() {
     // ACTION_SET_LANG이 이 값이 false인 채로 들어오면 죽어있던 :push를 막 콜드스타트로
     // 깨운 것 — LockScreenService의 SET_LANG 자가치유가 screenReceiver==null로 같은
     // 상황을 판정하는 것과 동일한 역할.
+    /**
+     * 잠금화면에서 카드 내용을 가릴지 여부(설정 화면의 "알림 내용 숨기기"). Flutter가
+     * startService 인텐트로 넘기고 `push_notif_prefs`에 보존한다 — 부팅 복원이나
+     * 프로세스 재생성처럼 extras 없는 콜드스타트에서도 설정이 유지돼야 하기 때문.
+     */
+    private var hideContent = false
+
     private var foregroundStarted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -238,11 +245,7 @@ class PushNotificationService : Service() {
                 // "직전 발화 다음" 계산이라 여기서 쓰면 한 주기를 통째로 건너뛰므로 쓰지 않는다.
                 val nowMin = nowMinutes()
                 val activeRule = PushSchedule.activeRule(nowMin, rules)
-                val delayMs: Long = if (activeRule != null) {
-                    activeRule.intervalMin * 60_000L
-                } else {
-                    minOf(PushSchedule.minutesUntilNextStart(nowMin, rules), MAX_GAP_POLL_MIN) * 60_000L
-                }
+                val delayMs: Long = delayMsForNow(nowMin, activeRule)
                 val pushPrefsForAlarm = getSharedPreferences("push_notif_prefs", MODE_PRIVATE)
                 val remaining = pushPrefsForAlarm.getLong("nextFireTime", 0L) - System.currentTimeMillis()
                 if (remaining in 1L..delayMs) {
@@ -411,10 +414,19 @@ class PushNotificationService : Service() {
         val savedTimingKey = prefs.getString("timingKey", "") ?: ""
         val wasRunning = prefs.getBoolean("running", false)
 
+        // rulesCsv와 같은 "전달 안 함=보존" 규율. 이 키를 안 싣는 시작 경로(부팅 복원 등)가
+        // 사용자의 숨김 설정을 조용히 false로 되돌리면 안 된다.
+        hideContent = if (intent != null && intent.hasExtra("hideContent")) {
+            intent.getBooleanExtra("hideContent", false)
+        } else {
+            prefs.getBoolean("hideContent", false)
+        }
+
         val editor = prefs.edit()
             .putString("scheduleCsv", canonicalCsv)
             .putString("timingKey", timingKey)
             .putString("lang", lang)
+            .putBoolean("hideContent", hideContent)
         if (hasFreshRulesFromIntent) {
             // Flutter가 실제로 비어있지 않은 규칙을 보냈다 — 이제부터는 §5.3 콜드스타트
             // 폴백이 더 이상 필요 없으므로(scheduleCsv가 항상 최신 상태) 레거시 키를 지운다.
@@ -450,11 +462,7 @@ class PushNotificationService : Service() {
         // 없는지에 따라 delayMs가 달라져야 첫 알람이 올바른 시각에 잡힌다.
         val now = nowMinutes()
         val rule = PushSchedule.activeRule(now, rules)
-        val delayMs: Long = if (rule != null) {
-            rule.intervalMin * 60_000L
-        } else {
-            minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN) * 60_000L
-        }
+        val delayMs: Long = delayMsForNow(now, rule)
 
         if (wasRunning && timingKey == savedTimingKey) {
             // 설정 동일 + 이미 실행 중이었음 → 남은 시간만 대기
@@ -638,7 +646,24 @@ class PushNotificationService : Service() {
             val fallback = legacyFallbackRules(prefs)
             if (fallback.isNotEmpty()) rules = fallback
         }
+        hideContent = prefs.getBoolean("hideContent", false)
     }
+
+    /**
+     * "지금부터 다음 알람까지" 대기할 밀리초. 직전 발화 시각을 기준으로 삼지 않는
+     * 진입점(스위치 On·설정 변경·SET_LANG 콜드스타트 자가치유)이 공유한다.
+     *
+     * 활성 규칙이 있으면 그 규칙의 간격을 쓰되, 규칙이 바뀌는 시점보다 늦지 않게
+     * 클램프한다(감사 D6-01) — 간격이 남은 창보다 길면 그 사이에 시작하는 규칙을
+     * 통째로 건너뛰기 때문이다. 활성 규칙이 없으면 다음 규칙 시작까지 기다린다
+     * (최대 [MAX_GAP_POLL_MIN]분마다 재평가).
+     */
+    private fun delayMsForNow(now: Int, rule: PushSchedule.Rule?): Long =
+        if (rule != null) {
+            minOf(rule.intervalMin, PushSchedule.minutesUntilRuleChange(now, rules)) * 60_000L
+        } else {
+            minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN) * 60_000L
+        }
 
     /**
      * TICK의 다음 발화 시각. 규칙이 있으면 예정시각(savedNextFireTime)+간격 — 실제 발화
@@ -652,7 +677,11 @@ class PushNotificationService : Service() {
             val savedFireTime = prefs.getLong("nextFireTime", System.currentTimeMillis())
             var next = savedFireTime + intervalMs
             while (next <= System.currentTimeMillis()) next += intervalMs
-            next
+            // 감사 D6-01: 다음 발화가 현재 규칙의 창을 넘어가면 그 사이에 시작하는 규칙이
+            // 있어도 깨어나지 않아 통째로 건너뛴다. 규칙이 바뀌는 시점보다 늦지 않게 당긴다.
+            val boundary = System.currentTimeMillis() +
+                PushSchedule.minutesUntilRuleChange(now, rules) * 60_000L
+            minOf(next, boundary)
         } else {
             val gapMin = minOf(PushSchedule.minutesUntilNextStart(now, rules), MAX_GAP_POLL_MIN)
             System.currentTimeMillis() + gapMin * 60_000L
@@ -825,6 +854,27 @@ class PushNotificationService : Service() {
                 .setContentIntent(pi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
+
+            // "알림 내용 숨기기": 잠금화면에서는 카드 질문 대신 일반 문구만 보여준다.
+            // VISIBILITY_PRIVATE만 주면 시스템 기본 문구("알림 내용이 숨겨져 있습니다")가
+            // 뜨므로, 앱 언어로 된 공개 버전을 직접 만들어 붙인다. 잠금 해제 후에는 원래
+            // 알림(질문 전문)이 그대로 보인다.
+            if (hideContent) {
+                val res = AppLang.wrap(this, lang)
+                val publicVersion = NotificationCompat.Builder(this, REVIEW_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentText(res.getString(R.string.push_hidden_body))
+                    .setAutoCancel(true)
+                    .setContentIntent(pi)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .build()
+                builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                    .setPublicVersion(publicVersion)
+            } else {
+                builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            }
 
             if (!pushPrefs.getBoolean("running", false)) {
                 Log.d(TAG, "STOP 이후 발화 취소(notify 직전)")

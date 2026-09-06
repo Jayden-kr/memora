@@ -372,7 +372,12 @@ class LockScreenService {
 
       final running = await isRunning();
 
-      if (newFolderIds.isEmpty) {
+      // 기본 폴더가 다 사라져도 유효한 시간대 슬롯이 남아 있으면 기능을 끄지 않는다
+      // (사용자 결정 2026-09-06, 감사 D1-04/D5-05). 슬롯 시간대에는 그 폴더가 뜨고,
+      // 그 밖의 시간에는 네이티브 사양대로 "빈 기본 폴더 = 전체 카드"로 동작한다.
+      final keepRunningOnSlots = prunedSlots.isNotEmpty &&
+          (settings['scheduleEnabled'] as bool? ?? false);
+      if (newFolderIds.isEmpty && !keepRunningOnSlots) {
         if (running) await stopService();
         await saveSettings(
           enabled: false,

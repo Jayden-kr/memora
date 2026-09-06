@@ -25,6 +25,10 @@ class _PushNotificationSettingsScreenState
   bool _loading = true;
   // 기본값 true — 실제 체크가 끝나기 전까지 경고 카드가 잠깐 보였다 사라지는 깜빡임 방지.
   bool _exactAlarmPermitted = true;
+  // 같은 이유로 기본값 true. 스위치가 켜져 있는데 이 값이 false일 때만 경고한다.
+  bool _notificationPermitted = true;
+  // 잠금화면에서 카드 질문을 가릴지 여부.
+  bool _hideContent = false;
 
   // 알림 시간대 규칙 목록 (v1.3.9: 전역 기본값/마스터 활성시간창 없음 — 이 목록이
   // 유일한 스케줄 표현이다).
@@ -37,7 +41,7 @@ class _PushNotificationSettingsScreenState
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadData();
-    _checkExactAlarmPermission();
+    _checkPermissions();
   }
 
   @override
@@ -59,14 +63,27 @@ class _PushNotificationSettingsScreenState
     // 사용자가 '알람 및 리마인더' 설정 화면에 다녀온 뒤 이 화면으로 돌아왔을 때
     // 재확인 — 설정 변경은 이 화면으로 돌아와야 알 수 있으므로 resume 시점에 체크.
     if (state == AppLifecycleState.resumed) {
-      _checkExactAlarmPermission();
+      _checkPermissions();
     }
+  }
+
+  /// 시스템 설정에서만 바뀌는 두 권한을 함께 재확인한다 — 둘 다 앱 밖에서 꺼질 수
+  /// 있어서 화면에 돌아온 시점이 아니면 알 방법이 없다.
+  Future<void> _checkPermissions() async {
+    await _checkExactAlarmPermission();
+    await _checkNotificationPermission();
   }
 
   Future<void> _checkExactAlarmPermission() async {
     final permitted = await NotificationService.canScheduleExactAlarms();
     if (!mounted) return;
     setState(() => _exactAlarmPermitted = permitted);
+  }
+
+  Future<void> _checkNotificationPermission() async {
+    final permitted = await NotificationService.hasNotificationPermission();
+    if (!mounted) return;
+    setState(() => _notificationPermitted = permitted);
   }
 
   Future<void> _loadData() async {
@@ -90,6 +107,10 @@ class _PushNotificationSettingsScreenState
     // 규칙을 조용히 지워버리기 때문. 문제가 있으면 화면에 빨갛게 보여줘서
     // (_buildPushRuleTile) 사용자가 직접 고치게 한다.
     _rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
+    _hideContent =
+        (settings[NotificationService.settingPushHideContent] ?? '')
+                .toLowerCase() ==
+            'true';
 
     setState(() {
       _folders = folders;
@@ -403,6 +424,10 @@ class _PushNotificationSettingsScreenState
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
+                // 스위치가 켜져 있는데 앱 알림 권한이 없으면 알림이 하나도 오지
+                // 않는다 — 화면은 "켜짐"으로 보여 사용자가 알 방법이 없었다.
+                if (_enabled && !_notificationPermitted)
+                  _buildNotificationPermissionPrompt(t),
                 if (!_exactAlarmPermitted) _buildExactAlarmPrompt(t),
 
                 ListTile(
@@ -533,15 +558,72 @@ class _PushNotificationSettingsScreenState
                         }
                       : null,
                 ),
+
+                const Divider(),
+                SwitchListTile(
+                  title: Text(t.pushHideContent),
+                  subtitle: Text(t.pushHideContentDesc),
+                  value: _hideContent,
+                  onChanged: _enabled ? _onHideContentChanged : null,
+                ),
               ],
             ),
     );
   }
 
+  Future<void> _onHideContentChanged(bool v) async {
+    final previous = _hideContent;
+    final messenger = ScaffoldMessenger.of(context);
+    final failMessage = AppLocalizations.of(context).pushToggleFail;
+    setState(() => _hideContent = v);
+    try {
+      await DatabaseHelper.instance.upsertSetting(
+          NotificationService.settingPushHideContent, v.toString());
+      // 실행 중인 :push에 새 값을 즉시 전달한다 — 재시작 없이 다음 알림부터 반영.
+      await NotificationService.rescheduleAll();
+    } catch (e) {
+      debugPrint('[PUSH_SETTINGS] hideContent 저장 실패: $e');
+      if (!mounted) return;
+      setState(() => _hideContent = previous);
+      messenger.showSnackBar(SnackBar(content: Text(failMessage)));
+    }
+  }
+
+  /// 스위치는 켜져 있는데 시스템에서 앱 알림이 꺼져 있을 때의 안내 카드.
+  /// [_buildExactAlarmPrompt]와 같은 경고 카드 모양을 쓴다.
+  Widget _buildNotificationPermissionPrompt(AppLocalizations t) =>
+      _buildWarningCard(
+        title: t.pushNotifPermissionTitle,
+        body: t.pushNotifPermissionBody,
+        buttonLabel: t.pushNotifPermissionButton,
+        onPressed: () async {
+          await openAppSettings();
+          await _checkNotificationPermission();
+        },
+      );
+
   /// API 33+에서 SCHEDULE_EXACT_ALARM이 자동 부여되지 않아 사용자가 직접
   /// '알람 및 리마인더'를 허용해야 하는 경우 보여주는 안내 카드.
   /// API 31 미만은 canScheduleExactAlarms가 항상 true를 반환하므로 노출되지 않는다.
-  Widget _buildExactAlarmPrompt(AppLocalizations t) {
+  Widget _buildExactAlarmPrompt(AppLocalizations t) => _buildWarningCard(
+        title: t.pushExactAlarmTitle,
+        body: t.pushExactAlarmBody,
+        buttonLabel: t.pushExactAlarmButton,
+        onPressed: () async {
+          await NotificationService.openExactAlarmSettings();
+          // 설정 화면이 별도 앱 화면이 아니라 다이얼로그로 뜨는 일부 기기 대비
+          // 즉시 1회 재확인 (주 경로는 didChangeAppLifecycleState resumed 콜백).
+          await _checkExactAlarmPermission();
+        },
+      );
+
+  /// 시스템 설정에 다녀와야 풀리는 문제를 알리는 공통 경고 카드(호박색).
+  Widget _buildWarningCard({
+    required String title,
+    required String body,
+    required String buttonLabel,
+    required Future<void> Function() onPressed,
+  }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = isDark
         ? Colors.amber.shade900.withValues(alpha: 0.25)
@@ -569,7 +651,7 @@ class _PushNotificationSettingsScreenState
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      t.pushExactAlarmTitle,
+                      title,
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
                             color: fg,
                             fontWeight: FontWeight.bold,
@@ -577,7 +659,7 @@ class _PushNotificationSettingsScreenState
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      t.pushExactAlarmBody,
+                      body,
                       style: Theme.of(context)
                           .textTheme
                           .bodySmall
@@ -591,14 +673,8 @@ class _PushNotificationSettingsScreenState
                           foregroundColor: fg,
                           side: BorderSide(color: fg),
                         ),
-                        onPressed: () async {
-                          await NotificationService.openExactAlarmSettings();
-                          // 설정 화면이 별도 앱 화면이 아니라 다이얼로그로 뜨는
-                          // 일부 기기 대비 즉시 1회 재확인 (주 경로는 위의
-                          // didChangeAppLifecycleState resumed 콜백).
-                          await _checkExactAlarmPermission();
-                        },
-                        child: Text(t.pushExactAlarmButton),
+                        onPressed: onPressed,
+                        child: Text(buttonLabel),
                       ),
                     ),
                   ],
