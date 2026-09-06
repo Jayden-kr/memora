@@ -599,6 +599,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                           (f) => DropdownMenuItem(
                             value: f.id,
                             child: Text(folderDisplayPath(f),
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis),
                           ),
                         )
@@ -913,6 +914,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                       value: folder.id!,
                       child: Text(
                         '${folderDisplayPath(folder)}  ·  ${t.cardCountSuffix(folder.cardCount)}',
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),

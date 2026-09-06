@@ -320,10 +320,13 @@ class LockScreenService {
   ///   (단, 시간대 슬롯은 기본 폴더와 별개의 유효한 데이터이므로 여기서 건드리지
   ///   않는다 — 사용자가 새 기본 폴더를 고르면 그대로 되살아난다)
   /// - 비활성화/미실행 상태면: 설정만 갱신
-  static Future<void> removeFoldersFromSettingsBatch(
+  /// 반환값: 이번 정리로 잠금화면을 껐으면 true. 화면이 사용자에게 알린다 —
+  /// 푸시 규칙 쪽(removeFoldersFromPushSchedule)과 같은 규칙이다. 예전엔 여기만
+  /// 조용히 꺼서, 사용자는 잠금화면이 왜 멈췄는지 알 방법이 없었다(스윕 S-02).
+  static Future<bool> removeFoldersFromSettingsBatch(
     List<int> folderIdsToRemove,
   ) async {
-    if (folderIdsToRemove.isEmpty) return;
+    if (folderIdsToRemove.isEmpty) return false;
     try {
       final settings = await getSettings();
       final rawIds = settings['folderIds'];
@@ -354,7 +357,7 @@ class LockScreenService {
       final scheduleChanged = prunedSlots.length != slots.length;
 
       if (newFolderIds.length == folderIds.length && !scheduleChanged) {
-        return; // 변경 없음 (기본 폴더도, 슬롯도 이 삭제와 무관)
+        return false; // 변경 없음 (기본 폴더도, 슬롯도 이 삭제와 무관)
       }
 
       final scheduleCsv = LockScreenSchedule.encode(prunedSlots);
@@ -392,6 +395,8 @@ class LockScreenService {
           scheduleEnabled: newScheduleEnabled,
           scheduleCsv: scheduleCsv,
         );
+        // 원래 켜져 있던 것을 이번에 껐을 때만 알린다.
+        return enabled;
       } else if (running && enabled) {
         await startService(
           enabled: enabled,
@@ -415,10 +420,12 @@ class LockScreenService {
           scheduleCsv: scheduleCsv,
         );
       }
+      return false;
     } catch (e) {
       debugPrint(
         '[LockScreenService] removeFoldersFromSettingsBatch error: $e',
       );
+      return false;
     }
   }
 }

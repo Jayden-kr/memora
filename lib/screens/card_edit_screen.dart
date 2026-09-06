@@ -883,6 +883,7 @@ class _CardEditScreenState extends State<CardEditScreen>
                           value: f.id,
                           child: Text(
                             folderDisplayPath(f),
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         );

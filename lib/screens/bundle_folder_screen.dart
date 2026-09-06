@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_label.dart';
 
 class BundleFolderScreen extends StatefulWidget {
   final Folder? existingBundle;
@@ -168,7 +169,8 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                       final available = _isFolderAvailable(folder);
                       final selected = _selectedFolderIds.contains(folder.id);
                       return CheckboxListTile(
-                        title: Text(folder.name),
+                        title: Text(folderDisplayPath(folder),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
                         subtitle: Text(available
                             ? t.cardCountSuffix(folder.cardCount)
                             : '${t.cardCountSuffix(folder.cardCount)} · ${t.bundleAlreadyIn}'),

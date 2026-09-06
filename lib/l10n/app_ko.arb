@@ -493,6 +493,7 @@
   "multiImportCancelledTitle": "가져오기를 멈췄습니다",
   "multiImportCancelledNote": "{count}개 파일은 가져오지 않았습니다. 이미 들어온 내용은 그대로 남습니다.",
   "@multiImportCancelledNote": {"placeholders": {"count": {"type": "int"}}},
+  "homeLockScreenTurnedOff": "지운 폴더가 잠금화면의 마지막 폴더라 잠금화면을 껐습니다.",
   "opBusyIgnored": "다른 가져오기/내보내기가 진행 중입니다. 끝난 뒤에 다시 시도해주세요.",
   "pushNotifPermissionTitle": "앱 알림이 꺼져 있습니다",
   "pushNotifPermissionBody": "복습 알림은 켜져 있지만 앱 알림 권한이 꺼져 있어 알림이 오지 않습니다. 시스템 설정에서 알림을 허용해주세요.",

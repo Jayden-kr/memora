@@ -432,6 +432,7 @@ class _ImportScreenState extends State<ImportScreen> {
                                 return DropdownMenuItem(
                                   value: f.id,
                                   child: Text(folderDisplayPath(f),
+                                      maxLines: 1,
                                       overflow: TextOverflow.ellipsis),
                                 );
                               }).toList(),

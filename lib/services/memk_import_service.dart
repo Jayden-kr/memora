@@ -372,10 +372,23 @@ class MemkImportService {
     final neededImageFiles = <String>{};
 
     // 병합 대상 폴더별 다음 sequence — 대상 폴더의 현재 최대값에서 이어 붙인다(D7-04).
+    //
+    // ⚠️ 이 값은 배치를 flush할 때마다 다시 읽는다. 한 번만 읽고 메모리에서만 올리면,
+    // 가져오기가 도는 동안 사용자가 같은 폴더로 카드를 옮기거나 새로 만들 때(둘 다
+    // 라이브 MAX(sequence)+1을 쓴다) 같은 번호가 둘 생긴다 — 가져오기는 배치 사이에
+    // 이벤트 루프를 양보하고 화면 이동도 막지 않으므로 실제로 일어날 수 있다(스윕 D-01).
     final nextCardSeq = <int, int>{};
-    for (final fid in mergedFolderIds) {
-      nextCardSeq[fid] = await db.getMaxSequence(fid);
+    Future<void> refreshNextCardSeq() async {
+      for (final fid in mergedFolderIds) {
+        final live = await db.getMaxSequence(fid);
+        final known = nextCardSeq[fid];
+        // 내가 방금 배치로 넣은 것도 포함된 값이라 더 크거나 같다. 남이 끼어들어
+        // 더 올려놨으면 그 값을 따른다.
+        nextCardSeq[fid] = (known == null || live > known) ? live : known;
+      }
     }
+
+    await refreshNextCardSeq();
 
     // 카드 배치 처리
     final batch = <CardModel>[];
@@ -448,6 +461,8 @@ class MemkImportService {
         // 배치 insert (UUID 중복은 건너뜀)
         if (batch.length >= AppConstants.importBatchSize) {
           await flushBatch();
+          // flush로 커밋된 값 + 그 사이 남이 끼워 넣은 값을 함께 반영한다(스윕 D-01).
+          await refreshNextCardSeq();
           if (shouldCancel?.call() ?? false) {
             cancelled = true;
             break;

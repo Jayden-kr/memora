@@ -1114,14 +1114,44 @@ class _FolderNameDialogState extends State<_FolderNameDialog> {
 ///
 /// 반환값은 이번 삭제로 사라진 푸시 규칙 정보다 — 호출 화면이
 /// [showPushRulesRemovedNotice]로 사용자에게 알린다. 홈과 묶음 화면이 같이 쓴다.
-Future<({int removedRules, bool pushDisabled})> cleanupAfterFolderDelete({
+Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
+    cleanupAfterFolderDelete({
+  required List<int> regularIds,
+  required bool needsPushReschedule,
+  required List<String> filePaths,
+}) async {
+  // 두 화면(홈·묶음)이 이 정리를 fire-and-forget으로 돌린다. 안에서 하는 일은 전부
+  // "설정을 통째로 읽고 → Dart에서 걸러내고 → 통째로 되쓰기"라 두 개가 겹치면 나중
+  // 것이 앞의 것을 덮어써, 이미 지운 폴더를 가리키는 규칙이 되살아난다(스윕 L-02).
+  // 트랜잭션으로 감싸기엔 네이티브 채널까지 걸쳐 있어, 호출을 줄로 세운다.
+  final previous = _cleanupChain;
+  final gate = Completer<void>();
+  _cleanupChain = gate.future;
+  await previous;
+  try {
+    return await _cleanupAfterFolderDeleteImpl(
+      regularIds: regularIds,
+      needsPushReschedule: needsPushReschedule,
+      filePaths: filePaths,
+    );
+  } finally {
+    gate.complete();
+  }
+}
+
+/// 진행 중인 정리 작업의 꼬리. 다음 호출이 여기에 매달려 순서대로 실행된다.
+Future<void> _cleanupChain = Future<void>.value();
+
+Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
+    _cleanupAfterFolderDeleteImpl({
   required List<int> regularIds,
   required bool needsPushReschedule,
   required List<String> filePaths,
 }) async {
   try {
     // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
-    await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
+    final lockScreenDisabled =
+        await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
     // needsPushReschedule 플래그와 무관하게 항상 호출 — 그 플래그는
     // push_alarms.folder_id(전역 기본 폴더)만 추적해서, 푸시 시간대 슬롯에만
     // 걸린 삭제(기본 폴더는 안 건드리고 슬롯 하나가 가리키던 폴더만 지운 경우)를
@@ -1132,26 +1162,39 @@ Future<({int removedRules, bool pushDisabled})> cleanupAfterFolderDelete({
       await NotificationService.rescheduleAll();
     }
     await DatabaseHelper.instance.deleteUnreferencedMediaFiles(filePaths);
-    return pruned;
+    return (
+      removedRules: pruned.removedRules,
+      pushDisabled: pruned.pushDisabled,
+      lockScreenDisabled: lockScreenDisabled,
+    );
   } catch (e) {
     debugPrint('[HOME] post-delete cleanup error: $e');
-    return (removedRules: 0, pushDisabled: false);
+    return (removedRules: 0, pushDisabled: false, lockScreenDisabled: false);
   }
 }
 
 /// 폴더를 지우면 그 폴더를 가리키던 알림 시간대도 함께 사라진다 — 예전엔 아무 말 없이
 /// 사라져서, 알림이 안 오는 이유를 사용자가 알 수 없었다.
 void showPushRulesRemovedNotice(
-    BuildContext context, ({int removedRules, bool pushDisabled}) pruned) {
-  if (pruned.removedRules <= 0) return;
+    BuildContext context,
+    ({int removedRules, bool pushDisabled, bool lockScreenDisabled}) pruned) {
   final t = AppLocalizations.of(context);
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(pruned.pushDisabled
-          ? t.homePushRulesRemovedAllOff(pruned.removedRules)
-          : t.homePushRulesRemoved(pruned.removedRules)),
-    ),
-  );
+  final messenger = ScaffoldMessenger.of(context);
+  if (pruned.removedRules > 0) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(pruned.pushDisabled
+            ? t.homePushRulesRemovedAllOff(pruned.removedRules)
+            : t.homePushRulesRemoved(pruned.removedRules)),
+      ),
+    );
+  }
+  // 잠금화면도 같은 규칙으로 알린다 — 조용히 꺼지면 사용자가 이유를 알 수 없다.
+  if (pruned.lockScreenDisabled) {
+    messenger.showSnackBar(
+      SnackBar(content: Text(t.homeLockScreenTurnedOff)),
+    );
+  }
 }
 
 class _BundleChildListScreen extends StatefulWidget {

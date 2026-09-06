@@ -52,7 +52,7 @@ void main() {
       expect(compareNamesForSort('B', 'a'), greaterThan(0));
     });
 
-    test('전순서다 — 어떤 두 원소든 부호가 대칭이고 자기 자신과는 0', () {
+    test('전순서다 — 반사·대칭·추이 전부', () {
       const samples = [
         'Apple', 'apple', 'banana', '가', '한글', '', 'Zebra', '1',
         'É', 'é', 'K',
@@ -63,6 +63,43 @@ void main() {
           final ab = compareNamesForSort(a, b);
           final ba = compareNamesForSort(b, a);
           expect(ab.sign, -ba.sign, reason: 'asymmetry: $a vs $b');
+        }
+      }
+      // ⚠️ 반사성과 대칭성만 보면 `(a, b) => 0`(전부 같다)도 통과한다 — 실제로 그
+      // 돌연변이가 이 테스트를 살아서 빠져나갔다(리뷰 P4-02). 추이성을 더해도
+      // `=> 0`은 유효한 전순서라 여전히 통과하므로, "서로 다른 문자열은 반드시
+      // 갈린다"는 퇴화 방지 단언을 먼저 둔다. 이 비교자는 접은 키가 같아도 원문으로
+      // 갈라내므로 같은 문자열일 때만 0이어야 한다.
+      for (final a in samples) {
+        for (final b in samples) {
+          if (a == b) continue;
+          expect(compareNamesForSort(a, b), isNot(0),
+              reason: 'distinct strings must not compare equal: $a vs $b');
+        }
+      }
+      // List.sort가 일관된 결과를 내려면 필요한 성질은 추이성이다.
+      for (final a in samples) {
+        for (final b in samples) {
+          if (compareNamesForSort(a, b) >= 0) continue;
+          for (final c in samples) {
+            if (compareNamesForSort(b, c) >= 0) continue;
+            expect(
+              compareNamesForSort(a, c),
+              lessThan(0),
+              reason: 'transitivity: $a < $b < $c 인데 $a >= $c',
+            );
+          }
+        }
+      }
+      // 같음(0)도 추이적이어야 한다 — a==b, b==c 면 a==c.
+      for (final a in samples) {
+        for (final b in samples) {
+          if (compareNamesForSort(a, b) != 0) continue;
+          for (final c in samples) {
+            if (compareNamesForSort(b, c) != 0) continue;
+            expect(compareNamesForSort(a, c), 0,
+                reason: 'equality transitivity: $a == $b == $c');
+          }
         }
       }
     });

@@ -6,6 +6,7 @@ import '../models/folder.dart';
 ///
 /// [Folder.parentFolderName]은 조회 함수(`getNonBundleFolders`/`getChildFolders`)가
 /// 묶음 행에서 JOIN으로 채워준다. 비어 있으면 최상위 폴더로 보고 이름만 돌려준다.
+/// ⚠️ 이 값을 [Text]로 그릴 땐 `maxLines: 1`을 함께 줄 것. maxLines가 없으면 ellipsis는 '줄바꿈이 불가능한 한 덩어리'일 때만 잘린다. `묶음 > 폴더`처럼 공백이 있는 문자열은 대신 두 줄로 접히는데, DropdownMenuItem은 높이가 고정(48dp)이라 두 번째 줄이 칸 밖으로 삐져나온다(리뷰 P4-01).
 String folderDisplayPath(Folder folder) {
   final bundle = folder.parentFolderName;
   if (bundle == null || bundle.isEmpty) return folder.name;

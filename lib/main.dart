@@ -428,7 +428,20 @@ Future<void> _reconcileLockScreenFoldersOnce() async {
     if (stale.isEmpty) return;
 
     debugPrint('[STARTUP] 잠금화면이 없는 폴더 참조 중: $stale → 정리');
-    await LockScreenService.removeFoldersFromSettingsBatch(stale);
+    final disabled =
+        await LockScreenService.removeFoldersFromSettingsBatch(stale);
+    // 이 정리로 잠금화면이 꺼졌다면 사용자에게 말해준다. 폴더 삭제 경로와 같은 규칙이다
+    // (스윕 S-02). 시작 시점이라 아직 화면이 없을 수 있어 첫 프레임 뒤로 미룬다.
+    if (disabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final messenger = scaffoldMessengerKey.currentState;
+        final context = navigatorKey.currentContext;
+        if (messenger == null || context == null) return;
+        messenger.showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context).homeLockScreenTurnedOff),
+        ));
+      });
+    }
   } catch (e) {
     debugPrint('[STARTUP] 잠금화면 폴더 대조 실패: $e');
   }

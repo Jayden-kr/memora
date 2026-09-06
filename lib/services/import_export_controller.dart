@@ -79,7 +79,11 @@ class ImportExportController {
   /// 그대로 남고(부분 롤백은 병합 가져오기에서 "이번 것만" 골라낼 수 없다), 만들다 만
   /// PDF 파일은 네이티브가 지운다.
   Future<void> requestCancel() async {
-    if (!isRunning || _cancelRequested) return;
+    // isRunning만 보면 안 된다: 배치 가져오기는 파일 하나가 끝날 때 isRunning을
+    // false로 내리고, 다음 파일을 시작하기 전에 DB 쓰기를 await한다. 그 틈에 누른
+    // 중지가 통째로 사라져 남은 파일이 전부 들어갔다(스윕 L-01). 배치가 열려 있으면
+    // 받아서 다음 파일 경계에서 끊는다.
+    if ((!isRunning && _batchDepth == 0) || _cancelRequested) return;
     _cancelRequested = true;
     _notify();
     // PDF는 네이티브 루프 안에서 돌아 Dart 플래그를 못 본다 — 채널로 따로 알린다.

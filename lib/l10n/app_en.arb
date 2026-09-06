@@ -326,6 +326,7 @@
   "multiImportCancelledTitle": "Import stopped",
   "multiImportCancelledNote": "{count} file(s) were not imported. What already came in stays.",
   "@multiImportCancelledNote": {"placeholders": {"count": {"type": "int"}}},
+  "homeLockScreenTurnedOff": "The deleted folder was the lock screen's only folder, so the lock screen is now off.",
   "opBusyIgnored": "Another import or export is already running. Try again when it finishes.",
   "pushNotifPermissionTitle": "Notifications are turned off",
   "pushNotifPermissionBody": "Review notifications are on, but this app is not allowed to show notifications, so nothing will arrive. Allow notifications in system settings.",

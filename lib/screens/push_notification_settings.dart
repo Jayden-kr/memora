@@ -813,6 +813,7 @@ class _PushRuleDialogState extends State<_PushRuleDialog> {
                     .map((f) => DropdownMenuItem(
                           value: f.id,
                           child: Text(folderDisplayPath(f),
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis),
                         )),
               ],

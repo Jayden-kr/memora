@@ -352,6 +352,30 @@ class DatabaseHelper {
     );
   }
 
+  /// 묶음에서 빠져나오는 폴더들의 parent를 풀고, **최상위 순번을 새로 준다.**
+  ///
+  /// 묶음 화면과 홈 화면은 같은 `sequence` 컬럼을 각자 0..n-1로 다시 매긴다. 그래서
+  /// 묶음 안에서 순서를 바꾼 폴더는 0,1,2… 같은 작은 값을 들고 있는데, 그대로 최상위로
+  /// 올라오면 기존 최상위 폴더의 번호와 정면으로 부딪힌다(스윕 D-02). 조회 쪽 정렬은
+  /// 부모가 있을 때만 묶음 자리로 보정해 주므로, 부모가 사라지는 이 순간에 번호를
+  /// 바로잡아야 한다. 목록 맨 뒤로 보낸다 — 사용자가 정한 최상위 순서를 흔들지 않는다.
+  static Future<void> _unlinkFromBundle(
+      DatabaseExecutor txn, List<int> folderIds) async {
+    if (folderIds.isEmpty) return;
+    var nextSeq = Sqflite.firstIntValue(await txn.rawQuery(
+            'SELECT MAX(sequence) FROM ${AppConstants.tableFolders} WHERE parent_folder_id IS NULL')) ??
+        0;
+    for (final id in folderIds) {
+      nextSeq++;
+      await txn.update(
+        AppConstants.tableFolders,
+        {'parent_folder_id': null, 'sequence': nextSeq},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
   /// 폴더 시퀀스 일괄 업데이트 (트랜잭션 사용)
   Future<void> updateFolderSequencesBatch(
       Map<int, int> folderIdToSequence) async {
@@ -394,10 +418,12 @@ class DatabaseHelper {
                   ? bundleFolderIds.length
                   : i + _sqlInChunkSize);
           final ph = List.filled(chunk.length, '?').join(',');
-          await txn.rawUpdate(
-            'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = NULL WHERE parent_folder_id IN ($ph)',
+          final children = await txn.rawQuery(
+            'SELECT id FROM ${AppConstants.tableFolders} WHERE parent_folder_id IN ($ph)',
             chunk,
           );
+          await _unlinkFromBundle(
+              txn, children.map((r) => r['id'] as int).toList());
           await txn.rawDelete(
             'DELETE FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
             chunk,
@@ -499,11 +525,7 @@ class DatabaseHelper {
         if (oldChildIds != null) {
           final toUnset = oldChildIds.difference(selectedChildIds).toList();
           if (toUnset.isNotEmpty) {
-            final ph = List.filled(toUnset.length, '?').join(',');
-            await txn.rawUpdate(
-              'UPDATE ${AppConstants.tableFolders} SET parent_folder_id = NULL WHERE id IN ($ph)',
-              toUnset,
-            );
+            await _unlinkFromBundle(txn, toUnset);
           }
         }
       }
