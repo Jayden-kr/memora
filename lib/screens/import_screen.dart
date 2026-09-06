@@ -510,6 +510,22 @@ class _ImportScreenState extends State<ImportScreen> {
                   ),
               textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 24),
+            // 멈추면 여기까지 들어온 내용은 남는다 — 되돌리려면 부분 롤백이 필요한데
+            // 병합 가져오기에선 "이번에 들어온 것만" 골라낼 수 없다. 결과 화면이 어디까지
+            // 들어왔는지 알려준다.
+            if (_controller.isCancelRequested)
+              Text(
+                t.opCancelling,
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              )
+            else
+              OutlinedButton.icon(
+                onPressed: () => _controller.requestCancel(),
+                icon: const Icon(Icons.stop_circle_outlined),
+                label: Text(t.opCancelButton),
+              ),
           ],
         ),
       ),
@@ -529,11 +545,25 @@ class _ImportScreenState extends State<ImportScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.check_circle,
-                size: 64, color: Theme.of(context).colorScheme.primary),
+            Icon(r.cancelled ? Icons.stop_circle_outlined : Icons.check_circle,
+                size: 64,
+                color: r.cancelled
+                    ? Theme.of(context).colorScheme.onSurfaceVariant
+                    : Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            Text(t.importDoneTitle,
-                style: Theme.of(context).textTheme.headlineSmall),
+            Text(r.cancelled ? t.importCancelledTitle : t.importDoneTitle,
+                style: Theme.of(context).textTheme.headlineSmall,
+                textAlign: TextAlign.center),
+            if (r.cancelled) ...[
+              const SizedBox(height: 8),
+              Text(
+                t.importCancelledNote,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: 24),
             _resultRow(t.importDoneNewCards, t.cardCountSuffix(r.newCards)),
             _resultRow(t.importDoneSkipped, t.cardCountSuffix(r.skippedCards)),

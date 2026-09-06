@@ -43,6 +43,11 @@ class ImportResult {
   final int images;
   final Duration duration;
 
+  /// 사용자가 중간에 멈췄다. 그때까지 들어간 폴더·카드는 그대로 남는다 —
+  /// 되돌리려면 부분 롤백이 필요한데, 병합 가져오기는 기존 폴더에 섞여 들어가서
+  /// "이번에 들어온 것만" 정확히 골라낼 수 없다. 대신 어디까지 들어왔는지 알린다.
+  final bool cancelled;
+
   const ImportResult({
     this.newCards = 0,
     this.skippedCards = 0,
@@ -50,6 +55,7 @@ class ImportResult {
     this.mergedFolders = 0,
     this.images = 0,
     this.duration = Duration.zero,
+    this.cancelled = false,
   });
 }
 
@@ -167,6 +173,7 @@ class MemkImportService {
     required void Function(ImportProgress) onProgress,
     Map<int, int?>? folderMapping,
     String conflictPolicy = 'merge',
+    bool Function()? shouldCancel,
   }) async {
     final stopwatch = Stopwatch()..start();
     final db = DatabaseHelper.instance;
@@ -357,6 +364,9 @@ class MemkImportService {
     final totalCards = selectedCards.length;
     int newCards = 0;
     int skippedCards = 0;
+    // 취소는 배치 경계에서만 본다 — 트랜잭션 한복판에서 끊으면 카드 몇 장이
+    // 반쯤 들어간 상태가 된다. 배치를 flush한 직후가 가장 깨끗한 지점이다.
+    var cancelled = false;
 
     // 필요한 이미지 파일명 수집
     final neededImageFiles = <String>{};
@@ -438,6 +448,10 @@ class MemkImportService {
         // 배치 insert (UUID 중복은 건너뜀)
         if (batch.length >= AppConstants.importBatchSize) {
           await flushBatch();
+          if (shouldCancel?.call() ?? false) {
+            cancelled = true;
+            break;
+          }
 
           // 진행률은 '처리한' 카드 수(i+1)다 — '삽입된' 수(newCards)로 세면 재import처럼
           // 전부 건너뛰는 경우 0/N에 멈춰 보였다(D7-08).
@@ -462,12 +476,15 @@ class MemkImportService {
 
     // 남은 배치 처리
     await flushBatch();
+    if (!cancelled && (shouldCancel?.call() ?? false)) cancelled = true;
 
     onProgress(ImportProgress(
       phase: 'images',
       currentCards: totalCards,
       totalCards: totalCards,
-      message: _isEn ? 'Extracting images...' : '이미지 추출 중...',
+      message: cancelled
+          ? (_isEn ? 'Cancelling...' : '취소하는 중...')
+          : (_isEn ? 'Extracting images...' : '이미지 추출 중...'),
     ));
 
     // 이미지 추출 — archive 인덱스에 있는 파일만 (누락분은 뒤에서 raw 추출)
@@ -476,6 +493,7 @@ class MemkImportService {
     int archiveSkipped = 0;
     final totalImages = neededImageFiles.length;
     for (final fileName in neededImageFiles) {
+      if (cancelled) break;
       try {
         final zipFile = zipFileIndex[fileName] ?? zipFileByBareName[fileName];
         if (zipFile == null) {
@@ -511,6 +529,10 @@ class MemkImportService {
                 : '이미지 추출 중... $imageCount / $totalImages',
           ));
           await Future.delayed(Duration.zero);
+          if (shouldCancel?.call() ?? false) {
+            cancelled = true;
+            break;
+          }
         }
       } catch (e) {
         debugPrint('[IMPORT] image extraction failed: $fileName — $e');
@@ -527,7 +549,7 @@ class MemkImportService {
       }
     }
 
-    if (missingOnDisk.isNotEmpty) {
+    if (missingOnDisk.isNotEmpty && !cancelled) {
       debugPrint('[IMPORT] ${missingOnDisk.length} images missing after archive extraction, trying raw ZIP extraction');
       // 아카이브 참조를 *전부* 놓는다 — 인덱스 맵만 비우던 예전 코드는 archive 지역변수와
       // counter.json ArchiveFile이 원본 버퍼 전체를 붙들고 있어 아무것도 회수되지 않았고,
@@ -595,6 +617,7 @@ class MemkImportService {
       mergedFolders: mergedFolders,
       images: imageCount,
       duration: stopwatch.elapsed,
+      cancelled: cancelled,
     );
 
     onProgress(ImportProgress(
@@ -603,7 +626,9 @@ class MemkImportService {
       totalCards: totalCards,
       currentImages: imageCount,
       totalImages: totalImages,
-      message: _isEn ? 'Import complete' : 'Import 완료',
+      message: cancelled
+          ? (_isEn ? 'Import cancelled' : 'Import 취소됨')
+          : (_isEn ? 'Import complete' : 'Import 완료'),
     ));
 
     return result;

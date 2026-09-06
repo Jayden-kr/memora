@@ -13,8 +13,22 @@ import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 
+/** 사용자가 PDF 생성을 중간에 멈췄을 때 던진다. 만들다 만 파일은 지워진다. */
+class PdfCancelledException : Exception("PDF generation cancelled by user")
+
 class PdfGenerator(private val context: Context) {
     companion object {
+        /**
+         * 취소 요청 플래그. Flutter가 UI 스레드에서 [requestCancel]을 부르고, 생성은
+         * 워커 스레드에서 돌기 때문에 원자적 플래그로 건넨다. 한 번에 하나의 PDF만
+         * 만들 수 있으므로(컨트롤러의 _operationLock) 전역 플래그 하나로 충분하다.
+         */
+        private val cancelRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun requestCancel() {
+            cancelRequested.set(true)
+        }
+
         private const val TAG = "PdfGenerator"
         private const val PW = 595   // A4 72dpi
         private const val PH = 842
@@ -38,13 +52,23 @@ class PdfGenerator(private val context: Context) {
         val qImages: List<String>, val aImages: List<String>,
     )
 
+    /**
+     * 폴더 하나를 PDF로 만든다. 카드 루프에서 취소 플래그를 보고, 끊기면
+     * [PdfCancelledException]을 던진다 — 아래 catch가 만들다 만 파일을 지운다.
+     *
+     * @param resetCancel 배치의 첫 폴더에서만 true. 이전 실행이 남긴 플래그를 지운다.
+     *   중간 폴더에서 리셋하면 사용자가 방금 누른 취소가 무시된다.
+     */
     fun generate(
         outputPath: String,
         folderId: Int,
         folderIndex: Int = 0,
         totalFolders: Int = 1,
+        resetCancel: Boolean = true,
         onProgress: (current: Int, total: Int, message: String) -> Unit,
     ) {
+        if (resetCancel) cancelRequested.set(false)
+        if (cancelRequested.get()) throw PdfCancelledException()
         loadFonts()
         // PDF 본문·진행 알림 문구도 앱 설정 언어를 따른다(시스템 언어 아님).
         val res = AppLang.wrap(context)
@@ -81,6 +105,8 @@ class PdfGenerator(private val context: Context) {
                 y += 12f
 
                 for ((i, c) in cards.withIndex()) {
+                    // 카드 경계에서만 본다 — 페이지 하나를 그리다 마는 일이 없게.
+                    if (cancelRequested.get()) throw PdfCancelledException()
                     val h = measure(c)
                     if (y + h > PH - M && y > M + 10f) {
                         cv = next()
@@ -112,7 +138,8 @@ class PdfGenerator(private val context: Context) {
                 FileOutputStream(outputPath).use { doc.writeTo(it) }
                 Log.d(TAG, "PDF saved: $outputPath ($pn pages, $n cards)")
             } catch (e: Throwable) {
-                // 실패 시 불완전 PDF 파일 삭제 (OOM 같은 Error도 — 안 잡으면 잘린 PDF가 남았다, D9-06)
+                // 실패·취소 시 불완전 PDF 파일 삭제 (OOM 같은 Error도 — 안 잡으면 잘린
+                // PDF가 남았다, D9-06). 취소도 같은 경로를 탄다.
                 try { java.io.File(outputPath).delete() } catch (_: Exception) {}
                 throw e
             } finally {

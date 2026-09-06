@@ -169,6 +169,9 @@ class MainActivity : FlutterActivity() {
                             }
                             val folderIndex = call.argument<Int>("folderIndex") ?: 0
                             val totalFolders = call.argument<Int>("totalFolders") ?: 1
+                            // 배치의 첫 폴더에서만 취소 플래그를 리셋한다 — 중간 폴더에서
+                            // 리셋하면 방금 누른 취소가 무시된다.
+                            val resetCancel = call.argument<Boolean>("resetCancel") ?: (folderIndex == 0)
                             val channel = ieChannel
                             Thread {
                                 try {
@@ -177,6 +180,7 @@ class MainActivity : FlutterActivity() {
                                         folderId = folderId,
                                         folderIndex = folderIndex,
                                         totalFolders = totalFolders,
+                                        resetCancel = resetCancel,
                                         onProgress = { current, total, message ->
                                             runOnUiThread {
                                                 channel?.invokeMethod("pdfProgress", mapOf(
@@ -191,6 +195,14 @@ class MainActivity : FlutterActivity() {
                                         try { result.success(true) }
                                         catch (e2: Exception) { Log.w(TAG, "Result already replied", e2) }
                                     }
+                                } catch (e: PdfCancelledException) {
+                                    // 사용자가 멈춘 것은 실패가 아니다 — Dart가 결과로 구분할 수
+                                    // 있게 false를 돌려준다(에러로 던지면 화면이 실패로 보고한다).
+                                    Log.d(TAG, "PDF generation cancelled by user")
+                                    runOnUiThread {
+                                        try { result.success(false) }
+                                        catch (e2: Exception) { Log.w(TAG, "Result already replied", e2) }
+                                    }
                                 } catch (e: Throwable) {
                                     // Exception만 잡으면 OOM 같은 Error는 result 응답 없이 프로세스를
                                     // 죽이고 Dart await가 영영 안 돌아왔다(D9-06).
@@ -201,6 +213,10 @@ class MainActivity : FlutterActivity() {
                                     }
                                 }
                             }.start()
+                        }
+                        "cancelPdf" -> {
+                            PdfGenerator.requestCancel()
+                            result.success(true)
                         }
                         "moveToBackground" -> {
                             moveTaskToBack(true)

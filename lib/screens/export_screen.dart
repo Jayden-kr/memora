@@ -39,6 +39,9 @@ class _ExportScreenState extends State<ExportScreen> {
   bool get _isExporting =>
       _controller.isRunning && _controller.currentOperation == 'export';
 
+  /// 지난 실행의 내보내기 실패를 이 화면이 뜬 뒤 한 번 보여주기 위해 잠깐 들고 있는다.
+  Object? _pendingExportError;
+
   @override
   void initState() {
     super.initState();
@@ -49,12 +52,28 @@ class _ExportScreenState extends State<ExportScreen> {
       // 이미 진행 중이거나 알림 탭으로 열린 경우 — 폴더 로딩 불필요
       _loading = false;
     } else {
-      // 새 Export 화면: 이전 결과 정리 (재진입 시 이전 완료 다이얼로그 방지)
+      // 새 Export 화면: 이전 결과 정리 (재진입 시 이전 완료 다이얼로그 방지).
+      // 다만 지난 내보내기가 파일 하나 없이 실패로 끝났다면 그 사실은 한 번은 보여주고
+      // 지운다 — 예전엔 메뉴로 이 화면을 열면 여기서 조용히 지워져서, 사용자가 실패를
+      // 영영 모른 채 "내보냈는데 파일이 없다"만 겪었다.
+      if (_controller.lastExportFileNames == null) {
+        _pendingExportError = _controller.lastExportError;
+      }
       _controller.clearExportResult();
       _loadFolders();
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = _pendingExportError;
+      _pendingExportError = null;
+      if (pending != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                AppLocalizations.of(context).exportFailSnack(pending.toString())),
+          ),
+        );
+      }
       _checkExportResult();
     });
   }
@@ -302,6 +321,20 @@ class _ExportScreenState extends State<ExportScreen> {
                           '${(_controller.exportProgressValue * 100).toInt()}%',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
+                        const SizedBox(height: 24),
+                        // PDF는 카드 경계에서 멈추고 만들다 만 파일은 네이티브가 지운다.
+                        if (_controller.isCancelRequested)
+                          Text(
+                            t.opCancelling,
+                            style: Theme.of(context).textTheme.bodySmall,
+                            textAlign: TextAlign.center,
+                          )
+                        else
+                          OutlinedButton.icon(
+                            onPressed: () => _controller.requestCancel(),
+                            icon: const Icon(Icons.stop_circle_outlined),
+                            label: Text(t.opCancelButton),
+                          ),
                       ],
                     ),
                   ),

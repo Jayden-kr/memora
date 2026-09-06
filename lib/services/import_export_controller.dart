@@ -54,6 +54,31 @@ class ImportExportController {
     lastExportError = null;
   }
 
+  /// 사용자가 "중지"를 눌렀다. 돌고 있는 루프가 다음 경계에서 스스로 멈춘다.
+  bool _cancelRequested = false;
+
+  /// 진행 중인 작업을 사용자가 멈춰 달라고 요청했는가. 화면이 버튼 상태를 이걸로 잡는다.
+  /// 작업이 끝나면 자동으로 false다 — 다음 작업 시작 전에 옛 요청이 남아 보이지 않는다.
+  bool get isCancelRequested => isRunning && _cancelRequested;
+
+  /// 진행 중인 가져오기/내보내기 중단을 요청한다.
+  ///
+  /// 즉시 멈추지는 않는다. 가져오기는 배치 경계에서, PDF는 카드 경계에서 멈춘다 —
+  /// 트랜잭션이나 페이지를 그리다 마는 일이 없게 하기 위해서다. 이미 들어간 카드는
+  /// 그대로 남고(부분 롤백은 병합 가져오기에서 "이번 것만" 골라낼 수 없다), 만들다 만
+  /// PDF 파일은 네이티브가 지운다.
+  Future<void> requestCancel() async {
+    if (!isRunning || _cancelRequested) return;
+    _cancelRequested = true;
+    _notify();
+    // PDF는 네이티브 루프 안에서 돌아 Dart 플래그를 못 본다 — 채널로 따로 알린다.
+    try {
+      await _channel.invokeMethod('cancelPdf');
+    } catch (e) {
+      debugPrint('[ImportExportController] cancelPdf 전달 실패: $e');
+    }
+  }
+
   /// 진행 중인 작업 상태를 강제로 되돌린다(락 해제 + 알림 정리).
   ///
   /// ⚠️ 이름과 달리 **돌고 있는 작업 자체를 중단시키지는 못한다** — import/export 루프에
@@ -63,6 +88,7 @@ class ImportExportController {
   /// 복구"라고 적어 두어, 진행 중 작업을 멈출 수 있는 것처럼 읽혔다).
   void forceCancel() {
     if (!isRunning) return;
+    _cancelRequested = false;
     isRunning = false;
     currentOperation = null;
     _releaseLock();
@@ -237,6 +263,7 @@ class ImportExportController {
     if (_operationLock != null && !_operationLock!.isCompleted) return false;
     _operationLock = Completer<void>();
 
+    _cancelRequested = false;
     isRunning = true;
     currentOperation = 'import';
     currentImportFilePath = filePath;
@@ -265,6 +292,7 @@ class ImportExportController {
         selectedFolderNames: selectedFolderNames,
         folderMapping: folderMapping,
         conflictPolicy: conflictPolicy,
+        shouldCancel: () => _cancelRequested,
         onProgress: (progress) {
           currentImportProgress = progress;
           _notify();
@@ -313,11 +341,17 @@ class ImportExportController {
         _batchDuration += result.duration;
         return true;
       }
-      final body = isEn
-          ? 'Imported ${result.newCards} card(s) (${result.duration.inSeconds}s)'
-          : '${result.newCards}장 가져옴 (${result.duration.inSeconds}초)';
+      final body = result.cancelled
+          ? (isEn
+              ? 'Cancelled — ${result.newCards} card(s) were imported'
+              : '취소됨 — ${result.newCards}장까지 들어왔습니다')
+          : (isEn
+              ? 'Imported ${result.newCards} card(s) (${result.duration.inSeconds}s)'
+              : '${result.newCards}장 가져옴 (${result.duration.inSeconds}초)');
       await _complete(
-        isEn ? 'Import complete' : 'Import 완료',
+        result.cancelled
+            ? (isEn ? 'Import cancelled' : 'Import 취소됨')
+            : (isEn ? 'Import complete' : 'Import 완료'),
         body,
       );
       return true;
@@ -383,6 +417,7 @@ class ImportExportController {
     final preparingMsg = isEn ? 'Preparing...' : '준비 중...';
     final processingMsg = isEn ? 'Processing...' : '처리 중...';
 
+    _cancelRequested = false;
     isRunning = true;
     currentOperation = 'export';
     clearExportResult();
@@ -394,12 +429,19 @@ class ImportExportController {
 
     final createdFiles = <String>[];
     final createdFileNames = <String>[];
+    var exportCancelled = false;
     try {
       final totalFolders = selectedFolders.length;
       // 이번 배치에서 이미 사용(claim)한 출력 경로 — 동일 배치 내 이름 충돌 감지용
       final usedOutputPaths = <String>{};
 
       for (int i = 0; i < selectedFolders.length; i++) {
+        // .mra는 폴더 하나가 통째로 한 파일이라 폴더 경계에서만 멈춘다 — 도중에
+        // 끊으면 반쪽짜리 .mra가 남는다.
+        if (_cancelRequested) {
+          exportCancelled = true;
+          break;
+        }
         final folder = selectedFolders[i];
         final folderProgressBase = i / totalFolders;
         final folderWeight = 1.0 / totalFolders;
@@ -502,11 +544,17 @@ class ImportExportController {
       _releaseLock();
       _notify();
 
-      final body = isEn
-          ? '${createdFileNames.length} file(s) created'
-          : '${createdFileNames.length}개 파일 생성';
+      final body = exportCancelled
+          ? (isEn
+              ? 'Cancelled — ${createdFileNames.length} file(s) were created'
+              : '취소됨 — ${createdFileNames.length}개까지 만들었습니다')
+          : (isEn
+              ? '${createdFileNames.length} file(s) created'
+              : '${createdFileNames.length}개 파일 생성');
       await _complete(
-        isEn ? 'Export complete' : 'Export 완료',
+        exportCancelled
+            ? (isEn ? 'Export cancelled' : 'Export 취소됨')
+            : (isEn ? 'Export complete' : 'Export 완료'),
         body,
         type: 'export',
       );
@@ -584,6 +632,7 @@ class ImportExportController {
     final isEn = LocaleService.currentLanguageCode() == 'en';
     final exportTitle = isEn ? 'Exporting' : 'Export 진행 중';
 
+    _cancelRequested = false;
     isRunning = true;
     currentOperation = 'export';
     clearExportResult();
@@ -595,6 +644,7 @@ class ImportExportController {
 
     final createdFiles = <String>[];
     final createdFileNames = <String>[];
+    var exportCancelled = false;
     try {
       final totalFolders = selectedFolders.length;
       _pdfTotalFolders = totalFolders;
@@ -633,13 +683,20 @@ class ImportExportController {
         usedOutputPaths.add(outputPath);
 
         final writePath = overwriting ? '$outputPath.tmp' : outputPath;
-        // Android 네이티브 PDF 생성 (Dart VM 힙 사용 안 함)
-        await _channel.invokeMethod('generatePdf', {
+        // Android 네이티브 PDF 생성 (Dart VM 힙 사용 안 함).
+        // false = 사용자가 중간에 멈췄다. 만들다 만 파일은 네이티브가 지웠으므로
+        // 여기선 이 폴더를 결과에 넣지 않고 루프만 빠져나온다.
+        final generated = await _channel.invokeMethod<bool>('generatePdf', {
           'outputPath': writePath,
           'folderId': folder.id!,
           'folderIndex': i,
           'totalFolders': totalFolders,
+          'resetCancel': i == 0,
         });
+        if (generated == false) {
+          exportCancelled = true;
+          break;
+        }
 
         if (overwriting) {
           try { await File(outputPath).delete(); } catch (_) {}
@@ -673,11 +730,17 @@ class ImportExportController {
       _releaseLock();
       _notify();
 
-      final body = isEn
-          ? '${createdFileNames.length} file(s) created'
-          : '${createdFileNames.length}개 파일 생성';
+      final body = exportCancelled
+          ? (isEn
+              ? 'Cancelled — ${createdFileNames.length} file(s) were created'
+              : '취소됨 — ${createdFileNames.length}개까지 만들었습니다')
+          : (isEn
+              ? '${createdFileNames.length} file(s) created'
+              : '${createdFileNames.length}개 파일 생성');
       await _complete(
-        isEn ? 'Export complete' : 'Export 완료',
+        exportCancelled
+            ? (isEn ? 'Export cancelled' : 'Export 취소됨')
+            : (isEn ? 'Export complete' : 'Export 완료'),
         body,
         type: 'export',
       );
