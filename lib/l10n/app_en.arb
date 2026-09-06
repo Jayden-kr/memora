@@ -331,6 +331,7 @@
   "cardListSearchEmpty": "No matching cards.",
   "cardListEmpty": "No cards.",
   "cardListAllCardsTitle": "All cards ({count})",
+  "cardListAllCardsTitleCapped": "All cards (1000+)",
   "cardListSortDefault": "Default",
   "cardListSortNewest": "Newest first",
   "cardListSortOldest": "Oldest first",

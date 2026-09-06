@@ -137,20 +137,26 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       // 결정한 뒤, 같은 id 리스트를 chunk 단위로 풀(*) 로드한다.
       // 단일 SELECT *로 13988장을 가져오면 Android Binder transaction 한계로
       // 일부 row가 corrupt되어 indexWhere가 -1을 반환하는 문제가 있다.
+      // 다른 리로드 경로와 같은 세대 토큰을 발급한다 — 예전엔 이 분기만 토큰이 없어, 대형
+      // 라이브러리에서 chunk 로드가 도는 동안(앱바는 이미 활성) 검색·정렬을 바꾸면 늦게 끝난
+      // 이 로드가 검색 결과를 전체 목록으로 덮어썼다(검색어는 그대로 남은 채).
+      final gen = ++_searchGeneration;
       final settings = await DatabaseHelper.instance.getAllSettings();
-      if (!mounted) return;
-      _applySettings(settings);
+      if (!mounted || gen != _searchGeneration) return;
+      setState(() => _applySettings(settings));
 
-      // 1. id만 가져와 ordering + targetIndex 계산 (light query, 정확)
+      // 1. id만 가져와 ordering 결정 (light query, 정확)
       final orderedIds = await _fetchOrderedCardIds();
-      if (!mounted) return;
-
-      final targetId = widget.scrollToCardId!;
-      final targetIndex = orderedIds.indexOf(targetId);
+      if (!mounted || gen != _searchGeneration) return;
 
       // 2. cards를 chunk 단위로 로드 (transaction 한계 회피)
       final cards = await _loadCardsChunked(orderedIds);
-      if (!mounted) return;
+      if (!mounted || gen != _searchGeneration) return;
+
+      // 스크롤 목표는 실제로 로드된 목록 기준으로 잡는다 — id 목록 기준 인덱스는 로드 중
+      // 카드가 하나라도 빠지면(삭제 등) 엉뚱한 카드를 가리켰다.
+      final targetId = widget.scrollToCardId!;
+      final targetIndex = cards.indexWhere((c) => c.id == targetId);
 
       setState(() {
         _cards
@@ -310,10 +316,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     final gen = ++_searchGeneration;
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {
+      // 카운트도 세대 검사 뒤에 대입한다 — 취소된(stale) 리로드가 앱바 숫자를 오염시키던 구멍.
+      final int total;
       if (widget.allCards) {
-        _totalCount = await DatabaseHelper.instance.getTotalCardCount();
+        total = await DatabaseHelper.instance.getTotalCardCount();
       } else {
-        _totalCount = await DatabaseHelper.instance
+        total = await DatabaseHelper.instance
             .countCardsByFolderId(widget.folder.id!);
       }
       // 대량 카드에서 SELECT *를 한 번에 실행하면 row corruption이 발생할 수
@@ -322,6 +330,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       final cards = await _loadCardsChunked(orderedIds);
       if (!mounted || gen != _searchGeneration) return;
       setState(() {
+        _totalCount = total;
         _cards
           ..clear()
           ..addAll(cards);
@@ -358,10 +367,11 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       return;
     }
 
+    final int total;
     if (widget.allCards) {
-      _totalCount = await DatabaseHelper.instance.getTotalCardCount();
+      total = await DatabaseHelper.instance.getTotalCardCount();
     } else {
-      _totalCount = await DatabaseHelper.instance
+      total = await DatabaseHelper.instance
           .countCardsByFolderId(widget.folder.id!);
     }
     // 대량 카드에서 SELECT *를 한 번에 실행하면 row corruption이 발생할 수
@@ -370,6 +380,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     final cards = await _loadCardsChunked(orderedIds);
     if (!mounted || gen != _searchGeneration) return;
     setState(() {
+      _totalCount = total;
       _cards
         ..clear()
         ..addAll(cards);
@@ -408,6 +419,10 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       }
     });
     _precacheCardImages();
+    // 이름순 정렬에서 질문을 고치면 자리가 바뀌어야 한다 — 위 in-place 교체 뒤 재정렬.
+    if (updated != null && _sortOrder.startsWith('name')) {
+      unawaited(_loadCards());
+    }
   }
 
   /// 주어진 id 카드들을 _cards 리스트에서 제거 (DB 작업은 호출자가 이미 수행).
@@ -455,6 +470,9 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       _totalCount += 1;
     });
     _precacheCardImages();
+    // 이름순 정렬에선 "맨 앞/원본 뒤" 삽입 위치가 DB 정렬과 다르다(재진입하면 딴 자리) —
+    // 화면을 즉시 갱신한 뒤 정확한 자리로 조용히 재정렬한다. random/기본 정렬은 위치 보존.
+    if (_sortOrder.startsWith('name')) unawaited(_loadCards());
   }
 
   /// [generation]은 호출자(_loadCards)가 진입 시점에 이미 발급한 세대 토큰을
@@ -664,12 +682,19 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           title: t.homeNewFolderTitle,
           hint: t.homeFolderNameHint,
           confirmLabel: t.commonCreate,
+          // 중복 이름은 다이얼로그 안에서 바로 알린다(모달 뒤 SnackBar는 보이지 않았다).
+          validate: (candidate) async {
+            final existing =
+                await DatabaseHelper.instance.getFolderByName(candidate);
+            return existing != null ? t.homeFolderExists(candidate) : null;
+          },
         ),
       );
       if (input == null || input.trim().isEmpty || !mounted) return null;
       name = input.trim();
 
-      // 같은 이름이 이미 있으면 새로 만들지 않고 안내 (중복 폴더 생성 방지).
+      // 같은 이름이 이미 있으면 새로 만들지 않고 안내 (중복 폴더 생성 방지 — 다이얼로그
+      // 검사와 insert 사이의 경합 대비 2차 방어).
       final existing = await DatabaseHelper.instance.getFolderByName(name);
       if (existing != null) {
         if (!mounted) return null;
@@ -969,19 +994,37 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     );
     if (target == null || !mounted) return;
 
+    // '모든 카드' 모드에선 이미 대상 폴더에 있는 카드를 후보에서 뺀다 — 그대로 두면 중복
+    // 검사가 자기 자신을 중복으로 잡아 헛경고를 띄우고, skip을 고르면 그 카드만 조용히 빠졌다.
+    final candidateIds = widget.allCards
+        ? allIds.where((id) {
+            final c = _cards
+                .cast<CardModel?>()
+                .firstWhere((x) => x!.id == id, orElse: () => null);
+            return c == null || c.folderId != target.id;
+          }).toList()
+        : allIds;
+    if (candidateIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.cardMoveNoneToMove)),
+      );
+      _exitSelectionMode();
+      return;
+    }
     final duplicates = await DatabaseHelper.instance
-        .findDuplicateCardIdsInFolder(allIds, target.id!);
+        .findDuplicateCardIdsInFolder(candidateIds, target.id!);
     if (!mounted) return;
 
-    var idsToMove = allIds;
+    var idsToMove = candidateIds;
     var skipped = 0;
     if (duplicates.isNotEmpty) {
       final action = await _showDuplicateMoveDialog(
-          duplicateCount: duplicates.length, totalCount: allIds.length);
+          duplicateCount: duplicates.length, totalCount: candidateIds.length);
       if (action == null || action == 'cancel' || !mounted) return;
       if (action == 'skip') {
-        idsToMove = allIds.where((id) => !duplicates.contains(id)).toList();
-        skipped = allIds.length - idsToMove.length;
+        idsToMove =
+            candidateIds.where((id) => !duplicates.contains(id)).toList();
+        skipped = candidateIds.length - idsToMove.length;
         if (idsToMove.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(t.cardMoveNoneToMove)),
@@ -1357,7 +1400,11 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     return AppBar(
       title: Text(
         widget.allCards
-            ? t.cardListAllCardsTitle(_totalCount)
+            // '모든 카드' 검색은 1000건에서 잘린다(searchAllCards LIMIT) — 잘린 걸 전체 매치
+            // 수처럼 보이지 않게 "1000+"로 표기.
+            ? (_searchQuery.isNotEmpty && _totalCount >= 1000
+                ? t.cardListAllCardsTitleCapped
+                : t.cardListAllCardsTitle(_totalCount))
             : '${widget.folder.name} ($_totalCount)',
         style: const TextStyle(
           fontFamily: 'Pretendard',
@@ -1539,11 +1586,15 @@ class _FolderNameDialog extends StatefulWidget {
     required this.title,
     required this.hint,
     required this.confirmLabel,
+    this.validate,
   });
 
   final String title;
   final String hint;
   final String confirmLabel;
+  /// 확인 전에 이름을 검사한다. 오류 문구를 돌려주면 다이얼로그 안에 표시하고 닫지 않는다 —
+  /// 모달 배리어 뒤 SnackBar로 알리면 사용자 눈엔 "아무 반응 없음"이었다(감사 Y1-04).
+  final Future<String?> Function(String name)? validate;
 
   @override
   State<_FolderNameDialog> createState() => _FolderNameDialogState();
@@ -1551,6 +1602,28 @@ class _FolderNameDialog extends StatefulWidget {
 
 class _FolderNameDialogState extends State<_FolderNameDialog> {
   final _controller = TextEditingController();
+  String? _errorText;
+  bool _checking = false;
+
+  Future<void> _submit() async {
+    final name = _controller.text.trim();
+    final validate = widget.validate;
+    if (validate == null || name.isEmpty) {
+      Navigator.pop(context, name);
+      return;
+    }
+    setState(() => _checking = true);
+    final error = await validate(name);
+    if (!mounted) return;
+    if (error != null) {
+      setState(() {
+        _errorText = error;
+        _checking = false;
+      });
+      return;
+    }
+    Navigator.pop(context, name);
+  }
 
   @override
   void dispose() {
@@ -1569,8 +1642,11 @@ class _FolderNameDialogState extends State<_FolderNameDialog> {
       content: TextField(
         controller: _controller,
         autofocus: true,
-        decoration: InputDecoration(hintText: widget.hint),
-        onSubmitted: (v) => Navigator.pop(context, v.trim()),
+        decoration: InputDecoration(hintText: widget.hint, errorText: _errorText),
+        onChanged: (_) {
+          if (_errorText != null) setState(() => _errorText = null);
+        },
+        onSubmitted: (_) => _submit(),
       ),
       actions: [
         TextButton(
@@ -1578,7 +1654,7 @@ class _FolderNameDialogState extends State<_FolderNameDialog> {
           child: Text(t.commonCancel),
         ),
         TextButton(
-          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          onPressed: _checking ? null : _submit,
           child: Text(widget.confirmLabel),
         ),
       ],

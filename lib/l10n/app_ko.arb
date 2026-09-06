@@ -508,6 +508,7 @@
   "cardListSearchEmpty": "검색 결과가 없습니다.",
   "cardListEmpty": "카드가 없습니다.",
   "cardListAllCardsTitle": "전체 카드 ({count})",
+  "cardListAllCardsTitleCapped": "전체 카드 (1000+)",
   "@cardListAllCardsTitle": {
     "placeholders": {
       "count": { "type": "int" }
