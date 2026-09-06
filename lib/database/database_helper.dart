@@ -339,8 +339,9 @@ class DatabaseHelper {
     return Folder.fromDb(maps.first);
   }
 
-  /// 이름만 바꾼다 — updateFolder(스냅샷 전체 되쓰기)는 화면이 들고 있던 옛 card_count/
-  /// parent_folder_id를 DB에 덮어써 카드 수가 옛 값으로 굳고 묶음 소속이 풀렸다(D1-03/D8-09).
+  /// 이름만 바꾼다. 폴더 스냅샷 전체를 되쓰는 방식(예전의 updateFolder, 부르는 곳이
+  /// 없어 삭제)은 화면이 들고 있던 옛 card_count/parent_folder_id를 DB에 덮어써
+  /// 카드 수가 옛 값으로 굳고 묶음 소속이 풀렸다(D1-03/D8-09). 되살리지 말 것.
   Future<int> renameFolder(int id, String newName) async {
     final db = await database;
     return await db.update(
