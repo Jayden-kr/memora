@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_label.dart';
 import '../services/notification_service.dart';
 import '../services/push_schedule.dart';
 
@@ -357,12 +358,12 @@ class _PushNotificationSettingsScreenState
           style: TextStyle(color: errorColor));
     } else if (folder.cardCount == 0) {
       folderLine = Text(
-        '${folder.name} · ${t.pushScheduleFolderEmpty}',
+        '${folderDisplayPath(folder)} · ${t.pushScheduleFolderEmpty}',
         style: TextStyle(color: errorColor),
       );
     } else {
       folderLine =
-          Text('${folder.name} · ${t.cardCountSuffix(folder.cardCount)}');
+          Text('${folderDisplayPath(folder)} · ${t.cardCountSuffix(folder.cardCount)}');
     }
 
     final intervalLine = Text(
@@ -811,7 +812,8 @@ class _PushRuleDialogState extends State<_PushRuleDialog> {
                     .where((f) => f.id != null)
                     .map((f) => DropdownMenuItem(
                           value: f.id,
-                          child: Text(f.name),
+                          child: Text(folderDisplayPath(f),
+                              overflow: TextOverflow.ellipsis),
                         )),
               ],
               onChanged: (v) => setState(() {

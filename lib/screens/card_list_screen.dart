@@ -10,6 +10,7 @@ import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import '../utils/folder_label.dart';
 import '../app.dart' show routeObserver;
 import '../widgets/card_tile.dart';
 import 'card_edit_screen.dart';
@@ -606,7 +607,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         children: [
           ...folders.map((f) => SimpleDialogOption(
                 onPressed: () => Navigator.pop(ctx, f),
-                child: Text('${f.name} (${f.cardCount})'),
+                child: Text('${folderDisplayPath(f)} (${f.cardCount})'),
               )),
           if (folders.isEmpty)
             Padding(

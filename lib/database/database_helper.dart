@@ -257,24 +257,34 @@ class DatabaseHelper {
     return maps.map((m) => Folder.fromDb(m)).toList();
   }
 
+  /// 폴더 목록을 읽을 때 소속 묶음 이름을 함께 채우기 위한 컬럼 목록.
+  /// `parent_folder_name` 컬럼 자체는 신뢰할 수 없다 — 묶음 편집은 `parent_folder_id`만
+  /// UPDATE하므로 이름 컬럼은 묶음 이름이 바뀌어도 낡은 채로 남는다. 그래서 f.*를 쓰지
+  /// 않고 컬럼을 하나하나 적은 뒤 묶음 행에서 이름을 다시 읽어 덮어쓴다.
+  static const _folderSelectWithBundleName = '''
+    SELECT f.id, f.name, f.card_count, f.folder_count, f.sequence,
+           f.original_sequence, f.modified, f.parent, f.parent_folder_id,
+           f.is_special_folder, f.is_bundle, p.name AS parent_folder_name
+    FROM %t f
+    LEFT JOIN %t p ON p.id = f.parent_folder_id AND p.is_bundle = 1
+  ''';
+
+  static String _folderSelect(String where) =>
+      '${_folderSelectWithBundleName.replaceAll('%t', AppConstants.tableFolders)}'
+      ' WHERE $where ORDER BY f.sequence ASC';
+
+  /// 묶음이 아닌 폴더 전부. 묶음에 속한 폴더는 [Folder.parentFolderName]에 그 묶음
+  /// 이름이 채워져 온다(폴더 선택 화면들이 `묶음 > 폴더`로 표시하는 데 쓴다).
   Future<List<Folder>> getNonBundleFolders() async {
     final db = await database;
-    final maps = await db.query(
-      AppConstants.tableFolders,
-      where: 'is_bundle = 0',
-      orderBy: 'sequence ASC',
-    );
+    final maps = await db.rawQuery(_folderSelect('f.is_bundle = 0'));
     return maps.map((m) => Folder.fromDb(m)).toList();
   }
 
   Future<List<Folder>> getChildFolders(int parentId) async {
     final db = await database;
-    final maps = await db.query(
-      AppConstants.tableFolders,
-      where: 'parent_folder_id = ?',
-      whereArgs: [parentId],
-      orderBy: 'sequence ASC',
-    );
+    final maps =
+        await db.rawQuery(_folderSelect('f.parent_folder_id = ?'), [parentId]);
     return maps.map((m) => Folder.fromDb(m)).toList();
   }
 

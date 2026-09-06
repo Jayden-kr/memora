@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart' show Share, XFile;
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_label.dart';
 import '../utils/constants.dart';
 import '../services/import_export_controller.dart';
 import '../widgets/overwrite_dialog.dart';
@@ -340,7 +341,7 @@ class _ExportScreenState extends State<ExportScreen> {
                             ),
                           ..._folders.map((folder) {
                             return CheckboxListTile(
-                              title: Text(folder.name),
+                              title: Text(folderDisplayPath(folder)),
                               subtitle: Text(t.cardCountSuffix(folder.cardCount)),
                               value:
                                   _selectedFolderIds.contains(folder.id),

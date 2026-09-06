@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_label.dart';
 import '../services/lock_screen_service.dart';
 import '../utils/constants.dart';
 import '../widgets/color_picker_dialog.dart';
@@ -108,7 +109,9 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     final Map settings;
     final bool canDraw;
     try {
-      allFolders = await DatabaseHelper.instance.getAllFolders();
+      // getNonBundleFolders()는 묶음을 빼는 동시에 소속 묶음 이름을 채워준다
+      // (목록에서 `묶음 > 폴더`로 표시하는 데 쓴다).
+      allFolders = await DatabaseHelper.instance.getNonBundleFolders();
       settings = await LockScreenService.getSettings();
       // 진입 시에도 권한을 본다 — 권한이 나중에 회수되면 스위치는 ON, 알림은 켜짐, 잠금화면은
       // 안 뜨는 침묵 실패가 됐고 이 화면은 resumed/재토글에서만 권한을 다시 봤다.
@@ -128,7 +131,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       return;
     }
     // 번들 폴더 제외 (카드를 직접 갖지 않으므로 잠금화면에 부적합)
-    final folders = allFolders.where((f) => !f.isBundle).toList();
+    final folders = allFolders;
 
     // Stage 3: 배경 이미지 경로가 가리키는 파일이 실제로 있는지 확인. 없으면(수동
     // 삭제 등) 없는 파일을 계속 가리키지 않고 "이미지 없음"으로 취급한다.
@@ -595,7 +598,8 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                         .map(
                           (f) => DropdownMenuItem(
                             value: f.id,
-                            child: Text(f.name, overflow: TextOverflow.ellipsis),
+                            child: Text(folderDisplayPath(f),
+                                overflow: TextOverflow.ellipsis),
                           ),
                         )
                         .toList(),
@@ -764,12 +768,12 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     } else if (folder.cardCount == 0) {
       // "카드 0개 · 카드 없음"은 같은 말을 두 번 하는 것이라 개수는 생략한다.
       folderLine = Text(
-        '${folder.name} · ${t.lockScheduleFolderEmpty}',
+        '${folderDisplayPath(folder)} · ${t.lockScheduleFolderEmpty}',
         style: TextStyle(color: errorColor),
       );
     } else {
       folderLine = Text(
-        '${folder.name} · ${t.cardCountSuffix(folder.cardCount)}',
+        '${folderDisplayPath(folder)} · ${t.cardCountSuffix(folder.cardCount)}',
       );
     }
 
@@ -908,7 +912,7 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                     (folder) => DropdownMenuItem<int>(
                       value: folder.id!,
                       child: Text(
-                        '${folder.name}  ·  ${t.cardCountSuffix(folder.cardCount)}',
+                        '${folderDisplayPath(folder)}  ·  ${t.cardCountSuffix(folder.cardCount)}',
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),

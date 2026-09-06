@@ -9,6 +9,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_label.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
 import 'bundle_folder_screen.dart';
@@ -143,8 +144,23 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // 화면을 되돌렸다(DB엔 새 값, 화면엔 옛 값 — X2-05).
     final gen = ++_folderLoadGen;
     try {
-      final folders = await DatabaseHelper.instance.getAllFolders();
-      final totalCards = folders.fold<int>(0, (sum, f) => sum + f.cardCount);
+      final allFolders = await DatabaseHelper.instance.getAllFolders();
+      // 총 카드 수는 숨김과 무관하게 전부 센다 — 묶음 안의 카드도 내 카드다.
+      final totalCards = allFolders.fold<int>(0, (sum, f) => sum + f.cardCount);
+      // 묶음에 들어간 폴더는 최상위 목록에서 감춘다. 묶음 타일을 눌러 그 안에서 본다
+      // — 예전엔 묶음과 그 자식이 홈에 나란히 떠서 같은 폴더가 두 번 보였다.
+      //
+      // 실제로 존재하는 묶음의 자식만 감춘다. parent_folder_id가 없는 묶음을 가리키는
+      // 고아 폴더(중간에 프로세스가 죽는 등)를 그냥 숨기면 홈에서도 묶음 화면에서도
+      // 닿을 수 없는 폴더가 된다 — 그런 폴더는 최상위로 보여준다.
+      final bundleIds = allFolders
+          .where((f) => f.isBundle && f.id != null)
+          .map((f) => f.id!)
+          .toSet();
+      final folders = allFolders
+          .where((f) =>
+              f.parentFolderId == null || !bundleIds.contains(f.parentFolderId))
+          .toList();
       final settings = await DatabaseHelper.instance.getAllSettings();
       final savedSort = settings[_sortModeKey];
       if (!mounted || gen != _folderLoadGen) return;
@@ -186,7 +202,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   Future<void> _showFolderPickerForNewCard() async {
     final t = AppLocalizations.of(context);
-    final nonBundleFolders = _folders.where((f) => !f.isBundle).toList();
+    // 홈 목록(_folders)은 묶음 자식을 감추므로 여기선 쓰지 않는다 — 묶음 안 폴더에도
+    // 카드를 새로 만들 수 있어야 한다. DB에서 묶음이 아닌 폴더 전부를 다시 읽는다.
+    final List<Folder> nonBundleFolders;
+    try {
+      nonBundleFolders = await DatabaseHelper.instance.getNonBundleFolders();
+    } catch (e) {
+      debugPrint('[HOME] folder picker load failed: $e');
+      return;
+    }
+    if (!mounted) return;
     if (nonBundleFolders.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -201,7 +226,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         children: nonBundleFolders.map((folder) {
           return SimpleDialogOption(
             onPressed: () => Navigator.pop(ctx, folder),
-            child: Text('${folder.name} (${t.cardCountSuffix(folder.cardCount)})'),
+            child: Text(
+                '${folderDisplayPath(folder)} (${t.cardCountSuffix(folder.cardCount)})'),
           );
         }).toList(),
       ),
@@ -607,51 +633,19 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     await _loadFolders();
   }
 
-  /// 폴더 삭제 transaction commit 후 사후 정리.
-  /// 모두 idempotent. fire-and-forget이므로 await 안 됨.
-  /// image/voice 파일 삭제도 여기서 처리 — deleteFoldersBatch가 삭제 전에 수집해 넘겨준 경로.
   Future<void> _cleanupAfterFolderDelete({
     required List<int> regularIds,
     required bool needsPushReschedule,
     required List<String> filePaths,
   }) async {
-    try {
-      // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
-      await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
-      // needsPushReschedule 플래그와 무관하게 항상 호출 — 그 플래그는
-      // push_alarms.folder_id(전역 기본 폴더)만 추적해서, 푸시 시간대 슬롯에만
-      // 걸린 삭제(기본 폴더는 안 건드리고 슬롯 하나가 가리키던 폴더만 지운 경우)를
-      // 놓친다.
-      final pruned =
-          await NotificationService.removeFoldersFromPushSchedule(regularIds);
-      if (needsPushReschedule) {
-        await NotificationService.rescheduleAll();
-      }
-      await _deleteFiles(filePaths);
-
-      // 폴더를 지우면 그 폴더를 가리키던 알림 시간대도 함께 사라진다 — 예전엔
-      // 아무 말 없이 사라져서, 알림이 안 오는 이유를 사용자가 알 수 없었다.
-      if (pruned.removedRules > 0 && mounted) {
-        final t = AppLocalizations.of(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(pruned.pushDisabled
-                ? t.homePushRulesRemovedAllOff(pruned.removedRules)
-                : t.homePushRulesRemoved(pruned.removedRules)),
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint('[HOME] post-delete cleanup error: $e');
-    }
+    final pruned = await cleanupAfterFolderDelete(
+      regularIds: regularIds,
+      needsPushReschedule: needsPushReschedule,
+      filePaths: filePaths,
+    );
+    if (!mounted) return;
+    showPushRulesRemovedNotice(context, pruned);
   }
-
-  /// 삭제된 폴더의 미디어 파일 정리. 다른 폴더의 카드가 아직 참조하는 파일은 남긴다 —
-  /// 레거시 .memk import나 카드 복제로 여러 카드가 같은 파일을 가리킬 수 있어서, 폴더 하나를
-  /// 지웠다고 남의 카드 이미지를 뺏으면 안 된다(카드 삭제 경로와 같은 규칙으로 통일).
-  /// 재생 중인 파일 정지도 그 안에서 함께 처리한다(감사 D2-07).
-  Future<void> _deleteFiles(List<String> paths) =>
-      DatabaseHelper.instance.deleteUnreferencedMediaFiles(paths);
 
   void _exportSelectedFolders() {
     final nonBundleIds = _folders
@@ -1092,6 +1086,57 @@ class _FolderNameDialogState extends State<_FolderNameDialog> {
 }
 
 /// 묶음 폴더 하위 폴더 리스트 화면
+/// 폴더 삭제 transaction commit 후 사후 정리. 모두 idempotent이고, 호출자는
+/// fire-and-forget으로 돌린다(트랜잭션은 이미 commit됐다).
+/// image/voice 파일 삭제도 여기서 처리 — deleteFoldersBatch가 삭제 전에 수집해 넘겨준 경로.
+///
+/// 삭제된 폴더의 미디어 파일 중 다른 폴더의 카드가 아직 참조하는 것은 남긴다 —
+/// 레거시 .memk import나 카드 복제로 여러 카드가 같은 파일을 가리킬 수 있어서, 폴더
+/// 하나를 지웠다고 남의 카드 이미지를 뺏으면 안 된다(카드 삭제 경로와 같은 규칙).
+/// 재생 중인 파일 정지도 그 안에서 함께 처리한다(감사 D2-07).
+///
+/// 반환값은 이번 삭제로 사라진 푸시 규칙 정보다 — 호출 화면이
+/// [showPushRulesRemovedNotice]로 사용자에게 알린다. 홈과 묶음 화면이 같이 쓴다.
+Future<({int removedRules, bool pushDisabled})> cleanupAfterFolderDelete({
+  required List<int> regularIds,
+  required bool needsPushReschedule,
+  required List<String> filePaths,
+}) async {
+  try {
+    // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
+    await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
+    // needsPushReschedule 플래그와 무관하게 항상 호출 — 그 플래그는
+    // push_alarms.folder_id(전역 기본 폴더)만 추적해서, 푸시 시간대 슬롯에만
+    // 걸린 삭제(기본 폴더는 안 건드리고 슬롯 하나가 가리키던 폴더만 지운 경우)를
+    // 놓친다.
+    final pruned =
+        await NotificationService.removeFoldersFromPushSchedule(regularIds);
+    if (needsPushReschedule) {
+      await NotificationService.rescheduleAll();
+    }
+    await DatabaseHelper.instance.deleteUnreferencedMediaFiles(filePaths);
+    return pruned;
+  } catch (e) {
+    debugPrint('[HOME] post-delete cleanup error: $e');
+    return (removedRules: 0, pushDisabled: false);
+  }
+}
+
+/// 폴더를 지우면 그 폴더를 가리키던 알림 시간대도 함께 사라진다 — 예전엔 아무 말 없이
+/// 사라져서, 알림이 안 오는 이유를 사용자가 알 수 없었다.
+void showPushRulesRemovedNotice(
+    BuildContext context, ({int removedRules, bool pushDisabled}) pruned) {
+  if (pruned.removedRules <= 0) return;
+  final t = AppLocalizations.of(context);
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(pruned.pushDisabled
+          ? t.homePushRulesRemovedAllOff(pruned.removedRules)
+          : t.homePushRulesRemoved(pruned.removedRules)),
+    ),
+  );
+}
+
 class _BundleChildListScreen extends StatefulWidget {
   final Folder bundle;
 
@@ -1104,6 +1149,9 @@ class _BundleChildListScreen extends StatefulWidget {
 class _BundleChildListScreenState extends State<_BundleChildListScreen> {
   List<Folder> _children = [];
   bool _loading = true;
+  final Set<int> _selectedIds = {};
+  bool get _isSelecting => _selectedIds.isNotEmpty;
+  bool _isDeleting = false;
 
   @override
   void initState() {
@@ -1112,43 +1160,267 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
   }
 
   Future<void> _loadChildren() async {
-    final children =
-        await DatabaseHelper.instance.getChildFolders(widget.bundle.id!);
+    final List<Folder> children;
+    try {
+      children =
+          await DatabaseHelper.instance.getChildFolders(widget.bundle.id!);
+    } catch (e) {
+      debugPrint('[BUNDLE] load children failed: $e');
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
     if (!mounted) return;
     setState(() {
       _children = children;
+      // 사라진 폴더가 선택된 채 남으면 유령 선택이 된다 — 삭제 후 리로드에서 걷어낸다.
+      final ids = children.map((f) => f.id).toSet();
+      _selectedIds.removeWhere((id) => !ids.contains(id));
       _loading = false;
     });
   }
 
+  void _toggleSelection(int id) {
+    setState(() {
+      if (!_selectedIds.remove(id)) _selectedIds.add(id);
+    });
+  }
+
+  void _clearSelection() => setState(() => _selectedIds.clear());
+
+  void _selectAll() {
+    setState(() {
+      if (_selectedIds.length == _children.length) {
+        _selectedIds.clear();
+      } else {
+        _selectedIds
+          ..clear()
+          ..addAll(_children.where((f) => f.id != null).map((f) => f.id!));
+      }
+    });
+  }
+
+  void _onReorder(int oldIndex, int newIndex) {
+    if (oldIndex < newIndex) newIndex--;
+    setState(() {
+      final folder = _children.removeAt(oldIndex);
+      _children.insert(newIndex, folder);
+    });
+    () async {
+      try {
+        final updates = <int, int>{};
+        for (var i = 0; i < _children.length; i++) {
+          final folder = _children[i];
+          if (folder.sequence != i && folder.id != null) {
+            updates[folder.id!] = i;
+            // 리로드 전에 두 번째 드래그가 와도 옛 sequence와 비교하지 않도록 로컬도
+            // 바로 맞춘다(홈 화면 _updateFolderSequences와 같은 이유 — D1-04).
+            _children[i] = folder.copyWith(sequence: i);
+          }
+        }
+        if (updates.isNotEmpty) {
+          await DatabaseHelper.instance.updateFolderSequencesBatch(updates);
+        }
+      } catch (e) {
+        debugPrint('[BUNDLE] reorder error: $e');
+      } finally {
+        if (mounted) _loadChildren();
+      }
+    }();
+  }
+
+  Future<void> _renameSelected() async {
+    final selected =
+        _children.where((f) => _selectedIds.contains(f.id)).toList();
+    if (selected.length != 1) return;
+    final folder = selected.first;
+    final t = AppLocalizations.of(context);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (_) => _FolderNameDialog(
+        title: t.homeRenameFolderTitle,
+        hint: t.homeNewNameHint,
+        confirmLabel: t.commonChange,
+        initialName: folder.name,
+      ),
+    );
+    if (newName == null || newName.isEmpty || newName == folder.name) return;
+
+    final existing = await DatabaseHelper.instance.getFolderByName(newName);
+    if (!mounted) return;
+    if (existing != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.homeFolderExists(newName))),
+      );
+      return;
+    }
+    try {
+      await DatabaseHelper.instance.renameFolder(folder.id!, newName);
+    } catch (e) {
+      debugPrint('[BUNDLE] rename failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.homeFolderRenameFail)),
+      );
+      return;
+    }
+    if (!mounted) return;
+    _clearSelection();
+    await _loadChildren();
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_isDeleting) return;
+    final selected =
+        _children.where((f) => _selectedIds.contains(f.id)).toList();
+    if (selected.isEmpty) return;
+    final t = AppLocalizations.of(context);
+    final cardTotal = selected.fold<int>(0, (sum, f) => sum + f.cardCount);
+    var message = t.homeDeleteFolderConfirm(selected.length);
+    if (cardTotal > 0) message += t.homeDeleteFolderCardsNote(cardTotal);
+
+    _isDeleting = true;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t.homeDeleteFolderTitle),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t.commonCancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t.commonDelete,
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) {
+      _isDeleting = false;
+      return;
+    }
+
+    final ids = selected.map((f) => f.id!).toList();
+    setState(() {
+      _children.removeWhere((f) => ids.contains(f.id));
+      _selectedIds.clear();
+    });
+    try {
+      final result = await DatabaseHelper.instance.deleteFoldersBatch(
+        regularFolderIds: ids,
+        bundleFolderIds: const [],
+      );
+      final pruned = await cleanupAfterFolderDelete(
+        regularIds: ids,
+        needsPushReschedule: result.pushReschedNeeded,
+        filePaths: result.filePaths,
+      );
+      if (!mounted) return;
+      showPushRulesRemovedNotice(context, pruned);
+    } catch (e) {
+      debugPrint('[BUNDLE] delete failed: $e');
+    } finally {
+      _isDeleting = false;
+      if (mounted) await _loadChildren();
+    }
+  }
+
+  AppBar _buildSelectionAppBar(AppLocalizations t) {
+    final allSelected = _selectedIds.length == _children.length;
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _clearSelection,
+      ),
+      title: Text(t.homeSelectedCount(_selectedIds.length)),
+      actions: [
+        IconButton(
+          icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+          tooltip: allSelected ? t.homeDeselectAll : t.homeSelectAll,
+          onPressed: _selectAll,
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete),
+          tooltip: t.commonDelete,
+          onPressed: _deleteSelected,
+        ),
+        if (_selectedIds.length == 1)
+          IconButton(
+            icon: const Icon(Icons.drive_file_rename_outline),
+            tooltip: t.commonRename,
+            onPressed: _renameSelected,
+          ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.bundle.name),
+    final t = AppLocalizations.of(context);
+    return PopScope(
+      // 선택 중이면 뒤로가기가 화면을 닫는 대신 선택부터 푼다(홈 화면과 같은 규칙).
+      canPop: !_isSelecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _clearSelection();
+      },
+      child: Scaffold(
+        appBar: _isSelecting
+            ? _buildSelectionAppBar(t)
+            : AppBar(title: Text(widget.bundle.name)),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _children.isEmpty
+                ? Center(child: Text(t.homeNoChildren))
+                : _isSelecting
+                    ? ListView.builder(
+                        itemCount: _children.length,
+                        itemBuilder: (context, index) {
+                          final folder = _children[index];
+                          return FolderTile(
+                            key: ValueKey(folder.id),
+                            folder: folder,
+                            isSelecting: true,
+                            isSelected: _selectedIds.contains(folder.id),
+                            onTap: () {
+                              if (folder.id != null) {
+                                _toggleSelection(folder.id!);
+                              }
+                            },
+                          );
+                        },
+                      )
+                    : ReorderableListView.builder(
+                        itemCount: _children.length,
+                        onReorder: _onReorder,
+                        buildDefaultDragHandles: false,
+                        itemBuilder: (context, index) {
+                          final folder = _children[index];
+                          return FolderTile(
+                            key: ValueKey(folder.id),
+                            folder: folder,
+                            reorderIndex: index,
+                            onTap: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      CardListScreen(folder: folder),
+                                ),
+                              );
+                              if (mounted) await _loadChildren();
+                            },
+                            onLongPress: () {
+                              if (folder.id != null) {
+                                _toggleSelection(folder.id!);
+                              }
+                            },
+                          );
+                        },
+                      ),
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _children.isEmpty
-              ? Center(child: Text(AppLocalizations.of(context).homeNoChildren))
-              : ListView.builder(
-                  itemCount: _children.length,
-                  itemBuilder: (context, index) {
-                    final folder = _children[index];
-                    return FolderTile(
-                      folder: folder,
-                      onTap: () async {
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => CardListScreen(folder: folder),
-                          ),
-                        );
-                        _loadChildren();
-                      },
-                    );
-                  },
-                ),
     );
   }
 }

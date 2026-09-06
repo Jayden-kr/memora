@@ -16,6 +16,7 @@ import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
 import '../utils/constants.dart';
+import '../utils/folder_label.dart';
 import '../widgets/card_audio_field.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/native_text_field.dart';
@@ -880,7 +881,10 @@ class _CardEditScreenState extends State<CardEditScreen>
                       items: _folders.map((f) {
                         return DropdownMenuItem(
                           value: f.id,
-                          child: Text(f.name),
+                          child: Text(
+                            folderDisplayPath(f),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         );
                       }).toList(),
                       onChanged: (v) {
