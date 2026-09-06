@@ -356,6 +356,13 @@ class CardAudioFieldState extends State<CardAudioField> {
     }
     _created.add(resultPath);
     await _disposeSupersededFile(_path, resultPath);
+    if (!mounted) {
+      // 위 await(정지 대기) 사이에 화면이 닫혔다 — _commit의 setState가 죽은 State에
+      // 걸리고, 방금 만든 파일은 아무도 참조하지 않는 고아가 된다(리뷰 CAF-01).
+      File(resultPath).delete().ignore();
+      _created.remove(resultPath);
+      return;
+    }
     _commit(resultPath, durationMs > 0 ? durationMs : null);
   }
 
@@ -392,6 +399,12 @@ class CardAudioFieldState extends State<CardAudioField> {
       }
       _created.add(dest);
       await _disposeSupersededFile(_path, dest);
+      if (!mounted) {
+        // 정지 대기 중 화면이 닫힌 경우 — 위 복사 직후 검사와 같은 이유(리뷰 CAF-01).
+        File(dest).delete().ignore();
+        _created.remove(dest);
+        return;
+      }
       _commit(dest, null); // 첨부 파일 길이는 재생 시 audioplayers가 산출
     } catch (e) {
       if (!mounted) return;

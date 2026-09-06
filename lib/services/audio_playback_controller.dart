@@ -116,17 +116,19 @@ class AudioPlaybackController {
     }
   }
 
-  Future<void> pause() async {
-    try {
-      await _player?.pause();
-    } catch (_) {}
-  }
+  /// pause/seek도 같은 큐를 탄다 — 대기 중인 stop/play가 player를 해제하는 중에
+  /// 끼어들면 이미 dispose된 player를 건드릴 수 있다(리뷰 APC-01).
+  Future<void> pause() => _serial(() async {
+        try {
+          await _player?.pause();
+        } catch (_) {}
+      });
 
-  Future<void> seek(Duration to) async {
-    try {
-      await _player?.seek(to);
-    } catch (_) {}
-  }
+  Future<void> seek(Duration to) => _serial(() async {
+        try {
+          await _player?.seek(to);
+        } catch (_) {}
+      });
 
   /// 전체 정지 + player 해제.
   Future<void> stop() => _serial(_resetToIdle);
