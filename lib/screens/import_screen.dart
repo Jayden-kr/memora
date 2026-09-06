@@ -121,7 +121,9 @@ class _ImportScreenState extends State<ImportScreen> {
     if (_selectedFolderNames.isEmpty) return;
     final t = AppLocalizations.of(context);
 
-    if (_controller.isRunning) {
+    // isBusy: 다중 import 배치의 파일 사이 틈에도 막는다 — 그 틈에 시작한 단일 import는
+    // 배치에 흡수돼 완료 알림이 없고, 배치의 다음 파일은 락에서 무음 no-op했다(R20-01).
+    if (_controller.isBusy) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(t.importBusy)),

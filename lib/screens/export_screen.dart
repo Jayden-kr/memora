@@ -176,7 +176,9 @@ class _ExportScreenState extends State<ExportScreen> {
     // import 등 export가 아닌 다른 작업이 실행 중이면 startXxxExport의
     // operationLock 체크에서 조용히 no-op한다 — 디렉토리 생성/충돌 다이얼로그를
     // 다 거치고 나서야 아무 일도 안 일어나는 것을 막기 위해 여기서 먼저 차단.
-    if (_controller.isRunning) {
+    // isBusy: 다중 import 배치의 파일 사이 틈도 막는다 — 그 틈에 시작한 export는 배치 종료의
+    // STOP에 FGS를 빼앗겼다(R20-01).
+    if (_controller.isBusy) {
       final t = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(t.importBusy)),

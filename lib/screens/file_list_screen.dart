@@ -453,8 +453,10 @@ class _FileListScreenState extends State<FileListScreen> {
         _selectedIds.clear();
       });
       if (failed > 0) {
+        // {error} 자리에 개수만 넣으면 "…: 2"로 보인다(R20-02) — 파일 수 문구로.
+        final what = t.localeName.startsWith('ko') ? '$failed개' : '$failed file(s)';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(t.fileDeleteFail('$failed'))),
+          SnackBar(content: Text(t.fileDeleteFail(what))),
         );
       }
     } catch (e) {

@@ -82,7 +82,9 @@ class MemkImportService {
       // `.content`는 압축해제 결과를 ArchiveFile 안에 영구 캐시한다 — writeContent는 스트림
       // 으로 바로 풀어 주고(freeMemory) 캐시를 남기지 않는다. 같은 항목을 다시 읽어도 된다
       // (원본 압축 데이터는 그대로).
-      final out = OutputMemoryStream();
+      // 압축 전 크기를 알고 있으니 버퍼를 그 크기로 잡는다(기본 32KB에서 배증하며 커지면
+      // 큰 cards.json에서 피크가 2~3배 — R20-06).
+      final out = OutputMemoryStream(size: file.size > 0 ? file.size : null);
       file.writeContent(out);
       return jsonDecode(utf8.decode(out.getBytes()));
     } on ImportFormatException {
@@ -118,8 +120,17 @@ class MemkImportService {
     _cachedArchive = archive;
     _cachedFilePath = filePath;
 
+    // importSelectedFolders는 cards.json도 요구한다 — 여기서 같이 검사해야 "목록엔 뜨는데
+    // 가져오기는 거부"가 안 된다(R20-05).
+    final hasCards = archive.files
+        .any((f) => f.isFile && f.name == AppConstants.memkCardsJson);
     for (final file in archive.files) {
       if (file.name == AppConstants.memkFoldersJson && file.isFile) {
+        if (!hasCards) {
+          _cachedArchive = null;
+          _cachedFilePath = null;
+          throw const ImportFormatException('cards.json missing');
+        }
         final decoded = _decodeJsonEntry(file, AppConstants.memkFoldersJson);
         if (decoded is! List) {
           throw const ImportFormatException('folders.json is not a list');

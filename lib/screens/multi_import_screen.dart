@@ -122,7 +122,7 @@ class _MultiImportScreenState extends State<MultiImportScreen> {
     // batch loop 진입 자체를 막는다. 안 막으면 startImport가 락에 걸려
     // 조용히 no-op하고, 루프는 stale lastImportResult를 모든 파일에
     // 잘못 귀속시켜 가짜 성공 화면을 띄운다 (ImportScreen._startImport와 동일 가드).
-    if (_controller.isRunning) {
+    if (_controller.isBusy) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(t.importBusy)),

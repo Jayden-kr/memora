@@ -149,6 +149,14 @@ class ImportExportController {
     }
     final isEn = LocaleService.currentLanguageCode() == 'en';
     final secs = _batchDuration.inSeconds;
+    if (_batchFiles == 0) {
+      // 전부 실패 — "완료 · 0장"으로 포장하지 않는다(R20-03).
+      await _complete(
+        isEn ? 'Import failed' : 'Import 실패',
+        isEn ? '$_batchFailed file(s) failed' : '$_batchFailed개 파일 실패',
+      );
+      return;
+    }
     final failedNote = _batchFailed == 0
         ? ''
         : (isEn ? ', $_batchFailed failed' : ', 실패 $_batchFailed개');
@@ -493,9 +501,14 @@ class ImportExportController {
     }
   }
 
+  /// 산출물이 아예 없으면 예외(배치 실패 경로 유지) — 있는데 크기 조회만 실패하면 0(R20-04).
   static Future<int> _fileLengthOrZero(String path) async {
+    final file = File(path);
+    if (!await file.exists()) {
+      throw FileSystemException('export output missing', path);
+    }
     try {
-      return await File(path).length();
+      return await file.length();
     } catch (e) {
       debugPrint('[EXPORT] length() failed for $path: $e');
       return 0;
