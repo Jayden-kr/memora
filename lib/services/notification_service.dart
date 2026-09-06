@@ -278,6 +278,13 @@ class NotificationService {
       }
     }
 
+    // 이 버전 이전부터 푸시를 쓰던 사용자(플래그 없음 + 켜져 있음)도 "켠 적 있음"으로
+    // 표시해 둔다 — 아래 stopIntervalService가 중지 요청을 생략하지 않게(리뷰 N-01).
+    if (enabledStr == 'true' &&
+        (settings[_settingPushEverStarted] ?? '') != 'true') {
+      await _markPushEverStarted();
+    }
+
     if (enabledStr != 'true' || rules.isEmpty) {
       debugPrint(
           '[NOTIF] rescheduleAll: 비활성화 또는 규칙 없음 (enabled=$enabledStr, rules=${rules.length})');
@@ -303,9 +310,27 @@ class NotificationService {
 
   // ─── Foreground Service 제어 ───
 
+  /// 이 설치에서 푸시 서비스를 한 번이라도 실제로 켠 적이 있는지. 메인 프로세스가 소유하는
+  /// 앱 DB에 둔다 — `push_notif_prefs`의 `running`은 `:push` 프로세스가 쓰기 때문에 여기서
+  /// 읽으면 프로세스별 캐시로 stale 값을 볼 수 있다(#3의 원인). 이 플래그는 "중지 요청을
+  /// 보낼 필요가 있는가"만 판정한다(감사 D10-07 / 리뷰 N-01).
+  static const _settingPushEverStarted = 'push_service_ever_started';
+
+  static Future<void> _markPushEverStarted() async {
+    try {
+      await DatabaseHelper.instance
+          .upsertSetting(_settingPushEverStarted, 'true');
+    } catch (e) {
+      debugPrint('[NOTIF] push_service_ever_started 기록 실패: $e');
+    }
+  }
+
   static Future<void> _startPushService({
     required String rulesCsv,
   }) async {
+    // 시작을 시도했다는 사실 자체를 먼저 남긴다 — invokeMethod가 실패해도 서비스가
+    // 떴을 가능성이 있으므로, 중지 요청을 생략해선 안 된다.
+    await _markPushEverStarted();
     try {
       await _pushNotifChannel.invokeMethod('startService', {
         'rulesCsv': rulesCsv,
@@ -322,8 +347,22 @@ class NotificationService {
       // isRunning 게이트 제거: 'running' 플래그는 :push 별도 프로세스가 기록하고 여기(메인
       // 프로세스)는 SharedPreferences의 프로세스별 캐시 때문에 stale false를 볼 수 있어,
       // 서비스가 실제로 켜져 있어도 stop을 건너뛰어 OFF 후에도 알림이 지속됐다(#3).
-      // stop은 미실행 서비스에도 무해하다: 네이티브 ACTION_STOP 핸들러가 startForeground로
-      // 콜드스타트 안전성을 확보한 뒤 즉시 정리한다. 따라서 무조건 stop을 보낸다.
+      // 그래서 "켠 적이 있으면" 무조건 보낸다.
+      //
+      // 다만 stop은 무해하지 않다: 네이티브가 startForegroundService로 STOP을 보내므로
+      // **없던 `:push` 프로세스를 새로 띄운다**(그리고 onCreate가 알림 채널을 만든다).
+      // 푸시를 한 번도 켠 적 없는 사용자는 멈출 것도 없으므로 그때만 건너뛴다(D10-07).
+      // ⚠️ "프로세스가 살아있나"로 판정하면 안 된다 — running=false와 알람 취소를 하는
+      // 곳이 바로 이 STOP 분기라서, 죽어 있다고 건너뛰면 다음 TICK이 running=true를 보고
+      // 알림을 되살린다(리뷰 N-01).
+      final settings = await DatabaseHelper.instance.getAllSettings();
+      final everStarted = (settings[_settingPushEverStarted] ?? '') == 'true';
+      final enabled =
+          (settings['notification_enabled'] ?? '').toLowerCase() == 'true';
+      if (!everStarted && !enabled) {
+        debugPrint('[NOTIF] 푸시를 켠 적 없음 — 중지 요청 생략(:push 생성 방지)');
+        return;
+      }
       await _pushNotifChannel.invokeMethod('stopService');
       debugPrint('[NOTIF] 서비스 중지 요청 전송');
     } catch (e) {

@@ -336,9 +336,19 @@ class LockScreenService : Service() {
      * 절대 건드리지 않는다(불변조건: 덱 재쿼리·인덱스 이동 금지) — 배경 레이어만
      * 다시 계산한다.
      */
+    /** 마지막으로 배경을 맞춰 둔 화면 픽셀 크기 — 크기가 실제로 바뀐 config 변경만 처리한다. */
+    private var lastBgScreenW = 0
+    private var lastBgScreenH = 0
+
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         val root = overlayView ?: return
+        // config 변경은 회전 말고도 로케일·글꼴 크기·다크모드 등으로 자주 온다. 배경은 화면
+        // 크기에만 의존하므로 크기가 그대로면 아무것도 하지 않는다(리뷰 N-04).
+        val dm = resources.displayMetrics
+        if (dm.widthPixels == lastBgScreenW && dm.heightPixels == lastBgScreenH) return
+        lastBgScreenW = dm.widthPixels
+        lastBgScreenH = dm.heightPixels
         try {
             applyBackgroundDrawable(root)
         } catch (e: Exception) {
@@ -734,8 +744,19 @@ class LockScreenService : Service() {
             }
             cards = if (reversed) sorted.reversed() else sorted
             Log.d(TAG, "Loaded ${cards.size} cards from DB (sort=$sortOrder, reversed=$reversed)")
-        } catch (e: android.database.sqlite.SQLiteDatabaseLockedException) {
-            throw e // 바깥 DbReadRetry가 재시도
+        } catch (e: android.database.sqlite.SQLiteException) {
+            // 잠금(BUSY)은 바깥 DbReadRetry가 재시도한다. 예전엔 SQLiteDatabaseLockedException만
+            // 다시 던져서, 같은 잠금이 다른 SQLiteException 형태로 오면 여기서 삼켜지고
+            // 재시도 없이 빈 덱이 됐다(리뷰 P-02) — 푸시/PDF 호출부와 분류 기준을 맞춘다.
+            val m = e.message ?: ""
+            if (e is android.database.sqlite.SQLiteDatabaseLockedException ||
+                m.contains("locked", ignoreCase = true) ||
+                m.contains("busy", ignoreCase = true)
+            ) {
+                throw e
+            }
+            Log.e(TAG, "Failed to load cards", e)
+            cards = emptyList()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load cards", e)
             cards = emptyList()

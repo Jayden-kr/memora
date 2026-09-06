@@ -240,14 +240,16 @@ class CardAudioFieldState extends State<CardAudioField> {
   }
 
   /// 이전에 이 위젯이 만든 파일이 새 파일로 교체되면 orphan을 즉시 삭제.
-  void _disposeSupersededFile(String? oldPath, String newPath) {
+  /// 정지를 **기다린 뒤** 지운다 — fire-and-forget이면 "지우기 전에 정지"가 실제 보장이
+  /// 아니라 순서만 그럴듯한 코드가 된다(리뷰 D-03).
+  Future<void> _disposeSupersededFile(String? oldPath, String newPath) async {
     if (oldPath != null &&
         oldPath != newPath &&
         _created.contains(oldPath)) {
       // 감사 D2-07 invariant 6: 이 파일이 지금 전역 재생기에서 재생/추적
       // 중이었다면, 파일을 지우기 전에 먼저 정지+해제한다 — 안 그러면 방금
       // 지운 파일을 가리키는 player가 남는다.
-      AudioPlaybackController.instance.stopIfPlaying(oldPath).ignore();
+      await AudioPlaybackController.instance.stopIfPlaying(oldPath);
       File(oldPath).delete().ignore();
       _created.remove(oldPath);
     }
@@ -326,7 +328,13 @@ class CardAudioFieldState extends State<CardAudioField> {
     if (!mounted) {
       // 정지 완료를 기다리는 사이 위젯이 dispose됨 — 완성된 파일을 이제 아무도
       // 추적하지 않으므로(orphan) 즉시 삭제.
-      if (resultPath != null) File(resultPath).delete().ignore();
+      if (resultPath != null) {
+        File(resultPath).delete().ignore();
+      } else if (partialPath != null) {
+        // stop()이 실패해 결과 경로가 없는 경우 — 부분 파일은 여기서 안 지우면
+        // 다음 앱 시작의 고아 정리까지 남는다(리뷰 P-03).
+        File(partialPath).delete().ignore();
+      }
       return;
     }
     setState(() {});
@@ -347,7 +355,7 @@ class CardAudioFieldState extends State<CardAudioField> {
       return;
     }
     _created.add(resultPath);
-    _disposeSupersededFile(_path, resultPath);
+    await _disposeSupersededFile(_path, resultPath);
     _commit(resultPath, durationMs > 0 ? durationMs : null);
   }
 
@@ -383,7 +391,7 @@ class CardAudioFieldState extends State<CardAudioField> {
         return;
       }
       _created.add(dest);
-      _disposeSupersededFile(_path, dest);
+      await _disposeSupersededFile(_path, dest);
       _commit(dest, null); // 첨부 파일 길이는 재생 시 audioplayers가 산출
     } catch (e) {
       if (!mounted) return;
@@ -393,17 +401,18 @@ class CardAudioFieldState extends State<CardAudioField> {
     }
   }
 
-  void _delete() {
+  Future<void> _delete() async {
     final old = _path;
+    // UI는 먼저 비운다(사용자에게 즉시 반응). 파일 삭제는 정지를 기다린 뒤.
+    _commit(null, null);
     // 이 위젯이 만든 파일이면 즉시 삭제. 원본 파일이면 부모의 저장 cleanup이 처리.
     if (old != null && _created.contains(old)) {
       // 감사 D2-07 invariant 6: 지금 지우는 파일이 전역 재생기에서 재생/추적
-      // 중이었다면 먼저 정지+해제 — 삭제된 파일을 가리키는 player가 안 남게.
-      AudioPlaybackController.instance.stopIfPlaying(old).ignore();
+      // 중이었다면 먼저 정지+해제 — 삭제된 파일을 가리키는 player가 안 남게(리뷰 D-03).
+      await AudioPlaybackController.instance.stopIfPlaying(old);
       File(old).delete().ignore();
       _created.remove(old);
     }
-    _commit(null, null);
   }
 
   @override

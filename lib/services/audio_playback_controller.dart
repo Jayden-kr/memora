@@ -41,7 +41,23 @@ class AudioPlaybackController {
   /// - 다른 경로면: 기존 재생을 정지+해제하고 새 player로 시작한다(동시 1개만 재생).
   /// [knownDuration]은 DB에 저장된 길이 — 실제 onDurationChanged가 오기 전
   /// 진행바/텍스트에 쓸 초기값 힌트일 뿐이다.
-  Future<void> play(String path, {Duration? knownDuration}) async {
+  /// 상태를 바꾸는 명령들의 직렬화 큐. 겹쳐 들어오면 한쪽의 `_resetToIdle()`과 다른 쪽의
+  /// player 생성이 교차해 `AudioPlayer`가 두 개 살아남을 수 있었다(리뷰 D-02) — 앞선 명령이
+  /// 끝난 뒤에만 다음 명령이 돈다.
+  Future<void> _queue = Future<void>.value();
+
+  Future<void> _serial(Future<void> Function() action) {
+    final next = _queue.then((_) => action()).catchError((Object e) {
+      debugPrint('[AUDIO] 재생 명령 실패: $e');
+    });
+    _queue = next;
+    return next;
+  }
+
+  Future<void> play(String path, {Duration? knownDuration}) =>
+      _serial(() => _playImpl(path, knownDuration: knownDuration));
+
+  Future<void> _playImpl(String path, {Duration? knownDuration}) async {
     if (currentPath.value == path && _player != null) {
       final player = _player!;
       final s = state.value;
@@ -113,16 +129,16 @@ class AudioPlaybackController {
   }
 
   /// 전체 정지 + player 해제.
-  Future<void> stop() => _resetToIdle();
+  Future<void> stop() => _serial(_resetToIdle);
 
   /// [path]가 지금 추적/재생 중이면 정지+해제한다.
   /// 그 파일이 디스크에서 곧 삭제될 때(재녹음 교체, 수동 삭제) 호출해서
   /// 사라질 파일을 가리키는 player가 남지 않게 한다(감사 D2-07 invariant 6).
-  Future<void> stopIfPlaying(String path) async {
-    if (currentPath.value == path) {
-      await _resetToIdle();
-    }
-  }
+  Future<void> stopIfPlaying(String path) => _serial(() async {
+        if (currentPath.value == path) {
+          await _resetToIdle();
+        }
+      });
 
   /// player를 정지→해제하고 모든 상태를 idle로 되돌린다.
   /// ⚠️ dispose는 항상 이 async 함수 안에서 await 순서대로 직접 호출한다 —

@@ -271,20 +271,11 @@ class MainActivity : FlutterActivity() {
                         }
                         "stopService" -> {
                             try {
-                                // 감사 D10-07: Dart는 앱 실행마다(rescheduleAll → 비활성) 이걸
-                                // 무조건 보낸다 — "미실행 서비스에도 무해하다"는 전제였지만,
-                                // startForegroundService는 **없던 프로세스를 새로 띄운다**. 그래서
-                                // 푸시를 한 번도 켠 적 없는 사용자도 실행마다 `:push`가 생기고
-                                // onCreate가 알림 채널까지 만들었다(실기기 확인). 죽어 있으면
-                                // 멈출 서비스도 없다 — 그때만 건너뛴다.
-                                // (끈 직후처럼 살아 있는 경우엔 예전과 100% 동일하게 STOP을 보낸다.
-                                //  프로세스가 죽은 채 알람만 남은 드문 경우도 다음 TICK이 running=false를
-                                //  보고 스스로 정리하므로 체인이 되살아나지 않는다.)
-                                if (!isPushProcessAlive()) {
-                                    Log.d(TAG, ":push 미실행 — STOP 생략(프로세스 생성 방지)")
-                                    result.success(true)
-                                    return@setMethodCallHandler
-                                }
+                                // 감사 D10-07의 "실행마다 :push가 뜬다"는 Dart 쪽에서 막는다
+                                // (NotificationService.stopIntervalService — 켠 적 없으면 아예 안 부른다).
+                                // ⚠️ 여기서 프로세스 생존 여부로 거르면 안 된다: running=false 기록과
+                                // 알람 취소를 하는 곳이 바로 이 STOP 분기라, 죽어 있다고 건너뛰면
+                                // 다음 TICK이 running=true를 보고 알림을 되살린다(리뷰 N-01).
                                 val intent = Intent(this, PushNotificationService::class.java)
                                 intent.action = PushNotificationService.ACTION_STOP
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -586,6 +577,9 @@ class MainActivity : FlutterActivity() {
             LockScreenService.refreshChannelLanguage(this)
             // 부팅 복원 채널만 갱신 대상에서 빠져 있어 시스템 설정에서 이것만 옛 언어로 남았다(X5-05).
             LockScreenStartReceiver.refreshChannelLanguage(this)
+            // 푸시 채널 2개도 여기(메인 프로세스)서 갱신한다 — 예전엔 SET_LANG으로 `:push`를
+            // 깨워서 갱신했는데, 그 깨우기 자체가 D10-07의 원인이었다(리뷰 N-03).
+            PushNotificationService.refreshChannelLanguage(this)
         } catch (e: Exception) {
             Log.w(TAG, "알림 채널 언어 갱신 실패: ${e.message}")
         }
@@ -629,7 +623,9 @@ class MainActivity : FlutterActivity() {
     private fun isPushProcessAlive(): Boolean = try {
         val am = getSystemService(ACTIVITY_SERVICE) as? android.app.ActivityManager
         val target = "$packageName:push"
-        am?.runningAppProcesses?.any { it.processName == target } == true
+        // 목록 자체를 못 얻으면(null) "모른다"이지 "죽었다"가 아니다 — 언어가 반영 안 되는
+        // 쪽보다 한 번 통지하는 쪽이 안전하므로 true로 본다(리뷰 N-02).
+        am?.runningAppProcesses?.any { it.processName == target } ?: true
     } catch (e: Exception) {
         Log.w(TAG, ":push 프로세스 확인 실패: ${e.message}")
         true

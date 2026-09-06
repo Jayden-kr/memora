@@ -813,20 +813,34 @@ class DatabaseHelper {
     if (unique.isEmpty) return {};
     final db = await database;
     final found = <String>{};
-    for (var i = 0; i < unique.length; i += _sqlInChunkSize) {
-      final end = (i + _sqlInChunkSize < unique.length)
-          ? i + _sqlInChunkSize
-          : unique.length;
+    // 40개 컬럼을 컬럼마다 따로 조회하면(인덱스가 없어 전부 풀스캔) 카드 한 장 지울 때마다
+    // 스캔이 40번 돈다 — 1만 장대 라이브러리에서 눈에 띄게 느리고 쓰기 락도 오래 문다
+    // (리뷰 P-01). 한 번의 스캔으로 40컬럼을 동시에 본다. 대신 바인딩 변수가
+    // 40 × chunk개라 SQLite 변수 상한에 걸리지 않게 chunk를 작게 잡는다.
+    const chunkSize = 20; // 40 × 20 = 800 < 999
+    final where = _pathColumns
+        .map((c) => '$c IN (${List.filled(chunkSize, '?').join(',')})')
+        .join(' OR ');
+    for (var i = 0; i < unique.length; i += chunkSize) {
+      final end =
+          (i + chunkSize < unique.length) ? i + chunkSize : unique.length;
       final chunk = unique.sublist(i, end);
-      final ph = List.filled(chunk.length, '?').join(',');
-      for (final col in _pathColumns) {
-        final rows = await db.rawQuery(
-          'SELECT DISTINCT $col AS p FROM ${AppConstants.tableCards} WHERE $col IN ($ph)',
-          chunk,
-        );
-        for (final r in rows) {
-          final p = r['p'] as String?;
-          if (p != null) found.add(p);
+      // 마지막 청크가 짧으면 자리표시자 수가 안 맞는다 — 중복 값으로 채워 길이를 맞춘다
+      // (IN 절이라 같은 값이 여러 번 있어도 결과가 달라지지 않는다).
+      final padded = List<String>.from(chunk);
+      while (padded.length < chunkSize) {
+        padded.add(chunk.first);
+      }
+      final args = <String>[for (var c = 0; c < _pathColumns.length; c++) ...padded];
+      final rows = await db.rawQuery(
+        'SELECT ${_pathColumns.join(', ')} FROM ${AppConstants.tableCards} WHERE $where',
+        args,
+      );
+      final wanted = chunk.toSet();
+      for (final r in rows) {
+        for (final col in _pathColumns) {
+          final p = r[col] as String?;
+          if (p != null && wanted.contains(p)) found.add(p);
         }
       }
     }

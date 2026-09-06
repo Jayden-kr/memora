@@ -50,6 +50,44 @@ class PushNotificationService : Service() {
          * 파싱. 어떤 입력에도 throw하지 않는다 — 빈 문자열/null/깨진 토큰은 조용히 무시하고,
          * 최대 [RECENT_CARD_LIMIT]개까지만 취한다.
          */
+        /**
+         * 이미 만들어져 있는 푸시 채널 2개(상주 서비스·복습 알림)의 이름/설명만 현재 앱 언어로
+         * 다시 만든다. **메인 프로세스에서 호출한다** — 채널은 시스템이 앱 단위로 갖고 있어
+         * 프로세스와 무관하고, 예전처럼 SET_LANG 인텐트로 `:push`를 깨워 갱신하면 푸시를 쓰지도
+         * 않는 사용자의 프로세스가 실행마다 새로 뜬다(감사 D10-07 / 리뷰 N-03).
+         * 없는 채널은 만들지 않는다 — 안 쓰던 사용자에게 채널이 생기면 안 된다.
+         */
+        fun refreshChannelLanguage(context: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+            val appContext = context.applicationContext
+            val nm = appContext.getSystemService(NotificationManager::class.java) ?: return
+            val res = AppLang.wrap(appContext)
+            if (nm.getNotificationChannel(CHANNEL_ID) != null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        res.getString(R.string.push_service_channel_name),
+                        NotificationManager.IMPORTANCE_MIN
+                    ).apply {
+                        description = res.getString(R.string.push_service_channel_desc)
+                        setShowBadge(false)
+                    }
+                )
+            }
+            if (nm.getNotificationChannel(REVIEW_CHANNEL_ID) != null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(
+                        REVIEW_CHANNEL_ID,
+                        res.getString(R.string.push_review_channel_name),
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = res.getString(R.string.push_review_channel_desc)
+                        enableVibration(true)
+                    }
+                )
+            }
+        }
+
         internal fun parseRecentIds(csv: String?): List<Int> {
             if (csv.isNullOrEmpty()) return emptyList()
             return csv.split(",").mapNotNull { it.trim().toIntOrNull() }.take(RECENT_CARD_LIMIT)

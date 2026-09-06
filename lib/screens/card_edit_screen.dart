@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../database/database_helper.dart';
+import '../services/audio_playback_controller.dart';
 import '../l10n/app_localizations.dart';
 import '../models/card.dart';
 import '../models/folder.dart';
@@ -443,6 +444,9 @@ class _CardEditScreenState extends State<CardEditScreen>
     if (_committed) return;
     for (final path in [..._questionImages, ..._answerImages, _voicePath]) {
       if (path != null && path.isNotEmpty && !_isOriginalPath(path)) {
+        // 재생은 이제 위젯이 아니라 전역 컨트롤러가 들고 있다 — 파일만 지우면 화면
+        // 어디에도 끌 수단이 없는 재생이 남는다(리뷰 D-01).
+        AudioPlaybackController.instance.stopIfPlaying(path).ignore();
         File(path).delete().ignore();
       }
     }
