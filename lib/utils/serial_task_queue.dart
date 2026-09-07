@@ -30,6 +30,11 @@ import 'dart:async';
 /// ④ **상한이 끝나도 작업은 취소되지 않는다.** 포기하는 것은 "결과 보고"뿐이다.
 ///    줄 서는 중에 상한이 끝났다고 작업을 건너뛰면, 정리가 조용히 사라져 데이터가
 ///    낡은 채로 남는다 — 기다리게 하는 것보다 나쁘다.
+///
+/// ⑤ **[queueBackstop] 시계는 예약이 아니라 "내 차례"부터 잰다.** 예약 시점부터 재면
+///    앞사람이 멈춘 동안 내 예산이 줄서기로 소진돼, 정작 내가 시작하자마자 백스톱이
+///    터져 멀쩡한 나를 고아로 만든다. 그러면 나는 스스로를 stale로 보고 해야 할 쓰기를
+///    건너뛴다 — 덮어쓰기보다 나쁜 조용한 누락이다.
 class SerialTaskQueue {
   Future<void> _tail = Future<void>.value();
 
@@ -68,6 +73,13 @@ class SerialTaskQueue {
     final slot = Completer<void>();
     _tail = slot.future; // ① 첫 await보다 먼저
 
+    // ⑤ **[queueBackstop] 시계는 "내 차례가 온 순간"부터 잰다.** 예약 시점부터 재면
+    //    앞사람이 멈춰 있는 동안 내 예산이 줄서기로 다 소진되고, 정작 내가 시작하자마자
+    //    백스톱이 터져 **멀쩡히 쓰기 중인 나를 고아로 만든다** — 그러면 내가 스스로를
+    //    stale로 보고 마땅히 해야 할 쓰기를 건너뛴다. 덮어쓰기보다 나쁜 조용한 누락이고,
+    //    한 번 멈춘 뒤 폴더를 하나만 더 지워도 재현된다(리뷰 R7-B, 실측).
+    final slotReleased = Completer<void>();
+
     // ④ 호출자와 무관하게 돌아간다. 상한이 끝나도 이 Future는 계속 진행한다.
     final running = () async {
       try {
@@ -76,18 +88,28 @@ class SerialTaskQueue {
         onError?.call(e);
       }
       _activeGeneration = myGeneration; // 이제 내 차례 — 활성 세대 갱신
-      return await task(myGeneration);
+      final work = task(myGeneration);
+      // ② 자리는 원칙적으로 이 작업이 끝나야 비워진다. [queueBackstop]이 있으면
+      // **내 작업이** 그만큼 걸렸을 때만 강제로 비운다. 그 뒤로도 work 자체는
+      // 취소되지 않고 계속 실행된다 — 뒤늦게 끝났을 때 스스로 활성 세대가 아님을
+      // 보고 쓰기를 건너뛰는 건 [task] 쪽 책임이다.
+      final released =
+          queueBackstop == null ? work : work.timeout(queueBackstop);
+      unawaited(released.then<void>((_) {}, onError: (Object e) {
+        onError?.call(e);
+      }).whenComplete(() {
+        if (!slotReleased.isCompleted) slotReleased.complete();
+      }));
+      return await work;
     }();
 
-    // ② 자리는 원칙적으로 이 작업이 실제로 끝나야 비워진다. [queueBackstop]이
-    // 있으면 그 시간이 지났을 때도 강제로 비운다. 그 뒤로도 [running] 자체는
-    // 취소되지 않고 계속 실행된다 — 뒤늦게 끝났을 때 스스로 활성 세대가 아님을
-    // 보고 쓰기를 건너뛰는 건 [task] 쪽 책임이다.
-    final released =
-        queueBackstop == null ? running : running.timeout(queueBackstop);
-    unawaited(released.then<void>((_) {}, onError: (Object e) {
+    // 줄 서기 중에 앞사람이 던져도 내 자리는 언젠가 열려야 한다.
+    unawaited(running.then<void>((_) {}, onError: (Object e) {
       onError?.call(e);
     }).whenComplete(() {
+      if (!slotReleased.isCompleted) slotReleased.complete();
+    }));
+    unawaited(slotReleased.future.whenComplete(() {
       if (!slot.isCompleted) slot.complete();
     }));
 

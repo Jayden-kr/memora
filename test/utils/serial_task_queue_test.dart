@@ -100,6 +100,58 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     });
 
+    test('백스톱 시계는 예약이 아니라 내 차례부터 잰다 — 줄서기가 예산을 먹지 않는다',
+        () async {
+      // 예약 시점부터 재면, 앞사람이 멈춘 동안 뒷사람의 예산이 줄서기로 소진돼
+      // 정작 시작하자마자 백스톱이 터진다. 그러면 멀쩡히 일하던 뒷사람이 고아가 되고,
+      // 그 사이 세 번째가 활성 세대를 가져가, 뒷사람은 스스로를 stale로 보고 해야 할
+      // 쓰기를 건너뛴다 — 덮어쓰기보다 나쁜 조용한 누락이다(리뷰 R7-B).
+      //
+      // ⚠️ 이 시나리오는 **호출이 셋이어야** 드러난다. 둘만 두면 뒷사람이 고아가 돼도
+      // 활성 세대를 가져갈 사람이 없어 stale 판정이 안 나고, 옛 모양에서도 테스트가
+      // 통과한다(네거티브 컨트롤로 실측: 둘짜리 버전은 옛 코드도 통과했다).
+      final q = SerialTaskQueue();
+      final hung = Completer<void>();
+      const backstop = Duration(milliseconds: 60);
+      final observed = <String>[];
+
+      Future<String> body(String tag, Duration work, int gen) async {
+        await Future<void>.delayed(work);
+        // 쓰기 직전에 자신이 아직 활성 세대인지 본다(프로덕션과 같은 규약).
+        observed.add(q.activeGeneration == gen ? '$tag:wrote' : '$tag:skipped');
+        return tag;
+      }
+
+      // A: 영원히 멈춘다. 백스톱이 자리를 비워 준다.
+      final a = q.run((gen) => hung.future.then((_) => 'A'),
+          timeout: const Duration(milliseconds: 20),
+          queueBackstop: backstop,
+          onTimeout: () => 'gave-up');
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      // B: 줄을 선다. 자기 차례가 오면 40ms짜리 정상 작업을 한다.
+      final b = q.run(
+          (gen) => body('B', const Duration(milliseconds: 40), gen),
+          timeout: const Duration(milliseconds: 500),
+          queueBackstop: backstop,
+          onTimeout: () => 'gave-up');
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      // C: B 뒤에 선다. B가 부당하게 고아가 되면 C가 활성 세대를 가져간다.
+      final c = q.run(
+          (gen) => body('C', const Duration(milliseconds: 5), gen),
+          timeout: const Duration(milliseconds: 500),
+          queueBackstop: backstop,
+          onTimeout: () => 'gave-up');
+
+      expect(await a, 'gave-up');
+      expect(await b, 'B');
+      expect(await c, 'C');
+      expect(observed, ['B:wrote', 'C:wrote'],
+          reason: 'B는 멀쩡했는데 줄서기 때문에 고아 취급되면 안 된다');
+
+      hung.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    });
+
     test('작업이 던져도 큐가 막히지 않는다', () async {
       final q = SerialTaskQueue();
       final errors = <Object>[];

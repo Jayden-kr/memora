@@ -407,7 +407,11 @@ class LockScreenService {
       if (newFolderIds.isEmpty && !keepRunningOnSlots) {
         if (giveUpIfStale()) return false;
         if (running) await stopService();
-        if (giveUpIfStale()) return false;
+        // ⚠️ 여기서는 stale이어도 물러나지 않는다. 서비스는 이미 멈췄는데 저장을
+        // 건너뛰면 prefs엔 enabled:true가 남아 화면과 실제가 갈리고, 반환값도 false라
+        // 사용자에게 "잠금화면이 꺼졌다"는 안내조차 안 나간다 — 스윕 S-02에서 고쳤던
+        // 그 조용한 종료가 그대로 재현된다(리뷰 R7-C). 찢어진 상태를 남기느니
+        // 마무리하는 쪽이 낫다.
         await saveSettings(
           enabled: false,
           folderIds: const [],
