@@ -1032,16 +1032,27 @@ class DatabaseHelper {
   ///
   /// [transform]은 요청한 키들의 현재 값을 받아, **쓸 키만** 담은 맵을 돌려준다.
   /// 빈 맵이나 null이면 아무것도 쓰지 않는다.
-  /// ⚠️ 트랜잭션 안에서 동기로 불리므로 DB를 다시 건드리면 안 된다.
+  /// ⚠️ 트랜잭션 안에서 동기로 불리므로 DB를 다시 건드리면 안 된다. 어기면
+  /// [StateError]로 즉시 터진다(아래 재진입 가드 참고).
   Future<void> updateSettingsAtomically(
     List<String> keys,
     Map<String, String>? Function(Map<String, String> current) transform,
   ) async {
+    // ⚠️ 재진입 검사는 **트랜잭션을 열기 전에** 해야 한다. 안에 두면 아무 소용이
+    // 없다: 중첩 호출은 sqflite의 비재진입 락에서 먼저 막혀 콜백 본문이 시작조차
+    // 못 하므로, 안에 있는 assert는 영영 실행되지 않고 앱은 조용히 영구 교착한다
+    // (실측 확인). 그리고 assert는 릴리스에서 제거되므로 assert 자체로도 부족하다.
+    //
+    // 플래그는 **동기인 [transform] 실행 구간에만** 세운다. Dart는 단일 스레드라
+    // 그 구간에는 [transform]이 직접 부른 코드만 돌 수 있다 — 그래서 이 검사는
+    // "중첩"만 잡고, 단순히 동시에 들어온 별개 호출은 잡지 않는다.
+    if (_inSettingsTxn) {
+      throw StateError(
+          'updateSettingsAtomically는 transform 안에서 다시 부를 수 없다 '
+          '(sqflite 트랜잭션은 비재진입이라 영구 교착한다)');
+    }
     final db = await database;
     await db.transaction((txn) async {
-      assert(!_inSettingsTxn,
-          'updateSettingsAtomically를 트랜잭션 안에서 다시 부르면 교착한다');
-      _inSettingsTxn = true;
       try {
         final ph = List.filled(keys.length, '?').join(',');
         final rows = await txn.query(
@@ -1055,7 +1066,14 @@ class DatabaseHelper {
           final v = r['value'];
           if (k is String && v is String) current[k] = v;
         }
-        final next = transform(current);
+        // 동기 구간에만 깃발을 세운다 — 여기서 부른 코드가 다시 들어오면 위 검사가 잡는다.
+        _inSettingsTxn = true;
+        final Map<String, String>? next;
+        try {
+          next = transform(current);
+        } finally {
+          _inSettingsTxn = false;
+        }
         if (next == null || next.isEmpty) return;
         // 요청하지 않은 키를 조용히 새로 만들지 않는다 — 오타 하나가 설정 테이블에
         // 유령 행을 남긴다(리뷰 R5-A).
@@ -1069,6 +1087,7 @@ class DatabaseHelper {
           );
         }
       } finally {
+        // transform 구간을 벗어나면 이미 내려가 있다. 예외로 빠져나온 경우를 위해 한 번 더.
         _inSettingsTxn = false;
       }
     });
