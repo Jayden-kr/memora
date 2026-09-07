@@ -323,9 +323,18 @@ class LockScreenService {
   /// 반환값: 이번 정리로 잠금화면을 껐으면 true. 화면이 사용자에게 알린다 —
   /// 푸시 규칙 쪽(removeFoldersFromPushSchedule)과 같은 규칙이다. 예전엔 여기만
   /// 조용히 꺼서, 사용자는 잠금화면이 왜 멈췄는지 알 방법이 없었다(스윕 S-02).
+  ///
+  /// round7: [isStale]은 호출자(home_screen의 정리 큐)가 "이 호출이 아직도
+  /// 최신인지"를 판정하는 콜백이다. 이 함수는 SharedPreferences를 MethodChannel로
+  /// 읽고 쓴다 — 그 사이에 큐의 백스톱이 자리를 강제로 비워 더 최신 정리가 먼저
+  /// 끝나 있으면, 여기서 실제 쓰기(stopService/saveSettings/startService)를 하는
+  /// 순간 옛 스냅샷으로 그 최신 결과를 덮어쓴다. 네이티브 채널이라 sqflite 트랜잭션
+  /// 같은 원자성이 없으므로, 각 쓰기 직전마다 [isStale]을 다시 확인해 그렇다면
+  /// 조용히 물러난다(리뷰 R6-1).
   static Future<bool> removeFoldersFromSettingsBatch(
-    List<int> folderIdsToRemove,
-  ) async {
+    List<int> folderIdsToRemove, {
+    bool Function()? isStale,
+  }) async {
     if (folderIdsToRemove.isEmpty) return false;
     try {
       final settings = await getSettings();
@@ -383,8 +392,22 @@ class LockScreenService {
       // 그 밖의 시간에는 네이티브 사양대로 "빈 기본 폴더 = 전체 카드"로 동작한다.
       final keepRunningOnSlots = prunedSlots.isNotEmpty &&
           (settings['scheduleEnabled'] as bool? ?? false);
+
+      // round7: 실제 쓰기 직전마다 확인한다 — 위 판단(newFolderIds/scheduleCsv 등)이
+      // 서있는 동안 더 최신 정리가 먼저 끝났다면, 이제 와서 쓰면 그 결과를 덮는다.
+      bool giveUpIfStale() {
+        if (isStale == null || !isStale()) return false;
+        debugPrint(
+          '[LockScreenService] 더 최신 정리가 있어 쓰기를 건너뜀 '
+          '(removeFoldersFromSettingsBatch)',
+        );
+        return true;
+      }
+
       if (newFolderIds.isEmpty && !keepRunningOnSlots) {
+        if (giveUpIfStale()) return false;
         if (running) await stopService();
+        if (giveUpIfStale()) return false;
         await saveSettings(
           enabled: false,
           folderIds: const [],
@@ -398,6 +421,7 @@ class LockScreenService {
         // 원래 켜져 있던 것을 이번에 껐을 때만 알린다.
         return enabled;
       } else if (running && enabled) {
+        if (giveUpIfStale()) return false;
         await startService(
           enabled: enabled,
           folderIds: newFolderIds,
@@ -409,6 +433,7 @@ class LockScreenService {
           scheduleCsv: scheduleCsv,
         );
       } else {
+        if (giveUpIfStale()) return false;
         await saveSettings(
           enabled: enabled,
           folderIds: newFolderIds,

@@ -1127,13 +1127,25 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
   //
   // 줄 세우기에는 틀리기 쉬운 규칙 네 가지가 있고, 실제로 다섯 번 잘못 고쳤다.
   // 그 규칙과 회귀 테스트는 SerialTaskQueue에 박아 뒀다 — 손대기 전에 그쪽을 읽을 것.
+  //
+  // round7: 큐 자리에 5분 백스톱(queueBackstop)을 둔다 — 네이티브가 영영 답을 안
+  // 주는 최악의 경우 이후 모든 정리가 큐에 영구히 쌓이는 걸 막기 위해서다(2라운드
+  // 회귀와 같은 모양). 하지만 백스톱은 뒤늦게 깨어난 옛 작업을 고아로 만든다 — 그
+  // 고아가 LockScreenService.removeFoldersFromSettingsBatch의 쓰기까지 그대로
+  // 밀고 가면, 옛 스냅샷으로 이미 끝난 더 최신 정리의 결과를 덮어쓴다(리뷰 R6-1).
+  // 푸시 규칙 쪽(removeFoldersFromPushSchedule)은 sqflite 트랜잭션으로 막았지만
+  // 여기는 SharedPreferences MethodChannel이라 그럴 수 없다. 그래서 세대 번호를
+  // 넘겨 [_cleanupAfterFolderDeleteImpl]이 쓰기 직전에 자신이 여전히
+  // [_cleanupQueue.activeGeneration]인지 확인하고, 아니면 스스로 물러나게 한다.
   return _cleanupQueue.run(
-    () => _cleanupAfterFolderDeleteImpl(
+    (generation) => _cleanupAfterFolderDeleteImpl(
       regularIds: regularIds,
       needsPushReschedule: needsPushReschedule,
       filePaths: filePaths,
+      isStale: () => _cleanupQueue.activeGeneration != generation,
     ),
     timeout: const Duration(seconds: 30),
+    queueBackstop: const Duration(minutes: 5),
     onTimeout: () =>
         (removedRules: 0, pushDisabled: false, lockScreenDisabled: false),
     onError: (e) => debugPrint('[HOME] post-delete cleanup failed: $e'),
@@ -1148,11 +1160,14 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
   required List<int> regularIds,
   required bool needsPushReschedule,
   required List<String> filePaths,
+  required bool Function() isStale,
 }) async {
   try {
-    // batch helper: settings read 1회 + write 1회로 N회 I/O 압축
-    final lockScreenDisabled =
-        await LockScreenService.removeFoldersFromSettingsBatch(regularIds);
+    // batch helper: settings read 1회 + write 1회로 N회 I/O 압축. isStale은 큐
+    // 백스톱이 이 호출을 고아로 만들었을 때(round7) 옛 스냅샷으로 더 최신 정리의
+    // 결과를 덮어쓰지 않도록 쓰기 직전에 확인하는 용도다.
+    final lockScreenDisabled = await LockScreenService
+        .removeFoldersFromSettingsBatch(regularIds, isStale: isStale);
     // needsPushReschedule 플래그와 무관하게 항상 호출 — 그 플래그는
     // push_alarms.folder_id(전역 기본 폴더)만 추적해서, 푸시 시간대 슬롯에만
     // 걸린 삭제(기본 폴더는 안 건드리고 슬롯 하나가 가리키던 폴더만 지운 경우)를
