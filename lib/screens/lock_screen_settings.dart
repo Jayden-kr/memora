@@ -266,7 +266,17 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
     // 스위치 ON인데 선택 폴더가 비었으면(저장된 id의 폴더가 삭제된 뒤 다른 설정을 바꾼 경우
     // 등) ON 토글과 같은 규칙으로 첫 폴더를 자동 선택한다 — 빈 목록은 네이티브 사양상
     // "전체 카드"라 화면("폴더 선택" 힌트)과 실제 동작이 갈렸다.
-    if (_enabled && _selectedFolderIds.isEmpty && _folders.isNotEmpty) {
+    //
+    // ⚠️ 유효한 시간대 슬롯이 있으면 자동 선택하지 않는다 — 기본 폴더 없이 슬롯만으로
+    // 도는 것도 정상 상태다(사용자 결정 2026-09-06, LockScreenService.
+    // removeFoldersFromSettingsBatch의 keepRunningOnSlots와 같은 규칙). 이 가드가
+    // 없으면 슬롯만 남기고 기본 폴더를 지운 뒤 이 화면에서 아무거나(슬롯 편집 등)
+    // 건드릴 때마다 되살아나 슬롯 전용 설정이 조용히 되돌아간다(리뷰 발견).
+    final hasValidSlots = _scheduleEnabled && _slots.isNotEmpty;
+    if (_enabled &&
+        _selectedFolderIds.isEmpty &&
+        _folders.isNotEmpty &&
+        !hasValidSlots) {
       _selectedFolderIds.add(_folders.first.id!);
       if (mounted) setState(() {});
     }
@@ -307,11 +317,14 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _onEnabledChanged(bool value) async {
-    if (value && _selectedFolderIds.isEmpty && _folders.isNotEmpty) {
+    // ⚠️ 유효한 시간대 슬롯이 있으면 기본 폴더 자동선택도, "폴더 없으면 활성화 불가"도
+    // 건너뛴다 — 슬롯만으로 도는 것도 정상 상태다. _applySettings의 같은 가드 참고.
+    final hasValidSlots = _scheduleEnabled && _slots.isNotEmpty;
+    if (value && _selectedFolderIds.isEmpty && _folders.isNotEmpty && !hasValidSlots) {
       // 폴더 미선택 시 첫 번째 폴더 자동 선택
       _selectedFolderIds.add(_folders.first.id!);
     }
-    if (value && _selectedFolderIds.isEmpty) {
+    if (value && _selectedFolderIds.isEmpty && !hasValidSlots) {
       // 폴더가 아예 없으면 활성화 불가
       if (!mounted) return;
       final t = AppLocalizations.of(context);

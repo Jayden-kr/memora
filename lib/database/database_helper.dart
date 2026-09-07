@@ -382,13 +382,25 @@ class DatabaseHelper {
     var nextSeq = Sqflite.firstIntValue(await txn.rawQuery(
             'SELECT MAX(sequence) FROM ${AppConstants.tableFolders} WHERE parent_folder_id IS NULL')) ??
         0;
-    for (final id in folderIds) {
+    // 호출부(삭제 시의 SELECT, 편집 시의 Set.difference)가 묶음 안 순서를 보장 안
+    // 하므로, 여기서 현재 sequence로 다시 정렬해 승격 순서를 고정한다 — 안 그러면
+    // 최상위로 올라온 폴더들이 사용자가 묶음 안에서 정해둔 순서와 무관하게 임의
+    // 순서로 뒤에 붙는다(리뷰 발견, 데이터 유실은 아니고 순서만 흐트러짐).
+    final ph = List.filled(folderIds.length, '?').join(',');
+    final rows = await txn.rawQuery(
+      'SELECT id, sequence FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
+      folderIds,
+    );
+    final orderedIds = rows.toList()
+      ..sort((a, b) =>
+          (a['sequence'] as int? ?? 0).compareTo(b['sequence'] as int? ?? 0));
+    for (final row in orderedIds) {
       nextSeq++;
       await txn.update(
         AppConstants.tableFolders,
         {'parent_folder_id': null, 'sequence': nextSeq},
         where: 'id = ?',
-        whereArgs: [id],
+        whereArgs: [row['id'] as int],
       );
     }
   }

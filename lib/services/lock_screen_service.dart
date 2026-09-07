@@ -291,6 +291,31 @@ class LockScreenService {
     }
   }
 
+  /// PIN/패턴/비밀번호가 설정돼 있는지. "잠금화면에서 알림 내용 숨기기"는 Android가
+  /// 기기 잠금이 설정된 경우에만 `NotificationCompat.VISIBILITY_PRIVATE`을 지킨다 —
+  /// 없으면 스위치가 켜져도 조용히 전체 내용을 그대로 보여준다(리뷰 발견). 조회
+  /// 실패 시 false(=경고 표시 쪽)로 fail — 경고를 놓쳐서 "가려졌다고 믿었는데 안
+  /// 가려짐"이 되는 쪽이, 헛경고 한 번 뜨는 쪽보다 나쁘다.
+  static Future<bool> isDeviceSecure() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isDeviceSecure');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('[LockScreenService] isDeviceSecure error: $e');
+      return false;
+    }
+  }
+
+  /// 시스템 보안(화면 잠금) 설정 화면을 연다 — [isDeviceSecure]가 false일 때
+  /// 사용자가 PIN/패턴/비밀번호를 설정하러 가는 경로.
+  static Future<void> openSecuritySettings() async {
+    try {
+      await _channel.invokeMethod('openSecuritySettings');
+    } catch (e) {
+      debugPrint('[LockScreenService] openSecuritySettings error: $e');
+    }
+  }
+
   static Future<void> requestOverlayPermission() async {
     try {
       await _channel.invokeMethod('requestOverlayPermission');

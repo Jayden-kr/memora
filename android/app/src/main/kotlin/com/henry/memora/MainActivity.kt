@@ -2,6 +2,7 @@ package com.henry.memora
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
@@ -401,12 +402,25 @@ class MainActivity : FlutterActivity() {
                         "canDrawOverlays" -> {
                             result.success(Settings.canDrawOverlays(this))
                         }
+                        "isDeviceSecure" -> {
+                            // "잠금화면에서 알림 내용 숨기기"는 Android가 PIN/패턴/비밀번호가
+                            // 설정된 기기에서만 NotificationCompat.VISIBILITY_PRIVATE을
+                            // 지킨다 — 없으면 조용히 무시하고 전체 내용을 그대로 보여준다.
+                            // 화면 쪽에서 이 전제를 확인하지 않으면 스위치는 켜졌다고
+                            // 뜨는데 실제로는 아무것도 안 가려지는 조용한 무동작이 된다(리뷰 발견).
+                            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                            result.success(km.isDeviceSecure)
+                        }
                         "requestOverlayPermission" -> {
                             val intent = Intent(
                                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                 android.net.Uri.parse("package:$packageName")
                             )
                             startActivity(intent)
+                            result.success(true)
+                        }
+                        "openSecuritySettings" -> {
+                            startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
                             result.success(true)
                         }
                         "getSettings" -> {

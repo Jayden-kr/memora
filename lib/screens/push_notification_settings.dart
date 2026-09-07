@@ -8,6 +8,7 @@ import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../utils/folder_label.dart';
+import '../services/lock_screen_service.dart';
 import '../services/notification_service.dart';
 import '../services/push_schedule.dart';
 
@@ -30,6 +31,10 @@ class _PushNotificationSettingsScreenState
   bool _notificationPermitted = true;
   // 잠금화면에서 카드 질문을 가릴지 여부.
   bool _hideContent = false;
+  // 기본값 true — 실제 체크 전 깜빡임 방지, 다른 권한 플래그와 같은 이유.
+  // false일 때만 경고: PIN/패턴/비밀번호가 없으면 Android가 VISIBILITY_PRIVATE을
+  // 무시해 _hideContent를 켜도 조용히 아무 효과가 없다(리뷰 발견).
+  bool _deviceSecure = true;
 
   // 알림 시간대 규칙 목록 (v1.3.9: 전역 기본값/마스터 활성시간창 없음 — 이 목록이
   // 유일한 스케줄 표현이다).
@@ -68,11 +73,18 @@ class _PushNotificationSettingsScreenState
     }
   }
 
-  /// 시스템 설정에서만 바뀌는 두 권한을 함께 재확인한다 — 둘 다 앱 밖에서 꺼질 수
-  /// 있어서 화면에 돌아온 시점이 아니면 알 방법이 없다.
+  /// 시스템 설정에서만 바뀌는 권한들을 함께 재확인한다 — 전부 앱 밖에서 꺼지거나
+  /// 켜질 수 있어서 화면에 돌아온 시점이 아니면 알 방법이 없다.
   Future<void> _checkPermissions() async {
     await _checkExactAlarmPermission();
     await _checkNotificationPermission();
+    await _checkDeviceSecure();
+  }
+
+  Future<void> _checkDeviceSecure() async {
+    final secure = await LockScreenService.isDeviceSecure();
+    if (!mounted) return;
+    setState(() => _deviceSecure = secure);
   }
 
   Future<void> _checkExactAlarmPermission() async {
@@ -567,6 +579,8 @@ class _PushNotificationSettingsScreenState
                   value: _hideContent,
                   onChanged: _enabled ? _onHideContentChanged : null,
                 ),
+                if (_hideContent && !_deviceSecure)
+                  _buildDeviceSecurityPrompt(t),
               ],
             ),
     );
@@ -615,6 +629,19 @@ class _PushNotificationSettingsScreenState
           // 설정 화면이 별도 앱 화면이 아니라 다이얼로그로 뜨는 일부 기기 대비
           // 즉시 1회 재확인 (주 경로는 didChangeAppLifecycleState resumed 콜백).
           await _checkExactAlarmPermission();
+        },
+      );
+
+  /// 잠금화면 알림 내용 숨기기가 켜져 있는데 기기 잠금(PIN/패턴/비밀번호)이 없어
+  /// Android가 그 설정을 무시하는 경우의 안내 카드(리뷰 발견 — 예전엔 아무 말 없이
+  /// 조용히 무동작이었다).
+  Widget _buildDeviceSecurityPrompt(AppLocalizations t) => _buildWarningCard(
+        title: t.pushDeviceSecureTitle,
+        body: t.pushDeviceSecureBody,
+        buttonLabel: t.pushDeviceSecureButton,
+        onPressed: () async {
+          await LockScreenService.openSecuritySettings();
+          await _checkDeviceSecure();
         },
       );
 

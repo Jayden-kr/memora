@@ -52,6 +52,23 @@ void main() {
       expect(compareNamesForSort('B', 'a'), greaterThan(0));
     });
 
+    test('서로게이트 쌍(이모지 등)도 SQLite와 같은 코드포인트 순서다', () {
+      // String.compareTo는 UTF-16 "코드유닛"을 비교한다 — 서로게이트 쌍(U+10000
+      // 이상)의 앞쪽 유닛(0xD800~0xDBFF)이 BMP 상위 영역(0xE000~0xFFFF, 예: 이
+      // 대체문자 U+FFFD)보다 수치상 작아서, 코드유닛 비교로는 실제로 더 큰
+      // 코드포인트(이모지)가 더 작게 취급된다. SQLite의 BINARY collation은 UTF-8
+      // 바이트 비교라 진짜 코드포인트 순서와 같다. 아래 기대값은 sqlite에서
+      // `ORDER BY name COLLATE NOCASE, name`으로 실측 대조했다(리뷰 발견).
+      //
+      // ⚠️ 네거티브 컨트롤: compareNamesForSort가 다시 String.compareTo만 쓰면
+      // (코드포인트 비교 없이) 아래 두 단언이 뒤집힌다 — 직접 되돌려서 실패하는
+      // 것까지 확인했다.
+      const emoji = '\u{1F600}zz'; // 😀 (U+1F600, 서로게이트 쌍)
+      const replacementChar = '�zz'; // U+FFFD, BMP 상위 영역
+      expect(compareNamesForSort(replacementChar, emoji), lessThan(0));
+      expect(sorted([emoji, replacementChar]), [replacementChar, emoji]);
+    });
+
     test('전순서다 — 반사·대칭·추이 전부', () {
       const samples = [
         'Apple', 'apple', 'banana', '가', '한글', '', 'Zebra', '1',

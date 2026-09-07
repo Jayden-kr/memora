@@ -333,6 +333,9 @@
   "pushNotifPermissionButton": "Open settings",
   "pushHideContent": "Hide notification content",
   "pushHideContentDesc": "On the lock screen, show a generic message instead of the card question. The full question appears once unlocked. Android only hides it when a PIN, pattern, or password is set.",
+  "pushDeviceSecureTitle": "Screen lock needed",
+  "pushDeviceSecureBody": "This device has no PIN, pattern, or password, so Android won't hide the card question on the lock screen even with this switch on. Set a screen lock to make it work.",
+  "pushDeviceSecureButton": "Open settings",
 
   "pushRulesSection": "Notification time ranges",
   "pushRulesGapHint": "No notifications during {ranges}",

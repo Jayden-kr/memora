@@ -105,7 +105,18 @@ class Folder {
       'modified': modified,
       'parent': parent ? 1 : 0,
       'parent_folder_id': parentFolderId,
-      'parent_folder_name': parentFolderName,
+      // parent_folder_name은 여기서 안 쓴다. 그 컬럼은 실제로 존재하지만(레거시,
+      // database_helper.dart의 CREATE TABLE 참고) 믿을 수 없는 값이다 — 묶음 편집은
+      // parent_folder_id만 UPDATE하므로 이 컬럼은 이름이 바뀌어도 낡은 채 남는다.
+      // 그래서 getNonBundleFolders/getChildFolders는 이 컬럼을 아예 안 읽고 LEFT
+      // JOIN으로 그때그때 새로 채운다 — 하지만 getAllFolders()는 컬럼 목록 없이
+      // `SELECT *`를 쓰므로 이 원본 컬럼값을 **그대로** 읽는다(잠금화면 시작 시
+      // 대조·.mra export의 id→이름 매핑이 여기 의존). 만약 조회로 받은(JOIN이
+      // 채운 fresh) Folder를 여기서 되써 버리면, 그 순간의 부모 이름이 원본 컬럼에
+      // 영구 고정되고 getAllFolders()가 그 낡은 값을 그대로 돌려준다 — updateFolder를
+      // 지운 이유였던 그 낡음 버그(D1-03/D8-09)가 다른 경로로 돌아온다(리뷰 발견,
+      // 현재는 모든 호출부가 parentFolderName 없이 Folder를 만들어 아직 무해하지만
+      // 지뢰로 남아 있었다).
       'is_special_folder': isSpecialFolder ? 1 : 0,
       'is_bundle': isBundle ? 1 : 0,
     };
