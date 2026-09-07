@@ -393,8 +393,20 @@ class LockScreenService {
       final keepRunningOnSlots = prunedSlots.isNotEmpty &&
           (settings['scheduleEnabled'] as bool? ?? false);
 
-      // round7: 실제 쓰기 직전마다 확인한다 — 위 판단(newFolderIds/scheduleCsv 등)이
+      // 실제 쓰기 직전마다 확인한다 — 위 판단(newFolderIds/scheduleCsv 등)이
       // 서있는 동안 더 최신 정리가 먼저 끝났다면, 이제 와서 쓰면 그 결과를 덮는다.
+      //
+      // ⚠️ **남아 있는 구멍(의도적으로 감수함).** 이 확인은 "보내기 직전"이지
+      // "적용될 때까지"가 아니다. 확인을 통과하고 채널 호출을 띄운 뒤 그 호출이
+      // 네이티브에서 오래 붙들려 있으면, 그 사이 더 최신 정리가 끝나고 내 옛 값이
+      // 나중에 착지할 수 있다(리뷰 R7-A). 완전히 막으려면 세대 번호를 네이티브까지
+      // 내려보내 거기서 원자적으로 판정해야 하는데, 그건 네이티브 API 변경이라
+      // 이번 릴리스에서 하지 않는다.
+      //
+      // 감수하는 근거: (1) 성립하려면 채널 호출 하나가 백스톱(5분)을 넘겨 붙들린 뒤
+      // 되살아나야 한다. (2) 그렇게 되살아난 값이 지운 폴더를 되살리더라도, 다음 앱
+      // 시작의 _reconcileLockScreenFoldersOnce가 folderIds와 시간대 슬롯 양쪽에서
+      // 없는 폴더 참조를 걷어낸다 — 영구히 굳지 않는다.
       bool giveUpIfStale() {
         if (isStale == null || !isStale()) return false;
         debugPrint(
