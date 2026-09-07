@@ -1137,12 +1137,16 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
   //     기다리는 동안 _cleanupChain에는 아직 앞사람 링크가 들어 있어서 세 번째 호출이
   //     나와 같은 것을 기다리다 함께 깨어난다 — 줄이 무너진다(리뷰 R3-1, 동시 writer
   //     2를 Dart로 재현).
-  //  ② **큐는 "실제 작업"이 끝나야 풀린다.** 내가 기다리다 지쳤다고 풀어주면, 고아가
-  //     된 앞 작업이 나중에 옛 스냅샷으로 뒷사람의 쓰기를 덮는다(리뷰 R2-A).
+  //  ② **큐는 "실제 작업"이 끝나야 풀린다. 타임아웃으로 풀어주지 않는다.** 내가
+  //     기다리다 지쳤다고 자리를 비우면, 고아가 된 앞 작업이 나중에 옛 스냅샷으로
+  //     뒷사람의 쓰기를 덮는다(리뷰 R2-A). 30초든 5분이든 타임아웃은 같은 모양이라
+  //     같은 사고를 낸다 — 실제로 5분 백스톱에서 재현됐다(리뷰 R4-E). 그래서
+  //     백스톱을 **없앴다**. 네이티브가 영영 답을 안 하면 이후 정리가 큐에 쌓이지만,
+  //     그 상태는 이미 앱이 망가진 상태다. 설정을 깨뜨리는 쪽이 더 나쁘다.
   //  ③ **호출자는 무한정 기다리지 않는다.** 네이티브가 영영 답을 안 주면 `await`가
   //     영영 안 끝나고, 그 continuation이 State를 붙들어 GC도 안 되고 안내도 못 뜬다
-  //     (리뷰 R3-C). ③은 ②와 충돌하지 않는다 — 큐는 여전히 실제 작업을 본다.
-  const queueBackstop = Duration(minutes: 5);
+  //     (리뷰 R3-C). ③은 ②와 충돌하지 않는다 — 이건 "결과 보고"만 포기하는 것이고
+  //     큐는 여전히 실제 작업을 끝까지 지켜본다.
   const callerLimit = Duration(seconds: 30);
   const failed =
       (removedRules: 0, pushDisabled: false, lockScreenDisabled: false);
@@ -1160,8 +1164,8 @@ Future<({int removedRules, bool pushDisabled, bool lockScreenDisabled})>
     needsPushReschedule: needsPushReschedule,
     filePaths: filePaths,
   );
-  // ② 자리는 실제 작업이 끝날 때(또는 백스톱) 비워진다. 결과값은 필요 없다.
-  unawaited(work.timeout(queueBackstop).then<void>((_) {}, onError: (e) {
+  // ② 자리는 **실제 작업이 끝나야** 비워진다. 타임아웃을 걸지 않는다.
+  unawaited(work.then<void>((_) {}, onError: (e) {
     debugPrint('[HOME] cleanup chain link failed: $e');
   }).whenComplete(() {
     if (!slot.isCompleted) slot.complete();

@@ -477,16 +477,19 @@ class NotificationService {
     try {
       final removeSet = folderIdsToRemove.toSet();
 
-      // 읽기·거르기·쓰기를 한 트랜잭션 안에서 한다. 화면 쪽이 정리 호출을 줄 세우고
-      // 있지만(home_screen.cleanupAfterFolderDelete), 그 줄이 두 번이나 무너져
-      // 지운 폴더의 규칙이 되살아난 적이 있다(리뷰 R2-A/R3-1). 데이터 층에서 한 겹 더
-      // 막는다 — 여기가 마지막 방어선이다.
+      // 규칙 정리와 마스터 스위치 판정을 **한 트랜잭션 안에서** 한다.
+      //
+      // 예전엔 트랜잭션을 둘로 나눴는데, 그 사이 틈에 설정 화면의 디바운스 저장이
+      // 끼어들면 "규칙이 0개다"라는 첫 판단이 두 번째 쓰기 시점엔 이미 거짓이 되어,
+      // 방금 만든 규칙이 있는데도 스위치를 꺼버렸다(리뷰 R4-C). 판단과 쓰기는
+      // 반드시 같은 트랜잭션 안에 있어야 한다.
       var removedCount = 0;
-      var noRulesLeft = false;
-      await DatabaseHelper.instance.updateSettingAtomically(
-        PushSchedule.settingRulesKey,
+      var pushDisabled = false;
+      await DatabaseHelper.instance.updateSettingsAtomically(
+        [PushSchedule.settingRulesKey, 'notification_enabled'],
         (current) {
-          final rules = PushSchedule.decode(current);
+          final rules =
+              PushSchedule.decode(current[PushSchedule.settingRulesKey]);
           if (rules.isEmpty) return null;
           // folderId == allFolders(-1)은 실제 폴더 id가 아니므로 removeSet에 절대
           // 포함되지 않는다 — "전체 폴더" 규칙은 이 pruning으로 지워지지 않는다.
@@ -494,29 +497,23 @@ class NotificationService {
               rules.where((r) => !removeSet.contains(r.folderId)).toList();
           if (prunedRules.length == rules.length) return null; // 이 삭제와 무관
           removedCount = rules.length - prunedRules.length;
-          noRulesLeft = prunedRules.isEmpty;
-          return PushSchedule.encode(prunedRules);
+
+          final writes = <String, String>{
+            PushSchedule.settingRulesKey: PushSchedule.encode(prunedRules),
+          };
+          // 규칙이 전부 사라진 경우에만 마스터 스위치를 끈다 — 규칙 0개인데 스위치
+          // ON인 상태는 불변식 위반이기 때문. 규칙이 하나라도 남으면 사용자가 설정한
+          // 값을 그대로 둔다. 이 판정이 쓰기와 같은 스냅샷 위에서 이뤄진다.
+          final wasEnabled =
+              (current['notification_enabled'] ?? '').toLowerCase() == 'true';
+          if (prunedRules.isEmpty && wasEnabled) {
+            pushDisabled = true;
+            writes['notification_enabled'] = 'false';
+          }
+          return writes;
         },
       );
       if (removedCount == 0) return none; // 변경 없음
-
-      // 규칙이 있었는데 이번 pruning으로 전부 사라진 경우에만 마스터 스위치를 끈다
-      // — 규칙 0개인데 스위치 ON인 상태는 불변식 위반이기 때문. 그 외(규칙이 하나라도
-      // 남는 경우)엔 사용자가 설정한 enabled 값을 그대로 둔다.
-      //
-      // 스위치도 같은 이유로 트랜잭션 안에서 읽고 쓴다 — 규칙을 지운 뒤 따로 읽으면
-      // 그 사이 사용자가 설정 화면에서 켠 값을 못 볼 수 있다.
-      var pushDisabled = false;
-      if (noRulesLeft) {
-        await DatabaseHelper.instance.updateSettingAtomically(
-          'notification_enabled',
-          (current) {
-            if ((current ?? '').toLowerCase() != 'true') return null;
-            pushDisabled = true;
-            return 'false';
-          },
-        );
-      }
 
       await rescheduleAll();
       return (removedRules: removedCount, pushDisabled: pushDisabled);

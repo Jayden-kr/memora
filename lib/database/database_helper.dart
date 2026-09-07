@@ -1013,36 +1013,60 @@ class DatabaseHelper {
     );
   }
 
-  /// Settings 테이블: 한 키를 **읽고 고쳐서 다시 쓰는 것을 하나의 트랜잭션으로** 한다.
+  /// 트랜잭션 콜백 안에서 다시 트랜잭션을 열면 sqflite는 예외가 아니라 **영구 교착**에
+  /// 빠진다(같은 Database의 비재진입 Lock에 자기 자신이 매달린다). 디버그 빌드에서
+  /// 즉시 터지게 해 두면 릴리스에서 조용히 멈추는 대신 테스트에서 잡힌다.
+  static bool _inSettingsTxn = false;
+
+  /// 설정 **여러 키를 한 트랜잭션 안에서** 읽고 쓴다.
   ///
-  /// 여러 화면이 동시에 같은 키를 "전부 읽고 → 걸러내고 → 전부 되쓰기" 하면, 늦게
-  /// 끝난 쪽이 옛 스냅샷으로 먼저 끝난 쪽의 쓰기를 덮는다. 화면 쪽에서 호출을 줄
-  /// 세우고 있지만(home_screen.cleanupAfterFolderDelete), 그 줄이 어떤 이유로든
-  /// 무너져도 데이터가 깨지지 않도록 여기서 한 겹 더 막는다.
+  /// 여러 화면이 같은 설정을 "읽고 → 고치고 → 되쓰기" 하면, 늦게 끝난 쪽이 옛
+  /// 스냅샷으로 먼저 끝난 쪽의 쓰기를 덮는다. 화면 쪽에서 호출을 줄 세우고 있지만
+  /// (home_screen.cleanupAfterFolderDelete) 그 줄은 두 번이나 무너졌다. 여기가
+  /// 마지막 방어선이다.
   ///
-  /// [transform]은 현재 값(없으면 null)을 받아 새 값을 돌려준다. null을 돌려주면
-  /// 아무것도 쓰지 않는다. **트랜잭션 안에서 불리므로 DB를 다시 건드리면 안 된다.**
-  Future<String?> updateSettingAtomically(
-    String key,
-    String? Function(String? current) transform,
+  /// **키 하나씩 따로 부르면 안 된다.** 두 키가 하나의 불변식을 이루면(예: "규칙이
+  /// 0개면 스위치는 꺼져 있어야 한다") 호출 사이의 틈에 다른 쓰기가 끼어들어,
+  /// 첫 트랜잭션에서 내린 판단이 두 번째를 실행할 때는 이미 거짓이 된다(리뷰 R4-C).
+  /// 판단과 쓰기를 같은 트랜잭션 안에 둘 것.
+  ///
+  /// [transform]은 요청한 키들의 현재 값을 받아, **쓸 키만** 담은 맵을 돌려준다.
+  /// 빈 맵이나 null이면 아무것도 쓰지 않는다.
+  /// ⚠️ 트랜잭션 안에서 동기로 불리므로 DB를 다시 건드리면 안 된다.
+  Future<void> updateSettingsAtomically(
+    List<String> keys,
+    Map<String, String>? Function(Map<String, String> current) transform,
   ) async {
     final db = await database;
-    return await db.transaction<String?>((txn) async {
-      final rows = await txn.query(
-        AppConstants.tableSettings,
-        where: 'key = ?',
-        whereArgs: [key],
-        limit: 1,
-      );
-      final current = rows.isEmpty ? null : rows.first['value'] as String?;
-      final next = transform(current);
-      if (next == null) return null;
-      await txn.insert(
-        AppConstants.tableSettings,
-        {'key': key, 'value': next},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-      return next;
+    await db.transaction((txn) async {
+      assert(!_inSettingsTxn,
+          'updateSettingsAtomically를 트랜잭션 안에서 다시 부르면 교착한다');
+      _inSettingsTxn = true;
+      try {
+        final ph = List.filled(keys.length, '?').join(',');
+        final rows = await txn.query(
+          AppConstants.tableSettings,
+          where: 'key IN ($ph)',
+          whereArgs: keys,
+        );
+        final current = <String, String>{};
+        for (final r in rows) {
+          final k = r['key'];
+          final v = r['value'];
+          if (k is String && v is String) current[k] = v;
+        }
+        final next = transform(current);
+        if (next == null || next.isEmpty) return;
+        for (final entry in next.entries) {
+          await txn.insert(
+            AppConstants.tableSettings,
+            {'key': entry.key, 'value': entry.value},
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      } finally {
+        _inSettingsTxn = false;
+      }
     });
   }
 
