@@ -905,8 +905,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
                 ),
               ),
             ),
-          const Divider(),
 
+          // 잠금화면 활성화·기본 폴더·시간대 전환·정렬은 전부 "잠금화면이 뭘 보여줄지"를
+          // 이루는 한 덩어리 설정이라, Background 섹션과 같은 규칙으로 구분선 없이
+          // 소제목만으로 나눈다(사용자 요청 2026-09-07).
           // 폴더 선택 (단일 선택) — 스케줄이 켜지면 "폴더 선택" 대신 "기본 폴더"로 표기
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
@@ -979,8 +981,6 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               ),
             ),
 
-          const Divider(),
-
           // 시간대별 폴더 자동 전환
           SwitchListTile(
             title: Text(t.lockScheduleEnable),
@@ -992,7 +992,6 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
             },
           ),
           if (_scheduleEnabled) ..._buildScheduleSection(t),
-          const Divider(),
 
           // 카드 순서
           Padding(
@@ -1042,6 +1041,20 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               bgImagePath: _bgImagePath,
               bgImageAlpha: _bgImageAlpha,
               bgScrimAlpha: _bgScrimAlpha,
+            ),
+          ),
+          // 미리보기는 실제 잠금화면 오버레이와 똑같은 모양을 내야 해서(위 주석 참고)
+          // 위젯 안에는 "예시"라고 못 적는다 — 그 문구 자체가 진짜 카드처럼 보이면
+          // 안 되기 때문. 대신 미리보기 바깥, 눈에 띄지 않게 작은 안내를 붙인다
+          // (사용자 요청 2026-09-07: 프랑스 수도 예시가 실제 카드로 오인될 수 있음).
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: Text(
+              t.lockPreviewExampleNote,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
             ),
           ),
 

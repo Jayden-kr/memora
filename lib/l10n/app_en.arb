@@ -272,6 +272,7 @@
   "lockLabelAnswer": "ANSWER",
   "lockPreviewSampleQuestion": "What is the capital of France?",
   "lockPreviewSampleAnswer": "Paris",
+  "lockPreviewExampleNote": "Example card — not your real content",
 
   "lockScheduleEnable": "Time-based folder switching",
   "lockScheduleEnableSubtitle": "Show a different folder depending on the time of day",
