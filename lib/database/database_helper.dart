@@ -386,11 +386,24 @@ class DatabaseHelper {
     // 하므로, 여기서 현재 sequence로 다시 정렬해 승격 순서를 고정한다 — 안 그러면
     // 최상위로 올라온 폴더들이 사용자가 묶음 안에서 정해둔 순서와 무관하게 임의
     // 순서로 뒤에 붙는다(리뷰 발견, 데이터 유실은 아니고 순서만 흐트러짐).
-    final ph = List.filled(folderIds.length, '?').join(',');
-    final rows = await txn.rawQuery(
-      'SELECT id, sequence FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
-      folderIds,
-    );
+    //
+    // ⚠️ 이 파일의 다른 배치 쿼리들과 똑같이 _sqlInChunkSize로 나눠서 부른다 —
+    // 안 나누면 큰 묶음(자식이 수백~수천) 하나를 지우거나 편집할 때 IN 절
+    // 플레이스홀더가 안드로이드 SQLite 기본 한도(999)를 넘겨 트랜잭션 전체가
+    // 예외로 죽는다(2차 리뷰 발견, R6-E).
+    final rows = <Map<String, Object?>>[];
+    for (var i = 0; i < folderIds.length; i += _sqlInChunkSize) {
+      final chunk = folderIds.sublist(
+          i,
+          i + _sqlInChunkSize > folderIds.length
+              ? folderIds.length
+              : i + _sqlInChunkSize);
+      final ph = List.filled(chunk.length, '?').join(',');
+      rows.addAll(await txn.rawQuery(
+        'SELECT id, sequence FROM ${AppConstants.tableFolders} WHERE id IN ($ph)',
+        chunk,
+      ));
+    }
     final orderedIds = rows.toList()
       ..sort((a, b) =>
           (a['sequence'] as int? ?? 0).compareTo(b['sequence'] as int? ?? 0));

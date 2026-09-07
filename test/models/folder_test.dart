@@ -103,6 +103,21 @@ void main() {
     });
   });
 
+  group('toDb — parent_folder_name', () {
+    test('toDb()는 parent_folder_name을 절대 쓰지 않는다', () {
+      // parent_folder_name 컬럼은 실재하지만 조회 쪽(getNonBundleFolders 등)이
+      // LEFT JOIN으로 매번 새로 채우는 파생값이라 믿을 수 없다. getAllFolders()는
+      // `SELECT *`라 이 원본 컬럼을 그대로 읽으므로, toDb()가 되쓰면 그 순간의
+      // 부모 이름이 영구 고정돼 updateFolder를 지운 이유였던 낡음 버그(D1-03/
+      // D8-09)가 돌아온다(리뷰 발견). parentFolderName이 채워진(=JOIN으로 막
+      // 조회해 온 상황을 흉내낸) Folder라도 toDb()는 그 값을 흘리면 안 된다.
+      final dbMap = Map<String, dynamic>.from(sampleDbMap);
+      final folder = Folder.fromDb(dbMap).copyWith(parentFolderName: '어떤묶음');
+      expect(folder.parentFolderName, '어떤묶음'); // 전제 확인
+      expect(folder.toDb().containsKey('parent_folder_name'), false);
+    });
+  });
+
   group('copyWith', () {
     test('이름 변경', () {
       final folder = Folder.fromJson(sampleJson);
