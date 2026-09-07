@@ -240,6 +240,29 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _applySettings() async {
+    // 이 화면이 열려 있는 동안 다른 화면에서 폴더가 지워질 수 있다. 그때 삭제 쪽
+    // 사후정리가 설정에서 그 폴더를 이미 빼 갔는데, 여기서 화면이 들고 있던 옛
+    // 목록을 그대로 되쓰면 지운 폴더가 되살아난다(스윕 R5-E). 푸시 규칙 쪽은
+    // 트랜잭션으로 막았지만 잠금화면 설정은 네이티브 채널이라 그럴 수 없어,
+    // **쓰기 직전에 실재하는 폴더만 남긴다.**
+    try {
+      final alive = (await DatabaseHelper.instance.getAllFolders())
+          .map((f) => f.id)
+          .whereType<int>()
+          .toSet();
+      final staleIds = _selectedFolderIds.where((id) => !alive.contains(id));
+      final staleSlots = _slots.where((sl) => !alive.contains(sl.folderId));
+      if (staleIds.isNotEmpty || staleSlots.isNotEmpty) {
+        _selectedFolderIds.removeWhere((id) => !alive.contains(id));
+        _slots.removeWhere((sl) => !alive.contains(sl.folderId));
+        if (mounted) setState(() {});
+      }
+    } catch (e) {
+      // 대조에 실패하면 거르지 않고 그대로 저장한다 — 조회 실패를 "폴더가 다 사라졌다"로
+      // 읽어 사용자의 선택을 통째로 날리는 쪽이 훨씬 나쁘다.
+      debugPrint('[LOCK_SETTINGS] 폴더 실재 확인 실패, 필터 건너뜀: $e');
+    }
+
     // 스위치 ON인데 선택 폴더가 비었으면(저장된 id의 폴더가 삭제된 뒤 다른 설정을 바꾼 경우
     // 등) ON 토글과 같은 규칙으로 첫 폴더를 자동 선택한다 — 빈 목록은 네이티브 사양상
     // "전체 카드"라 화면("폴더 선택" 힌트)과 실제 동작이 갈렸다.

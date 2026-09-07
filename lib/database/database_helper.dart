@@ -1057,6 +1057,10 @@ class DatabaseHelper {
         }
         final next = transform(current);
         if (next == null || next.isEmpty) return;
+        // 요청하지 않은 키를 조용히 새로 만들지 않는다 — 오타 하나가 설정 테이블에
+        // 유령 행을 남긴다(리뷰 R5-A).
+        assert(next.keys.every(keys.contains),
+            'transform이 요청하지 않은 키를 돌려줬다: ${next.keys.where((k) => !keys.contains(k))}');
         for (final entry in next.entries) {
           await txn.insert(
             AppConstants.tableSettings,
