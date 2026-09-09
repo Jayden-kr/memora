@@ -2,7 +2,8 @@
 // setUp/tearDown으로 완전히 격리된 sqflite_common_ffi DB(임시 디렉토리)를 쓴다.
 //
 // 이 스위트의 각 행은 나중에 한 줄짜리 프로덕션 돌연변이(negative control)로 실제
-// 빨간불이 되는지 확인됐다 — 결과는 스크래치패드의 negative_controls.md 참고.
+// 빨간불이 되는지 확인됐다 — negative control은 파일로 남기지 않고 해당 변경의 커밋
+// 메시지/리뷰 기록에 남긴다.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -16,25 +17,49 @@ import 'package:memora/utils/name_sort.dart';
 
 import '../helpers/db_test_harness.dart';
 
-/// 테이블 컬럼 집합(폴더/push_alarms/exported_files) + cards 인덱스 이름 집합.
-/// 업그레이드된 DB와 새로 만든(fresh) v4 DB가 정확히 같은 모양인지 비교하는 데 쓴다.
+/// sqlite_master의 모든 실제 테이블(sqlite_%/android_metadata 제외)에 대해:
+/// - 컬럼 모양(name|type|notnull|dflt_value|pk, cid/정의 순서는 무시 — upgrade는
+///   컬럼을 뒤에 ALTER로 붙이므로 순서가 다를 수 있다)의 Set
+/// - 인덱스 이름별로 unique 플래그 + PRAGMA index_info 컬럼 목록(순서 유지)
+/// 을 모아 테이블별로 담는다. 업그레이드된 DB와 새로 만든(fresh) v4 DB가 정확히 같은
+/// 모양인지 맵 전체로 비교하는 데 쓴다 — 실패하면 어느 테이블/컬럼/인덱스가 다른지
+/// diff에 그대로 드러난다.
 Future<Map<String, Object?>> _schemaFingerprint(Database db) async {
-  Future<Set<String>> cols(String table) async {
+  final tableRows = await db.rawQuery('''
+    SELECT name FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'android_metadata'
+    ORDER BY name
+  ''');
+  final tables = tableRows.map((r) => r['name'] as String).toList();
+
+  Future<Set<String>> columnShapes(String table) async {
     final rows = await db.rawQuery('PRAGMA table_info($table)');
-    return rows.map((r) => r['name'] as String).toSet();
+    return rows
+        .map((r) =>
+            '${r['name']}|${r['type']}|${r['notnull']}|${r['dflt_value']}|${r['pk']}')
+        .toSet();
   }
 
-  Future<Set<String>> indexNames(String table) async {
-    final rows = await db.rawQuery('PRAGMA index_list($table)');
-    return rows.map((r) => r['name'] as String).toSet();
+  Future<Map<String, Object?>> indexShapes(String table) async {
+    final indexes = await db.rawQuery('PRAGMA index_list($table)');
+    final byName = <String, Object?>{};
+    for (final idx in indexes) {
+      final name = idx['name'] as String;
+      final infoRows = await db.rawQuery('PRAGMA index_info($name)');
+      byName[name] = {
+        'unique': idx['unique'],
+        'columns': infoRows.map((r) => r['name'] as String).toList(),
+      };
+    }
+    return byName;
   }
 
-  return {
-    'folders': await cols('folders'),
-    'push_alarms': await cols('push_alarms'),
-    'exported_files': await cols('exported_files'),
-    'cards_indexes': await indexNames('cards'),
-  };
+  final fingerprint = <String, Object?>{};
+  for (final table in tables) {
+    fingerprint['$table.columns'] = await columnShapes(table);
+    fingerprint['$table.indexes'] = await indexShapes(table);
+  }
+  return fingerprint;
 }
 
 void main() {
@@ -231,7 +256,7 @@ void main() {
     });
   });
 
-  group('#4 chunk 산술 (_sqlInChunkSize = 800)', () {
+  group('#4 청크 루프 — 총량 정확성', () {
     late Directory docs;
     setUp(() async => docs = await initDbTestEnv());
     tearDown(() async => tearDownDbTestEnv(docs));
@@ -666,6 +691,11 @@ void main() {
       await imagesDir.create(recursive: true);
       final healedTarget = File(p.join(imagesDir.path, 'a.jpg'));
       await healedTarget.writeAsBytes([9]);
+      // 카드 A는 깨진 컬럼을 두 개 갖는다(question_image_path + answer_image_path) —
+      // healed count가 행 단위가 아니라 컬럼 단위로 세는지 구분하려면 한 행 안에
+      // 복수의 healable 컬럼이 있어야 한다(한 개뿐이면 행당 1로 세도 우연히 통과한다).
+      final healedTargetA2 = File(p.join(imagesDir.path, 'a2.jpg'));
+      await healedTargetA2.writeAsBytes([9]);
 
       final cardAId = await db.insert(
           'cards',
@@ -674,6 +704,7 @@ void main() {
             uuid: 'a',
             overrides: {
               'question_image_path': p.join(docs.path, 'old_location', 'a.jpg'),
+              'answer_image_path': p.join(docs.path, 'old_location', 'a2.jpg'),
             },
           ).toDb());
       final cardBId = await db.insert(
@@ -709,10 +740,15 @@ void main() {
           ).toDb());
 
       final cleaned = await DatabaseHelper.instance.cleanupBrokenImagePaths();
-      expect(cleaned, 3);
+      // 카드 A(2개 healed 컬럼) + 카드 B(1개 blanked) + 카드 E(1개 healed) = 4.
+      // 프로덕션이 행 단위로 셌다면(카드 A를 1로 셈) 이 값은 3이 됐을 것이다 —
+      // 이 총량 자체가 컬럼 단위 카운팅의 증거다.
+      expect(cleaned, 4);
 
       final rowA = (await db.query('cards', where: 'id = ?', whereArgs: [cardAId])).single;
       expect(rowA['question_image_path'], p.join(imagesDir.path, 'a.jpg'));
+      expect(rowA['answer_image_path'], p.join(imagesDir.path, 'a2.jpg'),
+          reason: '카드 A의 두 번째 healable 컬럼도 독립적으로 고쳐져야 한다');
       final rowB = (await db.query('cards', where: 'id = ?', whereArgs: [cardBId])).single;
       expect(rowB['question_image_path'], '');
       final rowC = (await db.query('cards', where: 'id = ?', whereArgs: [cardCId])).single;
@@ -938,6 +974,24 @@ void main() {
           .referencedMediaPaths([...bigPaths, unreferencedBig]);
       expect(bigResult, bigPaths.toSet());
       expect(bigResult.contains(unreferencedBig), isFalse);
+    });
+  });
+
+  // #17 — sqflite_common_ffi(호스트 SQLite)는 SQLITE_MAX_VARIABLE_NUMBER가
+  // 32,766이라 바인딩 변수를 얼마든지 밀어넣어도 청크가 도는 걸 관찰할 수 없다.
+  // 그래서 위 #4/#16의 동작 테스트는 총량만 맞으면 통과하고, _sqlInChunkSize나
+  // referencedMediaPaths의 청크 크기를 아무리 키워도 빨간불이 안 된다 — 실제
+  // Android(변수 한도 999)에서는 청크가 크면 바로 SQLiteException이 난다. 이 그룹은
+  // 그 두 상수가 999 한도 안에 있다는 것 자체를 직접 확인한다.
+  group('#17 Android SQLite 변수 한도(999)', () {
+    test('(a) _sqlInChunkSize는 999 이하다', () {
+      expect(DatabaseHelper.sqlInChunkSize, lessThanOrEqualTo(999));
+    });
+
+    test('(b) referencedMediaPaths 청크의 총 바인딩 변수 수는 999 이하다', () {
+      final totalBinds =
+          DatabaseHelper.mediaPathChunkRows * DatabaseHelper.pathColumnCount;
+      expect(totalBinds, lessThanOrEqualTo(999));
     });
   });
 }

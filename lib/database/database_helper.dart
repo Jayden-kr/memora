@@ -802,6 +802,15 @@ class DatabaseHelper {
     )) ?? 0;
   }
 
+  /// referencedMediaPaths의 컬럼-동시조회 청크 크기(카드 행 수). 40개 컬럼과 곱해
+  /// 바인딩 변수 수가 되므로 Android SQLite 변수 한도(999) 안에 있어야 한다
+  /// (40 × 20 = 800 < 999).
+  static const int _mediaPathChunkRows = 20;
+
+  /// 테스트 전용 — [_mediaPathChunkRows] 노출.
+  @visibleForTesting
+  static int get mediaPathChunkRows => _mediaPathChunkRows;
+
   /// [paths] 중 아직 어떤 카드가 참조하는 경로. 카드/이미지 삭제 뒤 파일을 지우기 전에 불러,
   /// 여러 카드가 공유하는 파일(레거시 .memk가 같은 파일을 여러 카드에 심는다)을 남의 카드에서
   /// 뺏지 않게 한다(D8-04/Y4-01). 호출 시점엔 삭제/수정이 이미 커밋돼 있어야 한다.
@@ -837,19 +846,19 @@ class DatabaseHelper {
     // 40개 컬럼을 컬럼마다 따로 조회하면(인덱스가 없어 전부 풀스캔) 카드 한 장 지울 때마다
     // 스캔이 40번 돈다 — 1만 장대 라이브러리에서 눈에 띄게 느리고 쓰기 락도 오래 문다
     // (리뷰 P-01). 한 번의 스캔으로 40컬럼을 동시에 본다. 대신 바인딩 변수가
-    // 40 × chunk개라 SQLite 변수 상한에 걸리지 않게 chunk를 작게 잡는다.
-    const chunkSize = 20; // 40 × 20 = 800 < 999
+    // 40 × _mediaPathChunkRows개라 SQLite 변수 상한에 걸리지 않게 작게 잡는다.
     final where = _pathColumns
-        .map((c) => '$c IN (${List.filled(chunkSize, '?').join(',')})')
+        .map((c) => '$c IN (${List.filled(_mediaPathChunkRows, '?').join(',')})')
         .join(' OR ');
-    for (var i = 0; i < unique.length; i += chunkSize) {
-      final end =
-          (i + chunkSize < unique.length) ? i + chunkSize : unique.length;
+    for (var i = 0; i < unique.length; i += _mediaPathChunkRows) {
+      final end = (i + _mediaPathChunkRows < unique.length)
+          ? i + _mediaPathChunkRows
+          : unique.length;
       final chunk = unique.sublist(i, end);
       // 마지막 청크가 짧으면 자리표시자 수가 안 맞는다 — 중복 값으로 채워 길이를 맞춘다
       // (IN 절이라 같은 값이 여러 번 있어도 결과가 달라지지 않는다).
       final padded = List<String>.from(chunk);
-      while (padded.length < chunkSize) {
+      while (padded.length < _mediaPathChunkRows) {
         padded.add(chunk.first);
       }
       final args = <String>[for (var c = 0; c < _pathColumns.length; c++) ...padded];
@@ -891,7 +900,10 @@ class DatabaseHelper {
     }
   }
 
-  /// 이미지/음성 경로 컬럼 목록 (import 시 복구용)
+  /// 이미지/음성 경로 컬럼의 canonical 목록 — 삭제, 시작 시 GC, 깨진 경로 자가치유,
+  /// 배치 insert의 UUID 중복 복구가 전부 이 목록을 통해 컬럼을 순회한다. cards
+  /// 스키마의 경로 컬럼 40개와 정확히 일치해야 한다(하나라도 빠지면 그 컬럼은 삭제 시
+  /// 파일이 안 지워지거나 깨진 경로가 안 고쳐진다).
   static const _pathColumns = [
     'question_image_path', 'question_image_path_2', 'question_image_path_3',
     'question_image_path_4', 'question_image_path_5',
@@ -914,6 +926,11 @@ class DatabaseHelper {
     'answer_voice_record_path_7', 'answer_voice_record_path_8',
     'answer_voice_record_path_9', 'answer_voice_record_path_10',
   ];
+
+  /// 테스트 전용 — [_pathColumns]의 컬럼 수. referencedMediaPaths의 청크 크기가
+  /// Android SQLite 변수 한도(999) 안에 있는지 검증하는 데 쓴다.
+  @visibleForTesting
+  static int get pathColumnCount => _pathColumns.length;
 
   /// 카드 배치 insert (transaction) — Import 시 사용
   /// UUID 중복 카드는 비어있는 이미지 경로를 복구 (재import 시 깨진 이미지 수정)
@@ -1234,6 +1251,12 @@ class DatabaseHelper {
 
   /// SQLite IN 절 placeholder 한도(기본 999) 우회용 청크 사이즈
   static const int _sqlInChunkSize = 800;
+
+  /// 테스트 전용 — [_sqlInChunkSize] 노출. ffi 테스트 백엔드는 SQLite 변수 한도가
+  /// 32,766이라 청크 동작 자체를 관찰 못 한다 — 이 값이 Android 한도(999) 안에
+  /// 있는지는 이 getter로 직접 확인해야 한다.
+  @visibleForTesting
+  static int get sqlInChunkSize => _sqlInChunkSize;
 
   /// 배치 이동 (원본/대상 폴더 card_count 자동 갱신).
   /// cardIds 개수에 제한 없음 — IN 절은 청크 단위로 분할 실행.
