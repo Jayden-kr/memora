@@ -932,6 +932,11 @@ class DatabaseHelper {
   @visibleForTesting
   static int get pathColumnCount => _pathColumns.length;
 
+  /// 테스트 전용 — [_pathColumns]의 읽기 전용 사본. cards 스키마의 실제 경로
+  /// 컬럼과 이 목록이 정확히 일치하는지 검증하는 데 쓴다.
+  @visibleForTesting
+  static List<String> get pathColumns => List.unmodifiable(_pathColumns);
+
   /// 카드 배치 insert (transaction) — Import 시 사용
   /// UUID 중복 카드는 비어있는 이미지 경로를 복구 (재import 시 깨진 이미지 수정)
   /// 반환: (inserted: 실제 삽입 수, skipped: UUID 중복으로 건너뜀 수)
@@ -1258,6 +1263,15 @@ class DatabaseHelper {
   @visibleForTesting
   static int get sqlInChunkSize => _sqlInChunkSize;
 
+  /// [getCardsByIdsBatch] 전용 청크 크기. SQLite SQLITE_MAX_VARIABLE_NUMBER
+  /// 기본 999 안전 범위이면서, CardModel이 100+ 컬럼이라 Android Binder
+  /// transaction(1MB) 한계도 함께 피해야 해서 _sqlInChunkSize와 별도 상수로 둔다.
+  static const int _cardsByIdsChunkSize = 500;
+
+  /// 테스트 전용 — [_cardsByIdsChunkSize] 노출.
+  @visibleForTesting
+  static int get cardsByIdsChunkSize => _cardsByIdsChunkSize;
+
   /// 배치 이동 (원본/대상 폴더 card_count 자동 갱신).
   /// cardIds 개수에 제한 없음 — IN 절은 청크 단위로 분할 실행.
   Future<void> moveCardsBatch(List<int> cardIds, int newFolderId) async {
@@ -1449,10 +1463,10 @@ class DatabaseHelper {
     if (ids.isEmpty) return <int, CardModel>{};
     final db = await database;
     final result = <int, CardModel>{};
-    const chunkSize = 500; // SQLite SQLITE_MAX_VARIABLE_NUMBER 기본 999 안전
-    for (int i = 0; i < ids.length; i += chunkSize) {
-      final end =
-          (i + chunkSize < ids.length) ? i + chunkSize : ids.length;
+    for (int i = 0; i < ids.length; i += _cardsByIdsChunkSize) {
+      final end = (i + _cardsByIdsChunkSize < ids.length)
+          ? i + _cardsByIdsChunkSize
+          : ids.length;
       final chunk = ids.sublist(i, end);
       final placeholders = List.filled(chunk.length, '?').join(',');
       final maps = await db.rawQuery(

@@ -993,5 +993,71 @@ void main() {
           DatabaseHelper.mediaPathChunkRows * DatabaseHelper.pathColumnCount;
       expect(totalBinds, lessThanOrEqualTo(999));
     });
+
+    test('(c) _cardsByIdsChunkSize는 999 이하다', () {
+      expect(DatabaseHelper.cardsByIdsChunkSize, lessThanOrEqualTo(999));
+    });
+  });
+
+  group('#18 getCardsByIdsBatch', () {
+    late Directory docs;
+    setUp(() async => docs = await initDbTestEnv());
+    tearDown(() async => tearDownDbTestEnv(docs));
+
+    test('1200장(500+500+200 청크) + 존재하지 않는 id 5개 — 정확히 요청한 1200장만 돌아온다',
+        () async {
+      final db = await DatabaseHelper.instance.database;
+      final folderId =
+          await db.insert('folders', fixtureFolder(name: 'F').toDb());
+      final ids = <int>[];
+      for (var i = 0; i < 1200; i++) {
+        ids.add(await db.insert(
+            'cards', fixtureCard(folderId: folderId, uuid: 'c-$i').toDb()));
+      }
+      final nonExistent = [for (var i = 1; i <= 5; i++) -i];
+
+      final result = await DatabaseHelper.instance
+          .getCardsByIdsBatch([...ids, ...nonExistent]);
+
+      expect(result, hasLength(1200));
+      expect(result.keys.toSet(), ids.toSet());
+      for (final id in ids) {
+        expect(result[id]!.id, id);
+      }
+    });
+
+    test('빈 id 리스트 — 빈 맵을 돌려준다', () async {
+      final result = await DatabaseHelper.instance.getCardsByIdsBatch(<int>[]);
+      expect(result, isEmpty);
+    });
+  });
+
+  group('#19 _pathColumns ↔ cards 스키마 일치', () {
+    late Directory docs;
+    setUp(() async => docs = await initDbTestEnv());
+    tearDown(() async => tearDownDbTestEnv(docs));
+
+    test('cards의 *_path/*_path_N 컬럼 집합과 정확히 같다', () async {
+      final db = await DatabaseHelper.instance.database;
+      final rows =
+          await db.rawQuery('PRAGMA table_info(${AppConstants.tableCards})');
+      final schemaPathColumns = rows
+          .map((r) => r['name'] as String)
+          .where((name) => RegExp(r'_path(_\d+)?$').hasMatch(name))
+          .toSet();
+      final declared = DatabaseHelper.pathColumns.toSet();
+
+      final missingFromDeclared = schemaPathColumns.difference(declared);
+      final extraInDeclared = declared.difference(schemaPathColumns);
+      expect(missingFromDeclared, isEmpty,
+          reason: '_pathColumns에 없는 스키마 경로 컬럼: $missingFromDeclared');
+      expect(extraInDeclared, isEmpty,
+          reason: '스키마에 없는 _pathColumns 항목(오탈자/삭제된 컬럼일 수 있음): $extraInDeclared');
+
+      expect(DatabaseHelper.pathColumns.length, 40);
+      expect(DatabaseHelper.pathColumns.toSet().length,
+          DatabaseHelper.pathColumns.length,
+          reason: '_pathColumns에 중복 항목이 있다');
+    });
   });
 }
