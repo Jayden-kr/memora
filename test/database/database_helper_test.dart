@@ -693,8 +693,23 @@ void main() {
             overrides: {'question_image_path': validFile.path},
           ).toDb());
 
+      // 컬럼 목록의 마지막 항목(answer_voice_record_path_10)도 자가치유되는지 —
+      // 목록이 잘리면(예: 앞쪽 컬럼만 남기는 회귀) 이 카드만 안 고쳐지고 조용히 넘어간다.
+      final healedTargetE = File(p.join(imagesDir.path, 'e.jpg'));
+      await healedTargetE.writeAsBytes([9]);
+      final cardEId = await db.insert(
+          'cards',
+          fixtureCard(
+            folderId: folderId,
+            uuid: 'e',
+            overrides: {
+              'answer_voice_record_path_10':
+                  p.join(docs.path, 'old_location', 'e.jpg'),
+            },
+          ).toDb());
+
       final cleaned = await DatabaseHelper.instance.cleanupBrokenImagePaths();
-      expect(cleaned, 2);
+      expect(cleaned, 3);
 
       final rowA = (await db.query('cards', where: 'id = ?', whereArgs: [cardAId])).single;
       expect(rowA['question_image_path'], p.join(imagesDir.path, 'a.jpg'));
@@ -702,6 +717,8 @@ void main() {
       expect(rowB['question_image_path'], '');
       final rowC = (await db.query('cards', where: 'id = ?', whereArgs: [cardCId])).single;
       expect(rowC['question_image_path'], validFile.path);
+      final rowE = (await db.query('cards', where: 'id = ?', whereArgs: [cardEId])).single;
+      expect(rowE['answer_voice_record_path_10'], p.join(imagesDir.path, 'e.jpg'));
 
       // import 진행 중 마커 — 이후 새로 생긴 깨진 경로는 건드리지 않는다.
       await db.insert('settings', {'key': 'import_in_progress', 'value': '1'});

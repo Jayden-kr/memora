@@ -1672,32 +1672,8 @@ class DatabaseHelper {
     final docDir = await getApplicationDocumentsDirectory();
     final mediaDirPath = p.join(docDir.path, AppConstants.imageDir);
 
-    // 이미지/음성 경로를 포함하는 모든 컬럼
-    const pathColumns = [
-      'question_image_path', 'question_image_path_2', 'question_image_path_3',
-      'question_image_path_4', 'question_image_path_5',
-      'answer_image_path', 'answer_image_path_2', 'answer_image_path_3',
-      'answer_image_path_4', 'answer_image_path_5',
-      'question_hand_image_path', 'question_hand_image_path_2',
-      'question_hand_image_path_3', 'question_hand_image_path_4',
-      'question_hand_image_path_5',
-      'answer_hand_image_path', 'answer_hand_image_path_2',
-      'answer_hand_image_path_3', 'answer_hand_image_path_4',
-      'answer_hand_image_path_5',
-      'question_voice_record_path', 'question_voice_record_path_2',
-      'question_voice_record_path_3', 'question_voice_record_path_4',
-      'question_voice_record_path_5', 'question_voice_record_path_6',
-      'question_voice_record_path_7', 'question_voice_record_path_8',
-      'question_voice_record_path_9', 'question_voice_record_path_10',
-      'answer_voice_record_path', 'answer_voice_record_path_2',
-      'answer_voice_record_path_3', 'answer_voice_record_path_4',
-      'answer_voice_record_path_5', 'answer_voice_record_path_6',
-      'answer_voice_record_path_7', 'answer_voice_record_path_8',
-      'answer_voice_record_path_9', 'answer_voice_record_path_10',
-    ];
-
     final whereClauses =
-        pathColumns.map((c) => "($c IS NOT NULL AND $c != '')").join(' OR ');
+        _pathColumns.map((c) => "($c IS NOT NULL AND $c != '')").join(' OR ');
 
     int cleaned = 0;
     const batchSize = 500;
@@ -1710,7 +1686,7 @@ class DatabaseHelper {
       // ID 기반 페이지네이션으로 offset 드리프트 문제 해결
       final rows = await db.query(
         AppConstants.tableCards,
-        columns: ['id', ...pathColumns],
+        columns: ['id', ..._pathColumns],
         where: 'id > ? AND id <= ? AND ($whereClauses)',
         whereArgs: [lastMaxId, maxIdAtStart],
         orderBy: 'id ASC',
@@ -1731,7 +1707,7 @@ class DatabaseHelper {
       final batchUpdates = <int, Map<String, dynamic>>{};
       for (final row in rows) {
         final updates = <String, dynamic>{};
-        for (final col in pathColumns) {
+        for (final col in _pathColumns) {
           final path = row[col] as String?;
           if (path == null || path.isEmpty) continue;
           if (!await File(path).exists()) {
