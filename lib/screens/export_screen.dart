@@ -234,7 +234,7 @@ class _ExportScreenState extends State<ExportScreen> {
     final ext = _fileType == 'memk' ? '.mra' : '.pdf';
     final conflictNames = <String>[];
     for (final folder in selectedFolders) {
-      final safeName = _sanitizeForExport(folder.name);
+      final safeName = ImportExportController.sanitizeFileName(folder.name);
       final candidate = p.join(exportDir.path, '$safeName$ext');
       if (File(candidate).existsSync()) {
         conflictNames.add('$safeName$ext');
@@ -294,13 +294,6 @@ class _ExportScreenState extends State<ExportScreen> {
     if (!started && mounted) {
       messenger.showSnackBar(SnackBar(content: Text(busyMessage)));
     }
-  }
-
-  /// Controller의 _sanitizeFileName과 동일 로직 — 충돌 감지용으로 미리 적용
-  static String _sanitizeForExport(String name) {
-    final sanitized =
-        name.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
-    return sanitized.isEmpty ? 'export' : sanitized;
   }
 
   @override

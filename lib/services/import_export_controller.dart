@@ -411,7 +411,9 @@ class ImportExportController {
   /// 전체를 ENAMETOOLONG으로 중단시켰다(D7-14).
   static const _maxStemBytes = 200;
 
-  @visibleForTesting
+  /// 파일명 sanitizer — 실제 쓰기 경로(export)와 export_screen의 충돌 미리보기가
+  /// 같은 이름을 계산하도록 이 하나만 쓴다(D7-14: 미리보기가 200바이트 절단을 안 거치면
+  /// 실제로 쓰는 이름과 달라져 덮어쓰기/이름변경 다이얼로그가 조용히 건너뛰어졌다).
   static String sanitizeFileName(String name) => _sanitizeFileName(name);
 
   static String _sanitizeFileName(String name) {
