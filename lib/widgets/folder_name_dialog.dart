@@ -54,7 +54,16 @@ class _FolderNameDialogState extends State<FolderNameDialog> {
       return;
     }
     setState(() => _checking = true);
-    final error = await validate(name);
+    String? error;
+    try {
+      error = await validate(name);
+    } catch (_) {
+      // 검사 자체가 실패하면 버튼을 영구히 잠그는 대신 이름을 그대로 넘긴다 — 호출자가
+      // insert 전에 exists 검사를 한 번 더 하므로(2차 방어) 거기서 처리된다.
+      if (!mounted) return;
+      Navigator.pop(context, name);
+      return;
+    }
     if (!mounted) return;
     if (error != null) {
       setState(() {
