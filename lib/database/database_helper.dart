@@ -31,6 +31,18 @@ class DatabaseHelper {
     return _dbCompleter!.future;
   }
 
+  /// 테스트 전용. 열려 있는 DB 핸들을 닫고 다음 [database] 접근이 새로 열게 한다.
+  /// 프로덕션 코드에서 부르는 곳은 없다 — 런타임 경로는 그대로다.
+  @visibleForTesting
+  static Future<void> resetForTesting() async {
+    final c = _dbCompleter;
+    _dbCompleter = null;
+    if (c == null) return;
+    try {
+      await (await c.future).close();
+    } catch (_) {}
+  }
+
   Future<Database> _initDB() async {
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, AppConstants.dbName);
