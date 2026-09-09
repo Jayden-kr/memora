@@ -18,6 +18,7 @@ import '../models/folder.dart';
 import '../utils/constants.dart';
 import '../utils/folder_label.dart';
 import '../widgets/card_audio_field.dart';
+import '../widgets/confirm_delete_dialog.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/native_text_field.dart';
 
@@ -485,25 +486,12 @@ class _CardEditScreenState extends State<CardEditScreen>
     final card = widget.existingCard;
     if (card == null || card.id == null) return;
     final t = AppLocalizations.of(context);
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.cardDeleteTitle),
-        content: Text(t.cardDeleteSingleConfirm),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(t.commonDelete,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ),
-        ],
-      ),
+    final confirmed = await confirmDelete(
+      context,
+      title: t.cardDeleteTitle,
+      message: t.cardDeleteSingleConfirm,
     );
-    if (confirm != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     // 삭제 중엔 저장과 똑같이 뒤로가기·본문 입력을 막는다 — 안 막으면 삭제 도중
     // 뒤로가기가 결과(-1)를 유실시키거나(호출자가 삭제된 카드를 계속 표시) 위에 뜬
     // 폐기 다이얼로그를 대신 pop해 미처리 예외가 된다.

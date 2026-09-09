@@ -13,6 +13,8 @@ import '../utils/constants.dart';
 import '../utils/folder_label.dart';
 import '../app.dart' show routeObserver;
 import '../widgets/card_tile.dart';
+import '../widgets/confirm_delete_dialog.dart';
+import '../widgets/folder_name_dialog.dart';
 import 'card_edit_screen.dart';
 
 class CardListScreen extends StatefulWidget {
@@ -529,25 +531,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   Future<void> _deleteCard(CardModel card) async {
     final t = AppLocalizations.of(context);
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.cardDeleteTitle),
-        content: Text(t.cardDeleteSingleConfirm),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(t.commonDelete,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ),
-        ],
-      ),
+    final confirmed = await confirmDelete(
+      context,
+      title: t.cardDeleteTitle,
+      message: t.cardDeleteSingleConfirm,
     );
-    if (confirm != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     final filePaths = _collectCardFilePaths(card);
     try {
@@ -645,7 +634,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   /// `try { showDialog(...) } finally { controller.dispose(); }`로 정리했었다 —
   /// push_notification_settings.dart의 `_PushRuleDialog` 문서에 적힌 것과 동일한
   /// '_dependents.isEmpty' 크래시 위험 패턴. 지금은 controller를
-  /// [_FolderNameDialog]의 State가 소유해 dispose()가 Element unmount 시점에만
+  /// [FolderNameDialog]의 State가 소유해 dispose()가 Element unmount 시점에만
   /// 불리도록 고쳤다.
   Future<Folder?> _promptCreateFolderForMove() async {
     final t = AppLocalizations.of(context);
@@ -653,7 +642,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     try {
       final input = await showDialog<String>(
         context: context,
-        builder: (_) => _FolderNameDialog(
+        builder: (_) => FolderNameDialog(
           title: t.homeNewFolderTitle,
           hint: t.homeFolderNameHint,
           confirmLabel: t.commonCreate,
@@ -894,25 +883,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     // 없었다. 사용자가 확인한 집합 = 이 스냅샷.
     final targetIds = _selectedCardIds.toList();
     if (targetIds.isEmpty) return;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.cardDeleteTitle),
-        content: Text(t.cardDeleteMultiConfirm(targetIds.length)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(t.commonDelete,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ),
-        ],
-      ),
+    final confirmed = await confirmDelete(
+      context,
+      title: t.cardDeleteTitle,
+      message: t.cardDeleteMultiConfirm(targetIds.length),
     );
-    if (confirm != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     _isBatchActioning = true;
     try {
@@ -1548,96 +1524,6 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// 폴더 이름 입력 다이얼로그. [_CardListScreenState._promptCreateFolderForMove]가
-/// 사용한다.
-///
-/// StatefulWidget으로 만든 이유(중요): [TextEditingController]는 반드시
-/// `State.dispose()`에서만 정리해야 한다 — Future 콜백(`.whenComplete()`나
-/// `finally`)에 묶으면 Navigator.pop()이 반환하는 popped Future가 퇴장 애니메이션
-/// 완료보다 먼저 끝나버려서, 아직 화면에 남아 리빌드 중인 TextField가 이미 dispose된
-/// controller를 참조하는 경합이 생긴다(자세한 경위는
-/// push_notification_settings.dart의 `_PushRuleDialog` 문서 참고).
-class _FolderNameDialog extends StatefulWidget {
-  const _FolderNameDialog({
-    required this.title,
-    required this.hint,
-    required this.confirmLabel,
-    this.validate,
-  });
-
-  final String title;
-  final String hint;
-  final String confirmLabel;
-  /// 확인 전에 이름을 검사한다. 오류 문구를 돌려주면 다이얼로그 안에 표시하고 닫지 않는다 —
-  /// 모달 배리어 뒤 SnackBar로 알리면 사용자 눈엔 "아무 반응 없음"이었다(감사 Y1-04).
-  final Future<String?> Function(String name)? validate;
-
-  @override
-  State<_FolderNameDialog> createState() => _FolderNameDialogState();
-}
-
-class _FolderNameDialogState extends State<_FolderNameDialog> {
-  final _controller = TextEditingController();
-  String? _errorText;
-  bool _checking = false;
-
-  Future<void> _submit() async {
-    final name = _controller.text.trim();
-    final validate = widget.validate;
-    if (validate == null || name.isEmpty) {
-      Navigator.pop(context, name);
-      return;
-    }
-    setState(() => _checking = true);
-    final error = await validate(name);
-    if (!mounted) return;
-    if (error != null) {
-      setState(() {
-        _errorText = error;
-        _checking = false;
-      });
-      return;
-    }
-    Navigator.pop(context, name);
-  }
-
-  @override
-  void dispose() {
-    // 여기서만 dispose한다 — Element가 실제로 unmount될 때(=다이얼로그 퇴장 애니메이션이
-    // 끝난 뒤)만 프레임워크가 이 메서드를 부르므로, 아직 마운트돼 리빌드 중인 TextField가
-    // dispose된 controller를 참조할 여지가 구조적으로 없다.
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = AppLocalizations.of(context);
-    return AlertDialog(
-      title: Text(widget.title),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: InputDecoration(hintText: widget.hint, errorText: _errorText),
-        onChanged: (_) {
-          if (_errorText != null) setState(() => _errorText = null);
-        },
-        onSubmitted: (_) => _submit(),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text(t.commonCancel),
-        ),
-        TextButton(
-          onPressed: _checking ? null : _submit,
-          child: Text(widget.confirmLabel),
-        ),
-      ],
     );
   }
 }

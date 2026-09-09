@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart' show Share, XFile;
 
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
+import '../widgets/confirm_delete_dialog.dart';
 import '../widgets/overwrite_dialog.dart';
 import 'import_screen.dart';
 
@@ -88,25 +89,12 @@ class _FileListScreenState extends State<FileListScreen> {
 
   Future<void> _deleteFile(Map<String, dynamic> file) async {
     final t = AppLocalizations.of(context);
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.fileDeleteTitle),
-        content: Text(t.fileDeleteSingle(file['file_name'] as String)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(t.commonDelete,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ),
-        ],
-      ),
+    final confirmed = await confirmDelete(
+      context,
+      title: t.fileDeleteTitle,
+      message: t.fileDeleteSingle(file['file_name'] as String),
     );
-    if (confirm != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     try {
       final filePath = file['file_path'] as String?;
@@ -401,25 +389,12 @@ class _FileListScreenState extends State<FileListScreen> {
     if (_isDeleting) return; // 재진입 차단
     final t = AppLocalizations.of(context);
     final selected = _selectedFiles;
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(t.fileDeleteTitle),
-        content: Text(t.fileDeleteMulti(selected.length)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: Text(t.commonCancel),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(t.commonDelete,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ),
-        ],
-      ),
+    final confirmed = await confirmDelete(
+      context,
+      title: t.fileDeleteTitle,
+      message: t.fileDeleteMulti(selected.length),
     );
-    if (confirm != true) return;
+    if (!confirmed) return;
 
     _isDeleting = true;
     try {
