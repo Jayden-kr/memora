@@ -7,10 +7,10 @@
 - 폴더 삭제, 묶음 폴더, 카드 이동, 미디어 정리, 데이터 업그레이드에 자동 검사를 추가해 안정성을 높였습니다
 </ko-KR>
 <en-US>
-Fix for exporting folders with very long names, plus internal hardening
+Long-name export fix and internal hardening
 
-- Exporting a folder with a very long name no longer skips the overwrite confirmation when a file with that name already exists
-- The folder-name and delete-confirmation dialogs are now shared across the app, so they behave the same on every screen
-- Fixed the folder-name dialog getting stuck if the name check itself failed
-- Added automated checks around folder deletion, bundles, card moves, media cleanup and data upgrades for better stability
+- Exporting a folder with a very long name now shows the overwrite prompt when that file already exists
+- Folder-name and delete dialogs are now shared across all screens
+- The folder-name dialog no longer gets stuck if the name check fails
+- More automated checks for folder deletion, bundles, card moves, media cleanup and upgrades
 </en-US>
