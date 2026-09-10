@@ -133,8 +133,15 @@ class PushNotificationServiceTest {
     fun `notif limit constants are pinned`() {
         assertEquals(50, PushNotificationService.DEFAULT_DEVICE_NOTIF_LIMIT)
         assertEquals(5, PushNotificationService.NOTIF_HEADROOM)
-        assertEquals(16, PushNotificationService.MIN_DEVICE_NOTIF_LIMIT)
         assertEquals(20, PushNotificationService.DROP_DETECT_MIN_TOTAL)
+        // R3-L1: MIN_DEVICE_NOTIF_LIMIT은 값이 아니라 유도된 관계다 — 값 자체(24)뿐 아니라
+        // 그 값을 만드는 식(DROP_DETECT_MIN_TOTAL + NOTIF_HEADROOM - 1)도 함께 고정해서,
+        // 둘 중 하나만 따로 바뀌는 조용한 회귀(관계가 깨지는 것)를 잡는다.
+        assertEquals(24, PushNotificationService.MIN_DEVICE_NOTIF_LIMIT)
+        assertEquals(
+            PushNotificationService.DROP_DETECT_MIN_TOTAL + PushNotificationService.NOTIF_HEADROOM - 1,
+            PushNotificationService.MIN_DEVICE_NOTIF_LIMIT
+        )
         // R1-H1: 착지 확인 창 = 0/200/400ms(3회 × 200ms), 학습 확정 전 연속 실패 요구치.
         assertEquals(3, PushNotificationService.LANDING_CHECK_ATTEMPTS)
         assertEquals(200L, PushNotificationService.LANDING_CHECK_INTERVAL_MS)
@@ -147,12 +154,29 @@ class PushNotificationServiceTest {
 
     @Test
     fun `clampLearnedLimit keeps an observed total above the floor unchanged`() {
-        assertEquals(24, PushNotificationService.clampLearnedLimit(24))
+        // R3-L1: MIN_DEVICE_NOTIF_LIMIT이 24로 올라간 뒤에도 "바닥보다 확실히 위"인
+        // 사례로 남아야 하므로 30을 쓴다(24 자체는 이제 바닥과 같은 값이라 이 케이스를
+        // 대표하지 못한다).
+        assertEquals(30, PushNotificationService.clampLearnedLimit(30))
     }
 
     @Test
     fun `clampLearnedLimit raises a pathologically low observed total to the floor`() {
         assertEquals(PushNotificationService.MIN_DEVICE_NOTIF_LIMIT, PushNotificationService.clampLearnedLimit(3))
+    }
+
+    @Test
+    fun `learned occupancy always stays strictly below the total that justified learning it`() {
+        // R3-L1의 핵심 불변식: 학습이 허용되는 모든 total(즉 total >= DROP_DETECT_MIN_TOTAL)에
+        // 대해, 그 학습이 정착시키는 점유량(learnedLimit - NOTIF_HEADROOM)은 이 기기가 이미
+        // 실측으로 증명한 동시 알림 개수(total)보다 반드시 더 낮아야 한다 — 안 그러면
+        // "방금 실측으로 버틸 수 있다고 확인한 값" 이상으로 우리가 점유해 버려 다시 상한에
+        // 부딪힌다. 세 상수(DROP_DETECT_MIN_TOTAL/NOTIF_HEADROOM/MIN_DEVICE_NOTIF_LIMIT) 중
+        // 무엇이 바뀌어도 이 관계 자체가 성립하는지 이 테스트 하나로 계속 검증된다.
+        for (t in PushNotificationService.DROP_DETECT_MIN_TOTAL..100) {
+            val occupancy = PushNotificationService.clampLearnedLimit(t) - PushNotificationService.NOTIF_HEADROOM
+            assertTrue("t=$t occupancy=$occupancy", occupancy < t)
+        }
     }
 
     // ─────────────────────────────────────────────────────────

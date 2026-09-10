@@ -56,13 +56,19 @@ class PushNotificationService : Service() {
          *  흡수하고 있으니, 학습값이 기대보다 1 낮다고 "버그"로 보고 오차를 없애려
          *  건드리지 말 것 — 안전한 방향(과소평가)의 오차다. */
         const val NOTIF_HEADROOM = 5
-        /** 학습이 이 밑으로 내려가지 않게 하는 바닥(병적인 기기에서 카드 알림이 0장이 되는 것 방지). */
-        const val MIN_DEVICE_NOTIF_LIMIT = 16
         /** 실측 상한 저장 키(push_notif_prefs — :push 프로세스 전용). */
         const val KEY_DEVICE_NOTIF_LIMIT = "deviceNotifLimit"
         /** "notify가 무시됐다"고 판정하기 전에 최소한 이만큼은 떠 있어야 한다(비동기 게시 오탐 차단).
          *  보고된 어떤 기기 상한도 24 미만이 아니므로 20은 안전한 문턱. */
         const val DROP_DETECT_MIN_TOTAL = 20
+        /** 학습이 이 밑으로 내려가지 않게 하는 바닥. 값이 아니라 **유도된 관계**다 —
+         *  학습은 total >= DROP_DETECT_MIN_TOTAL일 때만 일어나므로 그 시점에 이 기기가
+         *  최소 그만큼은 동시에 띄울 수 있다는 게 증명된 셈이고, 학습 후 점유량은 정확히
+         *  (limit - NOTIF_HEADROOM)이다(비카드 알림 개수와 무관하게 상쇄된다).
+         *  따라서 floor - NOTIF_HEADROOM < DROP_DETECT_MIN_TOTAL 이어야 안전하고,
+         *  그 조건을 만족하는 가장 큰 값이 이 식이다. 오학습이 한 번 일어나도 카드가
+         *  9장까지 쪼그라들지 않게 막는 게 목적이다(잘못된 학습은 되돌릴 길이 없다). */
+        const val MIN_DEVICE_NOTIF_LIMIT = DROP_DETECT_MIN_TOTAL + NOTIF_HEADROOM - 1
         /** 착지 확인 재시도(게시는 비동기라 즉시 조회하면 아직 없을 수 있다).
          *  ⚠️ R1-H1: 0/200/400ms — 총 대기는 400ms다. 이 창을 넓게 잡으면(예전 4×250=1000ms)
          *  "사용자가 뜨자마자 스와이프"가 "OS가 거부"로 오판된다 — 이 사용자는 알림을 습관적으로
