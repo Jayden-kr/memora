@@ -1,0 +1,12 @@
+<ko-KR>
+설정 정리
+
+- 카드 푸시 알림 설정에서 '알림 내용 숨기기'를 없앴습니다
+- 잠금화면에 알림 내용을 보여줄지는 이제 휴대폰의 잠금화면 알림 설정이 그대로 결정합니다
+</ko-KR>
+<en-US>
+Settings cleanup
+
+- Removed "Hide notification content" from the card push notification settings
+- Whether a notification shows its content on the lock screen is now decided by your phone's own lock screen notification setting
+</en-US>
