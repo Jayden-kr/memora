@@ -299,6 +299,29 @@ FolderSchedule.kt가 PushSchedule을 참조한다 — 두 기능이 결합되기
       }
     });
 
+    test('카드 알림은 잠금화면 가시성을 앱이 강제하지 않아야 한다', () {
+      final pushServiceSource = _pushService();
+      // 1.4.4에서 제거한 "알림 내용 숨기기"의 잔재이자, 그 옵션이 꺼져 있을 때
+      // 앱이 OS 설정을 덮어쓰던 호출들. 카드 알림 빌더는 setVisibility를 아예
+      // 호출하지 않아야 한다(안드로이드 기본값 = VISIBILITY_PRIVATE) — 잠금화면에
+      // 내용을 보일지는 사용자의 "민감한 내용 숨기기" 설정이 결정해야 하기 때문.
+      const deletedVisibilityForcing = [
+        'setVisibility',
+        'VISIBILITY_PUBLIC',
+        'setPublicVersion',
+        'setLockscreenVisibility',
+        'hideContent',
+        'push_hidden_body',
+      ];
+      for (final needle in deletedVisibilityForcing) {
+        expect(pushServiceSource.contains(needle), isFalse, reason: '''
+PushNotificationService.kt에 "$needle"이 되살아났다. 이 호출이 있으면 앱이 OS의
+"잠금화면에 민감한 내용 숨기기" 설정을 무시하고 카드 질문 전문을 항상 노출한다
+(1.4.4에서 제거한 동작). 알림 채널도 VISIBILITY_NO_OVERRIDE로 남겨야 한다.
+''');
+      }
+    });
+
     test('Dart _startPushService 페이로드는 rulesCsv만 보내고 옛 필드(startTotal 등)를 보내지 않아야 한다', () {
       final source = _notificationService();
       expect(source.contains("'rulesCsv'"), isTrue,
@@ -310,6 +333,7 @@ FolderSchedule.kt가 PushSchedule을 참조한다 — 두 기능이 결합되기
         "'folderId'",
         "'scheduleEnabled'",
         "'scheduleCsv'",
+        "'hideContent'",
       ];
       for (final needle in deletedPayloadKeys) {
         expect(source.contains(needle), isFalse,
