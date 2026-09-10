@@ -39,10 +39,46 @@ class PushNotificationService : Service() {
         // 최대 1439를 반환할 수 있으므로, DST/시계 스큐/Doze 오차가 쌓여도 최악의 경우 1시간
         // 안에는 재평가하도록 캡을 씌운다.
         const val MAX_GAP_POLL_MIN = 60
-        // 직전 카드 재출현 방지에 기억해 두는 최근 카드 ID 최대 개수.
+        // 직전 카드 재출현 방지에 기억해 두는 최근 카드 ID 최대 개수. ⚠️ 이 값은 더 이상
+        // "동시에 띄우는 알림 개수"와는 무관하다 — 그 역할은 DEVICE_NOTIF_LIMIT/NOTIF_HEADROOM
+        // 쪽으로 분리했다(둘을 한 상수가 겸하던 게 5287dad의 원죄: "최근 카드 5개 기억"용
+        // 숫자를 "알림 5개까지만 허용"에도 그대로 재사용해 과잉 제한이 걸렸었다).
         const val RECENT_CARD_LIMIT = 5
 
-        // ── 아래 세 함수는 Android API 의존성 0인 순수 로직이라 companion object에
+        /** 한 앱에 허용되는 동시 알림 개수의 기본 추정치(AOSP MAX_PACKAGE_NOTIFICATIONS). */
+        const val DEFAULT_DEVICE_NOTIF_LIMIT = 50
+        /** 상한 바로 밑을 노리되 앱의 다른 알림(상주 2 + 자동그룹 요약 + 임포트/PDF/테스트)이
+         *  동시에 뜰 자리를 남긴다.
+         *  ⚠️ R2 기기검증(Galaxy S23): 시스템이 자동으로 붙이는 자동그룹 요약 알림은
+         *  `NotificationManager.getActiveNotifications()`에 안 잡히는데도 NMS의 패키지당
+         *  상한 계산에는 들어간다 — 그래서 실측 상한이 50인데 학습된 값은 49로 한 칸 낮게
+         *  나왔다(총량을 우리가 보는 것보다 1 적게 인식). 이 헤드룸이 그 한 칸을 이미
+         *  흡수하고 있으니, 학습값이 기대보다 1 낮다고 "버그"로 보고 오차를 없애려
+         *  건드리지 말 것 — 안전한 방향(과소평가)의 오차다. */
+        const val NOTIF_HEADROOM = 5
+        /** 학습이 이 밑으로 내려가지 않게 하는 바닥(병적인 기기에서 카드 알림이 0장이 되는 것 방지). */
+        const val MIN_DEVICE_NOTIF_LIMIT = 16
+        /** 실측 상한 저장 키(push_notif_prefs — :push 프로세스 전용). */
+        const val KEY_DEVICE_NOTIF_LIMIT = "deviceNotifLimit"
+        /** "notify가 무시됐다"고 판정하기 전에 최소한 이만큼은 떠 있어야 한다(비동기 게시 오탐 차단).
+         *  보고된 어떤 기기 상한도 24 미만이 아니므로 20은 안전한 문턱. */
+        const val DROP_DETECT_MIN_TOTAL = 20
+        /** 착지 확인 재시도(게시는 비동기라 즉시 조회하면 아직 없을 수 있다).
+         *  ⚠️ R1-H1: 0/200/400ms — 총 대기는 400ms다. 이 창을 넓게 잡으면(예전 4×250=1000ms)
+         *  "사용자가 뜨자마자 스와이프"가 "OS가 거부"로 오판된다 — 이 사용자는 알림을 습관적으로
+         *  스와이프해서 비우고, 이 패치 이후엔 트레이에 20장 이상 쌓인 상태가 정상이라 그 오판이
+         *  실제로 자주 발생한다. 400ms는 사람이 헤드업을 인지→손을 움직여→스와이프하기엔
+         *  빠듯하게 짧은 반면(지각+반응에 수백ms), 시스템이 받아준 notify()는 보통 수십ms
+         *  안에 트레이에 반영되므로 정상 착지를 놓칠 일은 없다. */
+        const val LANDING_CHECK_ATTEMPTS = 3
+        const val LANDING_CHECK_INTERVAL_MS = 200L
+        /** 착지 실패가 연속 이만큼 쌓여야 상한을 학습한다. 단발 실패는 게시 지연이나
+         *  사용자가 막 스와이프한 것일 수 있어 그걸로 상한을 낮추면 안 된다. */
+        const val LANDING_MISS_STREAK_TO_LEARN = 2
+        /** 연속 착지 실패 횟수(push_notif_prefs — :push 프로세스 전용). */
+        const val KEY_LANDING_MISS_STREAK = "landingMissStreak"
+
+        // ── 아래 함수들은 Android API 의존성 0인 순수 로직이라 companion object에
         // 둬서 인스턴스 생성 없이 JVM 유닛테스트가 가능하다(PushNotificationServiceTest.kt).
 
         /**
@@ -111,6 +147,64 @@ class PushNotificationService : Service() {
          */
         internal fun shouldExcludeRecentCards(totalCount: Int, recentSize: Int): Boolean =
             recentSize > 0 && totalCount > recentSize
+
+        /**
+         * 새 카드 알림 하나를 띄우기 전에, 지워야 할 카드 알림을 **오래된 순으로** 고른다.
+         *
+         * 5287dad의 원죄를 되풀이하지 않기 위한 설계: "몇 개까지 허용할지"([deviceLimit] -
+         * [headroom] - 다른 알림 개수)와 "뭘 지울지"(카드 알림 중 postTime이 가장 오래된
+         * 것부터)를 이 함수 하나에만 모아 두고, 호출부는 그 결과를 그대로 cancel하기만
+         * 한다 — 판단 로직이 두 곳에 흩어지면 한쪽만 고치는 회귀가 재발하기 쉽다.
+         *
+         * @param active      이 앱이 지금 띄워둔 모든 알림 (id, postTime) — 카드가 아닌 것도 포함해서 받는다
+         * @param incomingId  이제 띄울 카드 알림 ID
+         * @param deviceLimit 이 기기가 한 앱에 허용하는 동시 알림 개수
+         * @param headroom    상한 밑에 남겨둘 여유
+         * @return 취소할 알림 ID들. 카드 알림(id >= CARD_NOTIF_BASE)만, incomingId는 절대 포함하지 않는다.
+         */
+        internal fun cardNotifsToEvict(
+            active: List<Pair<Int, Long>>,
+            incomingId: Int,
+            deviceLimit: Int,
+            headroom: Int,
+        ): List<Int> {
+            val cards = active.filter { it.first >= CARD_NOTIF_BASE }
+            val otherCount = active.size - cards.size
+            val budget = maxOf(deviceLimit - headroom - otherCount, 1)
+            val isReplacement = cards.any { it.first == incomingId }   // 같은 ID면 교체라 총량이 안 는다
+            val excess = cards.size + (if (isReplacement) 0 else 1) - budget
+            if (excess <= 0) return emptyList()
+            return cards.asSequence()
+                .filter { it.first != incomingId }
+                .sortedWith(compareBy({ it.second }, { it.first }))     // postTime 오름차순, 동률은 id로 결정적
+                .take(excess)
+                .map { it.first }
+                .toList()
+        }
+
+        /**
+         * 실측된 총량을 이 기기의 상한으로 삼되 바닥을 지킨다. 이 함수가 존재하는 이유는
+         * "실측=진리"를 무조건 믿지 않기 위해서다 — [confirmLandedOrRecalibrate]가 부르는
+         * 시점의 [observedTotal]이 우연히 아주 작아도(예: 사용자가 알림을 대량으로 막
+         * 스와이프한 직후) 그걸로 상한을 영구히 낮춰버리면 카드 알림이 다시는 몇 장 이상
+         * 못 쌓이는 예전 버그가 다른 값으로 재발한다.
+         */
+        internal fun clampLearnedLimit(observedTotal: Int): Int =
+            maxOf(observedTotal, MIN_DEVICE_NOTIF_LIMIT)
+
+        /**
+         * 착지 실패 한 번을 관측했을 때, 이번이 "이 기기의 상한"이라고 결론지어도 되는가.
+         *
+         * 두 조건이 **둘 다** 있어야 한다 — 어느 하나만으로는 오판이 나온다:
+         * - [total] < [DROP_DETECT_MIN_TOTAL]이면 OS 상한과 무관한 상황(게시 지연 등)이라
+         *   증거가 안 된다(스트릭이 아무리 쌓여도 아님).
+         * - 문턱을 넘겼어도 [missStreakAfterThisMiss]가 [LANDING_MISS_STREAK_TO_LEARN]에
+         *   도달하기 전이면 아직 "단발성(지연/스와이프)"일 가능성을 배제 못 한다. 진짜 OS
+         *   상한은 매 발화마다 결정적으로 실패하므로 다음 tick에서 바로 스트릭을 채운다 —
+         *   단발 지연이나 순간 스와이프는 그렇게 반복되지 않는다.
+         */
+        internal fun shouldRecalibrate(missStreakAfterThisMiss: Int, total: Int): Boolean =
+            total >= DROP_DETECT_MIN_TOTAL && missStreakAfterThisMiss >= LANDING_MISS_STREAK_TO_LEARN
     }
 
     private var lang = "ko"
@@ -761,19 +855,6 @@ class PushNotificationService : Service() {
         return Triple(-1, -1, "")
     }
 
-    /** 최근 카드 알림 [keepIds]만 남기고 나머지 카드 알림(ID ≥ CARD_NOTIF_BASE)을 지운다. */
-    private fun pruneCardNotifications(nm: NotificationManager?, keepIds: Set<Int>) {
-        if (nm == null) return
-        try {
-            for (sbn in nm.activeNotifications) {
-                val id = sbn.id
-                if (id >= CARD_NOTIF_BASE && id !in keepIds) nm.cancel(id)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "카드 알림 정리 실패", e)
-        }
-    }
-
     private fun showCardNotification(targetFolderId: Int?) {
         val dbFile = findDbFile() ?: return
         var db: SQLiteDatabase? = null
@@ -880,6 +961,23 @@ class PushNotificationService : Service() {
                 Log.d(TAG, "STOP 이후 발화 취소(notify 직전)")
                 return
             }
+
+            // notify() 전에 먼저 지운다 — 순서를 반대로 하면(예전 pruneCardNotifications처럼
+            // notify 다음에 정리) 이미 OS 상한에 걸려 있는 경우 지금 막 하려는 이 notify() 자체가
+            // 조용히 버려지는 그 알림이라, 사후 정리는 너무 늦다. 카드가 아닌 다른 알림(상주 2 +
+            // 자동그룹 요약 + 임포트/PDF/테스트)도 상한을 나눠 쓰므로 스냅샷에 함께 담아 개수만
+            // 반영하고 대상에서는 제외한다.
+            val activeSnapshot: List<Pair<Int, Long>> = try {
+                nm?.activeNotifications?.map { it.id to it.postTime } ?: emptyList()
+            } catch (e: Exception) {
+                Log.w(TAG, "activeNotifications 조회 실패, 정리 스킵", e)
+                emptyList()
+            }
+            val deviceLimit = pushPrefs.getInt(KEY_DEVICE_NOTIF_LIMIT, DEFAULT_DEVICE_NOTIF_LIMIT)
+            if (nm != null) {
+                cardNotifsToEvict(activeSnapshot, notifId, deviceLimit, NOTIF_HEADROOM).forEach { nm.cancel(it) }
+            }
+
             nm?.notify(notifId, builder.build())
             // 카드 본문은 로그에 남기지 않는다(릴리스 빌드에서도 Log가 제거되지 않음).
             Log.d(TAG, "알림 표시 완료: cardId=$cardId, payload=$payload")
@@ -894,15 +992,103 @@ class PushNotificationService : Service() {
             // 아님) commit()의 동기 I/O가 ANR을 유발하지 않는다.
             pushPrefs.edit().putString("recentCardIds", encodeRecentIds(updatedRecent)).commit()
 
-            // 카드 알림은 카드마다 ID가 달라 아무도 지우지 않으면 무한 누적된다. Android는
-            // 패키지당 동시 알림 상한(AOSP 25)을 넘기면 notify()를 예외 없이 무시하므로 알림함을
-            // 안 비우는 사용자는 며칠 만에 푸시가 조용히 전멸했다. 최근 N장(재출현 방지 목록과
-            // 같은 5장)만 남기고 그 밖의 카드 알림은 걷어낸다 — 예전 버전이 쌓아둔 것도 함께.
-            pruneCardNotifications(nm, updatedRecent.map { CARD_NOTIF_BASE + it }.toSet())
+            // 착지 확인 + 자가보정. recentCardIds 커밋이 이미 끝난 뒤라, 여기서 뭐가 터지든
+            // (예외든 재보정 자체의 실패든) 위에서 확정한 재출현 방지 상태는 절대 잃지 않는다.
+            if (nm != null) {
+                try {
+                    confirmLandedOrRecalibrate(nm, notifId, builder, pushPrefs)
+                } catch (e: Exception) {
+                    Log.w(TAG, "착지 확인/재보정 실패", e)
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "알림 표시 실패", e)
         } finally {
             db?.close()
+        }
+    }
+
+    /**
+     * 방금 notify()한 [notifId]가 실제로 트레이에 떴는지 확인하고, 안 떴다면 그게
+     * "이 기기의 실제 상한에 걸렸다"는 신호인지 판정해 [KEY_DEVICE_NOTIF_LIMIT]을 갱신한다.
+     *
+     * ⚠️ 이 함수 안의 `Thread.sleep`은 여기서만 안전하다 — 이 함수는 [showCardNotification]의
+     * 연장이고, showCardNotification은 항상 [fire]가 띄운 백그라운드 [Thread] 위에서만 실행된다
+     * (메인 스레드에서 부르면 최대 `LANDING_CHECK_ATTEMPTS * LANDING_CHECK_INTERVAL_MS`만큼
+     * ANR 위험을 그대로 진다 — 이 사실을 모르고 호출부를 옮기면 안 된다).
+     */
+    private fun confirmLandedOrRecalibrate(
+        nm: NotificationManager,
+        notifId: Int,
+        builder: NotificationCompat.Builder,
+        pushPrefs: SharedPreferences,
+    ) {
+        // 먼저 확인, 그 다음 sleep — 정상 착지(대부분의 경우)는 한 번 조회로 끝나
+        // 지연 비용이 거의 0이다.
+        repeat(LANDING_CHECK_ATTEMPTS) { attempt ->
+            val landed = nm.activeNotifications.any { it.id == notifId }
+            if (landed) {
+                // R1-H1: 착지 확인됨 — 이전에 쌓인 연속 실패 스트릭은 이 발화와는 무관해졌으니
+                // 리셋한다. 이미 0이면 쓰기를 건너뛴다 — 정상 착지가 압도적으로 흔한 경로라
+                // 매 발화마다 불필요한 commit() I/O를 만들지 않기 위해서다.
+                if (pushPrefs.getInt(KEY_LANDING_MISS_STREAK, 0) != 0) {
+                    pushPrefs.edit().putInt(KEY_LANDING_MISS_STREAK, 0).commit()
+                }
+                return
+            }
+            if (attempt < LANDING_CHECK_ATTEMPTS - 1) Thread.sleep(LANDING_CHECK_INTERVAL_MS)
+        }
+
+        // 여기까지 왔으면 재시도를 다 썼는데도 안 보인다.
+        val active = nm.activeNotifications
+        val total = active.size
+        if (total < DROP_DETECT_MIN_TOTAL) {
+            // 보고된 어떤 기기 상한도 24 미만이 아니므로, 총량이 이 문턱보다 낮은데도 안
+            // 보이는 건 OS 상한이 아니라 게시 지연(아직 시스템에 반영 안 됨) 또는 사용자가
+            // 뜨는 순간 바로 스와이프한 것이다. 이런 경우에 학습하면 상한을 근거 없이
+            // 영구히 낮춰버려 예전 버그(5개 고정)를 다른 숫자로 재현하게 된다 — 아무것도
+            // 바꾸지 않고 그냥 넘어간다. 스트릭도 건드리지 않는다 — 이 분기는 상한에 대해
+            // 아무 증거도 아니므로, 카운트하면 무관한 실패가 진짜 스트릭에 섞여 든다.
+            Log.d(TAG, "알림 착지 확인 실패했지만 total=$total < $DROP_DETECT_MIN_TOTAL, 학습 스킵")
+            return
+        }
+
+        // R1-H1: total이 문턱을 넘겼어도 이번 한 번만으로 학습하지 않는다 — 사용자가 헤드업이
+        // 뜨자마자(400ms 안에) 스와이프해도 이 분기까지 도달한다. 진짜 OS 상한은 다음 발화에서도
+        // 똑같이 실패하므로, 연속 실패가 [LANDING_MISS_STREAK_TO_LEARN]에 도달할 때까지 기다린다
+        // (단발 지연/스와이프는 그렇게 반복되지 않는다).
+        val streak = pushPrefs.getInt(KEY_LANDING_MISS_STREAK, 0) + 1
+        pushPrefs.edit().putInt(KEY_LANDING_MISS_STREAK, streak).commit()
+
+        if (!shouldRecalibrate(streak, total)) {
+            Log.d(TAG, "알림 착지 실패(total=$total), 연속 $streak/$LANDING_MISS_STREAK_TO_LEARN — 학습 보류")
+            return
+        }
+
+        // 스트릭이 문턱에 도달 — 이게 이 기기의 실제 OS 상한이다. 학습하고, 그 새 한도로 다시
+        // 정리한 뒤 딱 한 번만 재시도한다(루프도, 2차 착지 확인도 없음 — 재시도 자체가 또
+        // 상한에 걸릴 수 있는 자리라 무한히 물고 늘어지지 않는다). 스트릭은 리셋한다 — 이번
+        // 학습으로 원인이 해소됐다고 보고 다음 실패부터 다시 센다.
+        val learnedLimit = clampLearnedLimit(total)
+        pushPrefs.edit()
+            .putInt(KEY_DEVICE_NOTIF_LIMIT, learnedLimit)
+            .putInt(KEY_LANDING_MISS_STREAK, 0)
+            .commit()
+        Log.w(TAG, "알림 착지 실패 연속 ${streak}회, 기기 상한 재보정: total=$total → deviceNotifLimit=$learnedLimit")
+
+        val snapshot: List<Pair<Int, Long>> = active.map { it.id to it.postTime }
+        // R2-M1: 학습값 기록 + 정리는 STOP 여부와 무관하게 한다 — 이 기기의 실제 상한을 알아낸
+        // 사실과, 밀린 카드 알림을 정리하는 것은 지금 push가 켜져 있는지와 상관없이 항상 맞는
+        // 일이다. re-notify()만 별도로 막는다 — showCardNotification이 STOP tombstone을
+        // 두 번(발화 진입 시·notify 직전) 확인하는 것과 같은 이유로, 여기서 최대 400ms를 더
+        // 기다린 뒤라 그 사이에 사용자가 OFF를 눌렀을 수 있다. 이 재시도 notify()에도 같은
+        // 확인을 붙이지 않으면 "방금 껐는데 한 장 더"가 이 경로로 다시 뚫린다 — 학습/정리와
+        // 재시도-notify를 한 조건으로 묶지 말 것(의도적 분리).
+        cardNotifsToEvict(snapshot, notifId, learnedLimit, NOTIF_HEADROOM).forEach { nm.cancel(it) }
+        if (pushPrefs.getBoolean("running", false)) {
+            nm.notify(notifId, builder.build())
+        } else {
+            Log.d(TAG, "STOP 이후 재보정 재시도 notify 취소")
         }
     }
 

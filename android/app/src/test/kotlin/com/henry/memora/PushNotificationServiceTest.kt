@@ -7,8 +7,8 @@ import org.junit.Test
 
 /**
  * PushNotificationService.Companion의 순수 로직(recentCardIds 파싱/인코딩 +
- * 직전 카드 재출현 방지 가드 판정) 유닛테스트. 두 함수 다 Android API 의존성이
- * 없어 Service 인스턴스 없이 JVM에서 바로 검증 가능하다.
+ * 직전 카드 재출현 방지 가드 판정 + 알림 상한 자가보정 판정) 유닛테스트. 전부
+ * Android API 의존성이 없어 Service 인스턴스 없이 JVM에서 바로 검증 가능하다.
  */
 class PushNotificationServiceTest {
 
@@ -123,5 +123,244 @@ class PushNotificationServiceTest {
     @Test
     fun `guard boundary — well above recentSize is allowed`() {
         assertTrue(PushNotificationService.shouldExcludeRecentCards(totalCount = 7, recentSize = 5))
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // 상수 값 자체가 조용히 바뀌는 것을 잡는 핀 테스트
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `notif limit constants are pinned`() {
+        assertEquals(50, PushNotificationService.DEFAULT_DEVICE_NOTIF_LIMIT)
+        assertEquals(5, PushNotificationService.NOTIF_HEADROOM)
+        assertEquals(16, PushNotificationService.MIN_DEVICE_NOTIF_LIMIT)
+        assertEquals(20, PushNotificationService.DROP_DETECT_MIN_TOTAL)
+        // R1-H1: 착지 확인 창 = 0/200/400ms(3회 × 200ms), 학습 확정 전 연속 실패 요구치.
+        assertEquals(3, PushNotificationService.LANDING_CHECK_ATTEMPTS)
+        assertEquals(200L, PushNotificationService.LANDING_CHECK_INTERVAL_MS)
+        assertEquals(2, PushNotificationService.LANDING_MISS_STREAK_TO_LEARN)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // clampLearnedLimit — 바닥 보장
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `clampLearnedLimit keeps an observed total above the floor unchanged`() {
+        assertEquals(24, PushNotificationService.clampLearnedLimit(24))
+    }
+
+    @Test
+    fun `clampLearnedLimit raises a pathologically low observed total to the floor`() {
+        assertEquals(PushNotificationService.MIN_DEVICE_NOTIF_LIMIT, PushNotificationService.clampLearnedLimit(3))
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // cardNotifsToEvict — 헬퍼
+    // ─────────────────────────────────────────────────────────
+
+    private val base = PushNotificationService.CARD_NOTIF_BASE
+
+    /** id=[base]+n, postTime=[n]인 카드 알림 하나. */
+    private fun card(n: Int): Pair<Int, Long> = (base + n) to n.toLong()
+
+    // ─────────────────────────────────────────────────────────
+    // cardNotifsToEvict — 예산 안/밖
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `under budget evicts nothing`() {
+        // deviceLimit=50, headroom=5, otherCount=0 → budget=45. 카드 3장뿐이라 여유가 크다.
+        val active = listOf(card(1), card(2), card(3))
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = base + 999, deviceLimit = 50, headroom = 5
+        )
+        assertEquals(emptyList<Int>(), result)
+    }
+
+    @Test
+    fun `exactly at budget with a brand-new incoming id evicts exactly one, the oldest`() {
+        // deviceLimit=24, headroom=5, otherCount=0 → budget=19. 카드가 정확히 19장 있고
+        // 새 카드가 하나 더 들어오면 딱 1장만(가장 오래된 것) 내보내야 19장을 유지한다.
+        val active = (1..19).map { card(it) }
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = base + 999, deviceLimit = 24, headroom = 5
+        )
+        assertEquals(listOf(base + 1), result)  // postTime=1이 가장 오래됨
+    }
+
+    @Test
+    fun `at budget but incoming id is already in the tray evicts nothing`() {
+        // incomingId가 이미 트레이에 있으면(교체) 총량이 늘지 않으므로 excess=0.
+        val active = (1..19).map { card(it) }
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = base + 10, deviceLimit = 24, headroom = 5
+        )
+        assertEquals(emptyList<Int>(), result)
+    }
+
+    @Test
+    fun `legacy pile-up of 60 card notifications trims down to exactly budget in one call`() {
+        // deviceLimit=50, headroom=5, otherCount=0 → budget=45. 60장 쌓여 있으면
+        // 신규 카드 1장을 포함해 45장이 되도록 16장을 내보내야 한다.
+        val active = (1..60).map { card(it) }
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = base + 999, deviceLimit = 50, headroom = 5
+        )
+        assertEquals(16, result.size)
+        val survivingCards = active.map { it.first }.filterNot { it in result }
+        assertEquals(45, survivingCards.size + 1) // +1 = 새로 뜰 카드
+        // 내보낸 건 항상 가장 오래된 것부터: postTime 1..16(=id base+1..base+16).
+        assertEquals((1..16).map { base + it }, result)
+    }
+
+    @Test
+    fun `incoming id is never evicted even when it would otherwise be the oldest`() {
+        // incomingId 자신이 트레이에 이미 있고(교체) postTime이 가장 오래돼도 후보에서
+        // 제외돼야 한다 — 지금 막 다시 띄우는 대상을 스스로 지우면 안 된다.
+        val incoming = base + 1
+        val active = listOf((incoming to 0L)) + (2..20).map { card(it) } // 20장, incoming 포함
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = incoming, deviceLimit = 24, headroom = 5
+        )
+        // deviceLimit=24, headroom=5, otherCount=0 → budget=19. isReplacement=true라
+        // excess = 20 + 0 - 19 = 1. incoming(postTime=0)을 빼고 그 다음으로 오래된
+        // postTime=2(id base+2)가 나가야 한다.
+        assertFalse(incoming in result)
+        assertEquals(listOf(base + 2), result)
+    }
+
+    @Test
+    fun `non-card ids are never evicted but still consume budget`() {
+        // 카드가 아닌 알림(상주 서비스 3, 복습알림 요약류 2001/2002/9001, 기타 99999)도
+        // 트레이 자리를 차지하지만, 이 함수가 지울 대상은 카드뿐이다.
+        // postTime을 카드보다도 더 오래된 값(0)으로 줘서, 만약 id>=CARD_NOTIF_BASE
+        // 필터가 빠지면 "가장 오래된 것부터" 정렬에 의해 이 비카드 id들이 제일 먼저
+        // 뽑혀 나온다 — 필터 누락을 실제로 잡아내는 배치.
+        val nonCardIds = listOf(0, 1, 3, 2001, 2002, 9001, 99999)
+        val nonCardActive = nonCardIds.map { it to 0L }
+        val cardActive = (1..60).map { card(it) }
+        val active = nonCardActive + cardActive
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = base + 999, deviceLimit = 50, headroom = 5
+        )
+        // otherCount=7이 예산을 깎아먹는다: budget = 50-5-7 = 38.
+        // excess = 60 + 1 - 38 = 23.
+        assertEquals(23, result.size)
+        for (id in nonCardIds) assertFalse(id in result)
+        for (id in result) assertTrue(id >= base)
+        // 진짜로 카드 중 가장 오래된 23장(postTime 1..23)이 나가야 한다 — 비카드
+        // id들의 postTime=0이 더 오래됐어도 후보 풀에 없으므로 무관해야 한다.
+        assertEquals((1..23).map { base + it }, result)
+    }
+
+    @Test
+    fun `postTime ties break deterministically by ascending id`() {
+        // 세 카드가 전부 같은 postTime — 정렬이 postTime만으로는 결정 불가하므로
+        // id 오름차순이 2차 키가 돼야 한다(안 그러면 flaky 순서).
+        val active = listOf(
+            (base + 9) to 100L,
+            (base + 5) to 100L,
+            (base + 3) to 100L,
+        )
+        // deviceLimit=7, headroom=5, otherCount=0 → budget=2. excess = 3+1-2 = 2.
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = base + 999, deviceLimit = 7, headroom = 5
+        )
+        assertEquals(listOf(base + 3, base + 5), result) // 낮은 id부터 나감
+    }
+
+    @Test
+    fun `degenerate budget floors at 1, does not crash, does not evict the incoming id`() {
+        // otherCount=20 + headroom=10 이 deviceLimit=5를 완전히 잡아먹어
+        // (5-10-20 = -25) 예산이 음수가 되는 병적인 입력. maxOf(...,1)로 바닥을 지켜야
+        // 하고, incomingId는 애초에 후보가 아니므로 결과에 나오면 안 된다.
+        val nonCardActive = (1..20).map { it to 500L }
+        val cardActive = (1..3).map { card(it) }
+        val active = nonCardActive + cardActive
+        val incoming = base + 999
+        val result = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = incoming, deviceLimit = 5, headroom = 10
+        )
+        // budget=1, excess = 3+1-1 = 3 → 카드 3장 전부 내보내야 한다.
+        assertEquals(setOf(base + 1, base + 2, base + 3), result.toSet())
+        assertFalse(incoming in result)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // 자가보정(clampLearnedLimit) 이후에도 예산이 상한 안에 머무는지 — 회귀 핀
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `after learning a 24-notification cap, the resulting occupancy stays within that cap`() {
+        val observedTotal = 24
+        val learnedLimit = PushNotificationService.clampLearnedLimit(observedTotal)
+        val otherCount = 2 // 상주 알림 등, 카드가 아닌 알림
+        val cardsSize = 30 // 예산을 넘는 파일업
+
+        val nonCardActive = (1..otherCount).map { it to 500L }
+        val cardActive = (1..cardsSize).map { card(it) }
+        val active = nonCardActive + cardActive
+        val incoming = base + 999
+
+        val evicted = PushNotificationService.cardNotifsToEvict(
+            active, incomingId = incoming, deviceLimit = learnedLimit, headroom = PushNotificationService.NOTIF_HEADROOM
+        )
+        val survivingCards = cardsSize - evicted.size
+        val totalAfter = survivingCards + 1 /* 새로 뜰 카드 */ + otherCount
+
+        // headroom을 상수로 계산 — 하드코딩된 숫자가 아니라 NOTIF_HEADROOM 자체가
+        // 바뀌어도 이 불변식(occupancy가 학습된 상한보다 headroom만큼 밑에 머문다)이
+        // 그대로 성립해야 한다.
+        assertEquals(learnedLimit - PushNotificationService.NOTIF_HEADROOM, totalAfter)
+        assertTrue(totalAfter <= learnedLimit)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // shouldRecalibrate — R1-H1: "OS 상한"이라고 결론지어도 되는가
+    // ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `shouldRecalibrate is false below DROP_DETECT_MIN_TOTAL at every streak value`() {
+        val belowThreshold = PushNotificationService.DROP_DETECT_MIN_TOTAL - 1
+        for (streak in listOf(1, 2, 3, 100)) {
+            assertFalse(
+                "streak=$streak, total=$belowThreshold",
+                PushNotificationService.shouldRecalibrate(missStreakAfterThisMiss = streak, total = belowThreshold)
+            )
+        }
+    }
+
+    @Test
+    fun `shouldRecalibrate is false at or above the total threshold when streak is only 1`() {
+        assertFalse(
+            PushNotificationService.shouldRecalibrate(
+                missStreakAfterThisMiss = 1, total = PushNotificationService.DROP_DETECT_MIN_TOTAL
+            )
+        )
+    }
+
+    @Test
+    fun `shouldRecalibrate is true once total and streak both reach their thresholds`() {
+        assertTrue(
+            PushNotificationService.shouldRecalibrate(
+                missStreakAfterThisMiss = PushNotificationService.LANDING_MISS_STREAK_TO_LEARN,
+                total = PushNotificationService.DROP_DETECT_MIN_TOTAL
+            )
+        )
+    }
+
+    @Test
+    fun `shouldRecalibrate stays true for streaks beyond the threshold — no off-by-one`() {
+        // 정확히 문턱에서만 true가 되는 버그(>보다 좁은 ==)를 잡는다.
+        assertTrue(
+            PushNotificationService.shouldRecalibrate(
+                missStreakAfterThisMiss = PushNotificationService.LANDING_MISS_STREAK_TO_LEARN + 1,
+                total = PushNotificationService.DROP_DETECT_MIN_TOTAL
+            )
+        )
+        assertTrue(
+            PushNotificationService.shouldRecalibrate(missStreakAfterThisMiss = 100, total = 999)
+        )
     }
 }
