@@ -1,0 +1,14 @@
+<ko-KR>
+푸시 알림이 다시 계속 쌓입니다
+
+- 복습 알림이 5개까지만 남고 그 이상은 사라지던 문제를 고쳤습니다. 이제 기기가 허용하는 만큼 계속 쌓입니다
+- 알림함이 가득 차면 가장 오래된 알림 하나만 밀려나고, 새 알림이 조용히 사라지지 않습니다
+- 기기마다 다른 알림 개수 한도를 앱이 스스로 파악해 맞춥니다
+</ko-KR>
+<en-US>
+Review notifications pile up again
+
+- Review notifications no longer stop at five, they keep accumulating as far as the device allows
+- When the tray is full only the oldest one is pushed out, so new notifications never vanish silently
+- The app now works out each device's own notification limit by itself
+</en-US>
