@@ -219,13 +219,6 @@ class PushNotificationService : Service() {
     // ACTION_SET_LANG이 이 값이 false인 채로 들어오면 죽어있던 :push를 막 콜드스타트로
     // 깨운 것 — LockScreenService의 SET_LANG 자가치유가 screenReceiver==null로 같은
     // 상황을 판정하는 것과 동일한 역할.
-    /**
-     * 잠금화면에서 카드 내용을 가릴지 여부(설정 화면의 "알림 내용 숨기기"). Flutter가
-     * startService 인텐트로 넘기고 `push_notif_prefs`에 보존한다 — 부팅 복원이나
-     * 프로세스 재생성처럼 extras 없는 콜드스타트에서도 설정이 유지돼야 하기 때문.
-     */
-    private var hideContent = false
-
     private var foregroundStarted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -514,19 +507,10 @@ class PushNotificationService : Service() {
         val savedTimingKey = prefs.getString("timingKey", "") ?: ""
         val wasRunning = prefs.getBoolean("running", false)
 
-        // rulesCsv와 같은 "전달 안 함=보존" 규율. 이 키를 안 싣는 시작 경로(부팅 복원 등)가
-        // 사용자의 숨김 설정을 조용히 false로 되돌리면 안 된다.
-        hideContent = if (intent != null && intent.hasExtra("hideContent")) {
-            intent.getBooleanExtra("hideContent", false)
-        } else {
-            prefs.getBoolean("hideContent", false)
-        }
-
         val editor = prefs.edit()
             .putString("scheduleCsv", canonicalCsv)
             .putString("timingKey", timingKey)
             .putString("lang", lang)
-            .putBoolean("hideContent", hideContent)
         if (hasFreshRulesFromIntent) {
             // Flutter가 실제로 비어있지 않은 규칙을 보냈다 — 이제부터는 §5.3 콜드스타트
             // 폴백이 더 이상 필요 없으므로(scheduleCsv가 항상 최신 상태) 레거시 키를 지운다.
@@ -746,7 +730,6 @@ class PushNotificationService : Service() {
             val fallback = legacyFallbackRules(prefs)
             if (fallback.isNotEmpty()) rules = fallback
         }
-        hideContent = prefs.getBoolean("hideContent", false)
     }
 
     /**
@@ -941,27 +924,6 @@ class PushNotificationService : Service() {
                 .setContentIntent(pi)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
-
-            // "알림 내용 숨기기": 잠금화면에서는 카드 질문 대신 일반 문구만 보여준다.
-            // VISIBILITY_PRIVATE만 주면 시스템 기본 문구("알림 내용이 숨겨져 있습니다")가
-            // 뜨므로, 앱 언어로 된 공개 버전을 직접 만들어 붙인다. 잠금 해제 후에는 원래
-            // 알림(질문 전문)이 그대로 보인다.
-            if (hideContent) {
-                val res = AppLang.wrap(this, lang)
-                val publicVersion = NotificationCompat.Builder(this, REVIEW_CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_notification)
-                    .setContentText(res.getString(R.string.push_hidden_body))
-                    .setAutoCancel(true)
-                    .setContentIntent(pi)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setCategory(NotificationCompat.CATEGORY_REMINDER)
-                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                    .build()
-                builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-                    .setPublicVersion(publicVersion)
-            } else {
-                builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            }
 
             if (!pushPrefs.getBoolean("running", false)) {
                 Log.d(TAG, "STOP 이후 발화 취소(notify 직전)")

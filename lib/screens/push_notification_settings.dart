@@ -8,7 +8,6 @@ import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
 import '../utils/folder_label.dart';
-import '../services/lock_screen_service.dart';
 import '../services/notification_service.dart';
 import '../services/push_schedule.dart';
 
@@ -29,12 +28,6 @@ class _PushNotificationSettingsScreenState
   bool _exactAlarmPermitted = true;
   // 같은 이유로 기본값 true. 스위치가 켜져 있는데 이 값이 false일 때만 경고한다.
   bool _notificationPermitted = true;
-  // 잠금화면에서 카드 질문을 가릴지 여부.
-  bool _hideContent = false;
-  // 기본값 true — 실제 체크 전 깜빡임 방지, 다른 권한 플래그와 같은 이유.
-  // false일 때만 경고: PIN/패턴/비밀번호가 없으면 Android가 VISIBILITY_PRIVATE을
-  // 무시해 _hideContent를 켜도 조용히 아무 효과가 없다(리뷰 발견).
-  bool _deviceSecure = true;
 
   // 알림 시간대 규칙 목록 (v1.3.9: 전역 기본값/마스터 활성시간창 없음 — 이 목록이
   // 유일한 스케줄 표현이다).
@@ -78,13 +71,6 @@ class _PushNotificationSettingsScreenState
   Future<void> _checkPermissions() async {
     await _checkExactAlarmPermission();
     await _checkNotificationPermission();
-    await _checkDeviceSecure();
-  }
-
-  Future<void> _checkDeviceSecure() async {
-    final secure = await LockScreenService.isDeviceSecure();
-    if (!mounted) return;
-    setState(() => _deviceSecure = secure);
   }
 
   Future<void> _checkExactAlarmPermission() async {
@@ -120,10 +106,6 @@ class _PushNotificationSettingsScreenState
     // 규칙을 조용히 지워버리기 때문. 문제가 있으면 화면에 빨갛게 보여줘서
     // (_buildPushRuleTile) 사용자가 직접 고치게 한다.
     _rules = PushSchedule.decode(settings[PushSchedule.settingRulesKey]);
-    _hideContent =
-        (settings[NotificationService.settingPushHideContent] ?? '')
-                .toLowerCase() ==
-            'true';
 
     setState(() {
       _folders = folders;
@@ -571,37 +553,9 @@ class _PushNotificationSettingsScreenState
                         }
                       : null,
                 ),
-
-                const Divider(),
-                SwitchListTile(
-                  title: Text(t.pushHideContent),
-                  subtitle: Text(t.pushHideContentDesc),
-                  value: _hideContent,
-                  onChanged: _enabled ? _onHideContentChanged : null,
-                ),
-                if (_hideContent && !_deviceSecure)
-                  _buildDeviceSecurityPrompt(t),
               ],
             ),
     );
-  }
-
-  Future<void> _onHideContentChanged(bool v) async {
-    final previous = _hideContent;
-    final messenger = ScaffoldMessenger.of(context);
-    final failMessage = AppLocalizations.of(context).pushToggleFail;
-    setState(() => _hideContent = v);
-    try {
-      await DatabaseHelper.instance.upsertSetting(
-          NotificationService.settingPushHideContent, v.toString());
-      // 실행 중인 :push에 새 값을 즉시 전달한다 — 재시작 없이 다음 알림부터 반영.
-      await NotificationService.rescheduleAll();
-    } catch (e) {
-      debugPrint('[PUSH_SETTINGS] hideContent 저장 실패: $e');
-      if (!mounted) return;
-      setState(() => _hideContent = previous);
-      messenger.showSnackBar(SnackBar(content: Text(failMessage)));
-    }
   }
 
   /// 스위치는 켜져 있는데 시스템에서 앱 알림이 꺼져 있을 때의 안내 카드.
@@ -629,19 +583,6 @@ class _PushNotificationSettingsScreenState
           // 설정 화면이 별도 앱 화면이 아니라 다이얼로그로 뜨는 일부 기기 대비
           // 즉시 1회 재확인 (주 경로는 didChangeAppLifecycleState resumed 콜백).
           await _checkExactAlarmPermission();
-        },
-      );
-
-  /// 잠금화면 알림 내용 숨기기가 켜져 있는데 기기 잠금(PIN/패턴/비밀번호)이 없어
-  /// Android가 그 설정을 무시하는 경우의 안내 카드(리뷰 발견 — 예전엔 아무 말 없이
-  /// 조용히 무동작이었다).
-  Widget _buildDeviceSecurityPrompt(AppLocalizations t) => _buildWarningCard(
-        title: t.pushDeviceSecureTitle,
-        body: t.pushDeviceSecureBody,
-        buttonLabel: t.pushDeviceSecureButton,
-        onPressed: () async {
-          await LockScreenService.openSecuritySettings();
-          await _checkDeviceSecure();
         },
       );
 

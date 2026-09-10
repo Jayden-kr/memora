@@ -318,8 +318,6 @@ class NotificationService {
 
     await _startPushService(
       rulesCsv: PushSchedule.encode(rules),
-      hideContent:
-          (settings[settingPushHideContent] ?? '').toLowerCase() == 'true',
     );
   }
 
@@ -360,13 +358,8 @@ class NotificationService {
     }
   }
 
-  /// 잠금화면에서 카드 질문을 가릴지 여부를 담는 앱 DB 설정 키. 값은 'true'/'false'
-  /// 문자열이며, 없으면 false(내용 표시)로 본다.
-  static const settingPushHideContent = 'push_hide_content';
-
   static Future<void> _startPushService({
     required String rulesCsv,
-    required bool hideContent,
   }) async {
     // 시작을 시도했다는 사실 자체를 먼저 남긴다 — invokeMethod가 실패해도 서비스가
     // 떴을 가능성이 있으므로, 중지 요청을 생략해선 안 된다.
@@ -375,7 +368,6 @@ class NotificationService {
       await _pushNotifChannel.invokeMethod('startService', {
         'rulesCsv': rulesCsv,
         'lang': LocaleService.currentLanguageCode(),
-        'hideContent': hideContent,
       });
       debugPrint('[NOTIF] 서비스 시작: rules=$rulesCsv');
     } catch (e) {
