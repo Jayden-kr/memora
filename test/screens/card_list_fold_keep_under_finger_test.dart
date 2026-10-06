@@ -92,6 +92,8 @@ class _HostState extends State<_Host> {
   double? predicted; // 마지막 탭 직전에 예측한 높이
   Offset? release; // 화면의 _releaseGlobal
   int releases = 0;
+  int overscrolls = 0; // OverscrollNotification count/sum (physics A/B comparison)
+  double overscrollSum = 0;
   int _token = 0;
 
   /// 테스트가 State 밖에서 setState를 부르기 위한 통로.
@@ -167,7 +169,15 @@ class _HostState extends State<_Host> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Folder')),
-        body: Stack(children: [
+        body: NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (n is OverscrollNotification) {
+              overscrolls++;
+              overscrollSum += n.overscroll;
+            }
+            return false;
+          },
+          child: Stack(children: [
           widget.simple
               ? ListView.builder(
                   controller: sc,
@@ -183,7 +193,8 @@ class _HostState extends State<_Host> {
                   itemBuilder: item,
                   physics: const ClampingScrollPhysics(),
                 ),
-        ]),
+          ]),
+        ),
       );
 }
 
@@ -390,8 +401,10 @@ Future<_Tap> _tapAndCheck(WidgetTester tester, _Fx fx, int idx, double finger, S
   final problems = <String>[];
   if (r.exception != null) problems.add('EXC ${r.exception}');
   if (r.firstOver > 0.5) problems.add('FIRST FRAME OUT OF RANGE by ${r.firstOver.toStringAsFixed(1)}');
-  if (r.settledBlank > 0.5) problems.add('BLANK below last card ${r.settledBlank.toStringAsFixed(1)} after settle');
-  if (r.firstBlank > 0.5) problems.add('BLANK below last card ${r.firstBlank.toStringAsFixed(1)} in first frame');
+  // 내용이 뷰포트보다 짧은 목록(정착 뒤 maxScrollExtent == 0)은 마지막 카드 아래가 비는 게 정상이다 — 스크롤이 되는 목록만 검사한다.
+  final canScroll = r.settledMax > 0.5;
+  if (canScroll && r.settledBlank > 0.5) problems.add('BLANK below last card ${r.settledBlank.toStringAsFixed(1)} after settle');
+  if (canScroll && r.firstBlank > 0.5) problems.add('BLANK below last card ${r.firstBlank.toStringAsFixed(1)} in first frame');
   if (r.underBefore != idx) problems.add('precondition: finger not on card before (under=${r.underBefore})');
   if (first == null || after == null) {
     problems.add('card offscreen first=${_fmt(first)} after=${_fmt(after)}');
@@ -800,6 +813,17 @@ void main() {
     expect(r.after!.height, lessThan(r.before.height - 500), reason: '크게 줄어들었다');
   });
 
+  // 내용이 뷰포트보다 짧은 목록: 마지막 카드 아래 빈 공간은 정상이므로 BLANK 검사를 건너뛴다 (가드가 실제로 쓰이는 사례).
+  testWidgets('SHORT 뷰포트보다 짧은 목록(카드 2장): 질문 접기 — 끝 아래 빈 공간 검사를 건너뛰고 나머지 규칙은 그대로', (tester) async {
+    final fx = await _mount(tester,
+        cards: [for (var i = 0; i < 2; i++) i == 1 ? _mk(i, q: _lines('Q$i', 8)) : _mk(i)], simple: true);
+    expect(fx.pos.maxScrollExtent, 0, reason: '전제: 내용이 뷰포트보다 짧아 스크롤 범위가 0');
+    final qr = fx.inCard(1, find.textContaining('Q1 L7'));
+    final r = await _tapAndCheck(tester, fx, 1, qr.center.dy, 'SHORT fold q=8');
+    expect(r.settledMax, 0, reason: '접은 뒤에도 짧은 목록');
+    expect(r.settledBlank, greaterThan(0.5), reason: '마지막 카드 아래가 비는 게 정상 — 가드가 없으면 BLANK로 실패하는 사례');
+  });
+
   // 음성 대조: 평범한 ClampingScrollPhysics(옛 동작)면 같은 시나리오가 범위 밖 첫 프레임 + 미끄러짐으로 실제로 깨진다.
   testWidgets('NC-D 평범한 ClampingScrollPhysics면 NEAREND a=45 끝에서 2번째 top=50: 첫 프레임이 범위 밖(빈 공간)이고 정착과 다르다', (tester) async {
     final r = await _nearEndCase(tester, 45, 2, 50, clampOnResize: false, check: false);
@@ -810,25 +834,86 @@ void main() {
   });
 
   // 끌고 있는 중(isScrolling)에는 기존 동작 그대로 — 물리가 드래그를 방해하지 않는다.
-  testWidgets('ClampOnResizeScrollPhysics: 평소 스크롤(드래그·관성)은 ClampingScrollPhysics와 같다', (tester) async {
+  // 같은 스크립트(양방향 관성 + 양 끝 오버스크롤 드래그)를 ClampOnResizeScrollPhysics와 ClampingScrollPhysics로 각각 돌려
+  // 프레임마다 픽셀과 OverscrollNotification 개수/합이 같은지 본다. (정지 중 크기 변경만 다르다 — 위 NEAREND/NC-D)
+  testWidgets('ClampOnResizeScrollPhysics: 평소 스크롤(드래그·관성·양 끝 오버스크롤)은 ClampingScrollPhysics와 프레임마다 같다', (tester) async {
+    Future<({List<String> trace, int os, double osSum, bool isClampOnResize})> run(bool clampOnResize) async {
+      final fx = await _mount(tester, cards: _cards(25), simple: true, clampOnResize: clampOnResize);
+      final pos = fx.pos;
+      final trace = <String>[];
+      void frame(String label) =>
+          trace.add('$label:${pos.pixels.toStringAsFixed(2)}/${pos.maxScrollExtent.toStringAsFixed(2)}');
+      Future<void> frames(String label, int count) async {
+        for (var i = 0; i < count; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          frame('$label$i');
+        }
+      }
+
+      final list = find.byType(ListView);
+      frame('mount');
+      // 양방향 관성 (느림/빠름)
+      for (final v in [2500.0, 9000.0]) {
+        await tester.fling(list, const Offset(0, -300), v);
+        frame('fd$v');
+        await frames('fd$v-', 150);
+        await tester.fling(list, const Offset(0, 300), v);
+        frame('fu$v');
+        await frames('fu$v-', 150);
+      }
+      // 끝에서 위로 더 끌기 (아래쪽 끝 오버스크롤)
+      pos.jumpTo(pos.maxScrollExtent);
+      await tester.pumpAndSettle();
+      frame('end');
+      final g = await tester.startGesture(tester.getCenter(list));
+      for (var i = 0; i < 20; i++) {
+        await g.moveBy(const Offset(0, -25));
+        await tester.pump(const Duration(milliseconds: 16));
+        frame('oe$i');
+      }
+      await g.up();
+      await frames('oeR', 40);
+      // 처음에서 아래로 더 끌기 (위쪽 끝 오버스크롤)
+      pos.jumpTo(0);
+      await tester.pumpAndSettle();
+      frame('start');
+      final g2 = await tester.startGesture(tester.getCenter(list));
+      for (var i = 0; i < 20; i++) {
+        await g2.moveBy(const Offset(0, 25));
+        await tester.pump(const Duration(milliseconds: 16));
+        frame('ot$i');
+      }
+      await g2.up();
+      await frames('otR', 40);
+      final r = (
+        trace: trace,
+        os: fx.host.overscrolls,
+        osSum: fx.host.overscrollSum,
+        isClampOnResize: pos.physics is ClampOnResizeScrollPhysics,
+      );
+      await tester.pumpWidget(const SizedBox());
+      return r;
+    }
+
+    final a = await run(true);
+    final b = await run(false);
+    expect(a.isClampOnResize, isTrue, reason: '화면이 쓰는 물리로 돌았다');
+    expect(b.isClampOnResize, isFalse, reason: '대조군은 평범한 ClampingScrollPhysics');
+    expect(a.trace, b.trace, reason: '프레임마다 pixels/max가 같다');
+    expect(a.os, b.os, reason: 'OverscrollNotification 개수가 같다');
+    expect(a.osSum, closeTo(b.osSum, 1e-9), reason: 'OverscrollNotification 합이 같다');
+    // 빈손으로 통과하지 않게: 관성이 실제로 움직였고 양 끝 오버스크롤 알림이 실제로 났다
+    expect(a.trace.length, greaterThan(600));
+    expect(a.trace.map((t) => t.split(':').last.split('/').first).toSet().length, greaterThan(100), reason: '픽셀이 실제로 많이 움직였다');
+    expect(a.os, greaterThan(10), reason: '양 끝 오버스크롤 알림이 났다');
+    expect(a.osSum, isNot(0));
+  });
+
+  // 정지 중(isScrolling 아님) 크기 변경은 새 범위로 자른다.
+  test('ClampOnResizeScrollPhysics: 멈춰 있을 때 범위가 줄면 새 범위로 자른다', () {
     const physics = ClampOnResizeScrollPhysics();
-    const plain = ClampingScrollPhysics();
-    final fx = await _mount(tester, cards: _cards(25), simple: true);
-    final pos = fx.pos;
-    expect(pos.physics, isA<ClampOnResizeScrollPhysics>());
-    final y0 = pos.pixels;
-    await tester.fling(find.byType(ListView), const Offset(0, -400), 2000);
-    await tester.pumpAndSettle();
-    expect(pos.pixels, greaterThan(y0 + 100), reason: '관성 스크롤이 된다');
-    expect(pos.pixels, lessThanOrEqualTo(pos.maxScrollExtent));
-    // 같은 입력이면 같은 답 (isScrolling이면 부모 결과를 그대로)
     final m = FixedScrollMetrics(
         minScrollExtent: 0, maxScrollExtent: 1000, pixels: 1200, viewportDimension: 800, axisDirection: AxisDirection.down, devicePixelRatio: 1);
-    for (final scrolling in [true]) {
-      expect(
-          physics.adjustPositionForNewDimensions(oldPosition: m, newPosition: m, isScrolling: scrolling, velocity: 0),
-          plain.adjustPositionForNewDimensions(oldPosition: m, newPosition: m, isScrolling: scrolling, velocity: 0));
-    }
     expect(
         physics.adjustPositionForNewDimensions(oldPosition: m, newPosition: m, isScrolling: false, velocity: 0),
         1000, reason: '멈춰 있으면 새 범위로 자른다');

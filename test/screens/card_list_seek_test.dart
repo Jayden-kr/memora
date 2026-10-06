@@ -25,7 +25,7 @@ Widget listApp(
     itemCount: heights.length,
     itemBuilder: (ctx, i) =>
         SizedBox(height: heights[i], child: Text('card $i')),
-    physics: const ClampingScrollPhysics(),
+    physics: const ClampOnResizeScrollPhysics(),
   );
   if (scrollbar) {
     list = Scrollbar(controller: c, thumbVisibility: true, child: list);
@@ -397,7 +397,7 @@ void main() {
                 itemCount: heights.length,
                 itemBuilder: (ctx, i) =>
                     SizedBox(height: heights[i], child: Text('card $i')),
-                physics: const ClampingScrollPhysics(),
+                physics: const ClampOnResizeScrollPhysics(),
               ),
             );
           }),
