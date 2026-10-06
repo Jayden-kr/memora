@@ -773,6 +773,154 @@ void main() {
       expect(_fieldText(tester), 'AB');
     });
 
+    // ── 한도(2글자)에 찬 칸에 3번째 글자를 치면 그 입력을 거부한다(기본 길이 제한기처럼) ──
+    // 붙여넣기는 예외: 칸이 비어 있으면 앞 2글자로 자른다(거부하면 빈 칸이 남아 더 나쁘다).
+    Future<void> typeRaw(WidgetTester tester, String text, int caret) async {
+      tester.testTextInput.updateEditingValue(TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: caret),
+      ));
+      await tester.pump();
+    }
+
+    TextSelection fieldSelection(WidgetTester tester) =>
+        tester.widget<TextField>(_textField).controller!.selection;
+
+    Future<void> openWithAB(WidgetTester tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      await tester.showKeyboard(_textField);
+      await typeRaw(tester, 'AB', 2);
+      expect(_fieldText(tester), 'AB');
+    }
+
+    testWidgets('"AB" 뒤에 "C"를 치면 거부돼 "AB"·커서 그대로', (tester) async {
+      await openWithAB(tester);
+
+      await typeRaw(tester, 'ABC', 3);
+
+      expect(_fieldText(tester), 'AB');
+      expect(fieldSelection(tester).baseOffset, 2);
+      expect(find.text('2/2'), findsOneWidget);
+    });
+
+    testWidgets('"AB" 앞에 "C"를 치면 거부돼 "AB"(앞 2글자가 "CA"로 바뀌지 않는다)·커서 그대로', (tester) async {
+      await openWithAB(tester);
+      tester.widget<TextField>(_textField).controller!.selection =
+          const TextSelection.collapsed(offset: 0);
+      await tester.pump();
+
+      await typeRaw(tester, 'CAB', 1);
+
+      expect(_fieldText(tester), 'AB');
+      expect(fieldSelection(tester).baseOffset, 0);
+    });
+
+    testWidgets('"AB" 가운데에 "C"를 치면 거부돼 "AB"·커서 그대로', (tester) async {
+      await openWithAB(tester);
+      tester.widget<TextField>(_textField).controller!.selection =
+          const TextSelection.collapsed(offset: 1);
+      await tester.pump();
+
+      await typeRaw(tester, 'ACB', 2);
+
+      expect(_fieldText(tester), 'AB');
+      expect(fieldSelection(tester).baseOffset, 1);
+    });
+
+    testWidgets('거부된 뒤에도 입력칸은 정상: 지우고 다시 칠 수 있고 저장값은 "t:AB"', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+      await tester.showKeyboard(_textField);
+      await typeRaw(tester, 'AB', 2);
+      await typeRaw(tester, 'ABC', 3);
+      expect(_fieldText(tester), 'AB');
+
+      await typeRaw(tester, 'A', 1);
+      expect(_fieldText(tester), 'A');
+      await typeRaw(tester, 'AC', 2);
+      expect(_fieldText(tester), 'AC');
+
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(box.value, (icon: 't:AC', iconColor: null));
+    });
+
+    testWidgets('빈 칸에 "ABC"를 붙여넣으면 거부가 아니라 앞 2글자("AB")로 잘린다', (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      await tester.showKeyboard(_textField);
+
+      await typeRaw(tester, 'ABC', 3);
+
+      expect(_fieldText(tester), 'AB');
+      expect(fieldSelection(tester).baseOffset, 2);
+    });
+
+    testWidgets('"A"가 있는 칸에 "BCD"가 붙은 값은 거부된다(이미 글자가 있으면 거부)', (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      await tester.showKeyboard(_textField);
+      await typeRaw(tester, 'A', 1);
+
+      await typeRaw(tester, 'ABCD', 4);
+
+      expect(_fieldText(tester), 'A');
+    });
+
+    testWidgets('빈 칸에 " EN"을 붙여넣으면 공백이 빠진 "EN"(키보드 경로)', (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      await tester.showKeyboard(_textField);
+
+      await typeRaw(tester, ' EN', 3);
+
+      expect(_fieldText(tester), 'EN');
+      expect(fieldSelection(tester).baseOffset, 2);
+    });
+
+    testWidgets('공백을 넣어도 글자가 2개면 거부하지 않는다("AB"에서 "A B" → "AB")', (tester) async {
+      await openWithAB(tester);
+
+      await typeRaw(tester, 'A B', 2);
+
+      expect(_fieldText(tester), 'AB');
+    });
+
+    // ── 엔진이 범위 밖 오프셋을 보내도 던지지 않는다(공백을 빼는 경로에서 표 인덱스) ──
+    testWidgets('선택 오프셋이 글자 수보다 크고 공백을 빼야 해도 예외 없이 오프셋이 눌린다',
+        (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      final formatter =
+          tester.widget<TextField>(_textField).inputFormatters!.last;
+
+      final out = formatter.formatEditUpdate(
+        TextEditingValue.empty,
+        const TextEditingValue(
+          text: ' EN',
+          selection: TextSelection(baseOffset: 99, extentOffset: 50),
+        ),
+      );
+
+      expect(out.text, 'EN');
+      expect(out.selection.baseOffset, 2);
+      expect(out.selection.extentOffset, 2);
+    });
+
+    testWidgets('잘라야 하는 값에서도 범위 밖 선택이 눌린다("A B C", 오프셋 40)', (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      final formatter =
+          tester.widget<TextField>(_textField).inputFormatters!.last;
+
+      final out = formatter.formatEditUpdate(
+        TextEditingValue.empty,
+        const TextEditingValue(
+          text: 'A B C',
+          selection: TextSelection.collapsed(offset: 40),
+        ),
+      );
+
+      expect(out.text, 'AB');
+      expect(out.selection.baseOffset, 2);
+      expect(out.selection.extentOffset, 2);
+    });
+
     testWidgets('글자 아이콘이 저장된 폴더도 열릴 때 입력칸 글자는 그대로다(포매터가 건드리지 않는다)',
         (tester) async {
       final box = _ResultBox();

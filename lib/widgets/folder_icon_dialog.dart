@@ -106,8 +106,10 @@ class _IconTextFormatter extends TextInputFormatter {
     if (head.length != result.length) result = head;
     if (result == text) return value;
 
-    int moved(int offset) =>
-        offset < 0 ? offset : offsetMap[offset].clamp(0, result.length);
+    // 엔진이 범위 밖 오프셋을 보내도(표 인덱스 RangeError 방지) 먼저 0..text.length로 누른다.
+    int moved(int offset) => offset < 0
+        ? offset
+        : offsetMap[offset.clamp(0, text.length)].clamp(0, result.length);
     final selection = value.selection;
     return TextEditingValue(
       text: result,
@@ -120,10 +122,35 @@ class _IconTextFormatter extends TextInputFormatter {
     );
   }
 
+  static String _withoutSpaces(String text) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < text.length; i++) {
+      final unit = text.codeUnitAt(i);
+      if (!_isSpace(unit)) buffer.writeCharCode(unit);
+    }
+    return buffer.toString();
+  }
+
+  /// 키보드 입력. 조합 중이 아닐 때 공백을 뺀 새 값이 한도를 넘으면:
+  ///  - 옛 값(공백 뺀)이 비어 있으면 붙여넣기로 보고 앞 2글자로 자른다("ABC" 붙여넣기 → "AB").
+  ///  - 옛 값이 한도 이내(1~2글자)면 이번 입력을 거부하고 옛 값(과 커서)을 그대로 둔다
+  ///    — 기본 길이 제한기와 같은 느낌: "AB" 앞/중간/뒤에 "C"를 쳐도 "AB"가 유지된다.
+  ///  - 옛 값이 이미 한도를 넘었다면(조합이 확정 없이 끝나는 경우 등) 앞 2글자로 자른다.
+  /// ⚠️ 조합 중 값은 거부하지 않는다(にほん 변환 전 3글자 등) — [limit]이 그대로 둔다.
   @override
   TextEditingValue formatEditUpdate(
-          TextEditingValue oldValue, TextEditingValue newValue) =>
-      limit(newValue);
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    if (!isComposing(newValue) &&
+        _withoutSpaces(newValue.text).characters.length >
+            Folder.iconTextMaxGraphemes) {
+      final oldStripped = _withoutSpaces(oldValue.text);
+      if (oldStripped.isNotEmpty &&
+          oldStripped.characters.length <= Folder.iconTextMaxGraphemes) {
+        return oldValue;
+      }
+    }
+    return limit(newValue);
+  }
 }
 
 class _FolderIconDialog extends StatefulWidget {
