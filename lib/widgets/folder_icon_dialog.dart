@@ -132,22 +132,27 @@ class _IconTextFormatter extends TextInputFormatter {
   }
 
   /// 키보드 입력. 조합 중이 아닐 때 공백을 뺀 새 값이 한도를 넘으면:
-  ///  - 옛 값(공백 뺀)이 비어 있으면 붙여넣기로 보고 앞 2글자로 자른다("ABC" 붙여넣기 → "AB").
-  ///  - 옛 값이 한도 이내(1~2글자)면 이번 입력을 거부하고 옛 값(과 커서)을 그대로 둔다
-  ///    — 기본 길이 제한기와 같은 느낌: "AB" 앞/중간/뒤에 "C"를 쳐도 "AB"가 유지된다.
-  ///  - 옛 값이 이미 한도를 넘었다면(조합이 확정 없이 끝나는 경우 등) 앞 2글자로 자른다.
-  /// ⚠️ 조합 중 값은 거부하지 않는다(にほん 변환 전 3글자 등) — [limit]이 그대로 둔다.
+  ///  - 거부하는 경우는 딱 하나: 옛 값(공백 뺀)이 이미 한도(2글자)에 차 있고 옛 선택이
+  ///    접혀 있을 때(= 가득 찬 칸에 끼워 넣기만 하는 입력). 이번 입력을 거부하고 옛 값(과
+  ///    커서)을 그대로 둔다 — 기본 길이 제한기와 같은 느낌: "AB" 앞/중간/뒤에 "C"를 쳐도
+  ///    "AB"가 유지된다.
+  ///  - 그 밖에는 [limit]으로 앞 2글자로 자른다(기본 길이 제한기가 여러 글자 편집을 자르는
+  ///    것과 같다): 빈 칸에 "ABC" 붙여넣기 → "AB", "A"에 "BC" 붙여넣기 → "AB",
+  ///    "AB" 전체 선택 후 "XYZ" 붙여넣기 → "XY".
+  /// ⚠️ 조합 중 값은 거부하지 않는다 — 새 값이 조합 중이면(にほん 변환 전 3글자 등)
+  /// [limit]이 그대로 두고, 옛 값이 조합 중이면 옛 값(조합 범위 포함)을 키보드로 되돌려
+  /// 보내지 않도록 거부하지 않고 [limit]으로 넘긴다.
   @override
   TextEditingValue formatEditUpdate(
       TextEditingValue oldValue, TextEditingValue newValue) {
     if (!isComposing(newValue) &&
+        !isComposing(oldValue) &&
+        oldValue.selection.isCollapsed &&
         _withoutSpaces(newValue.text).characters.length >
+            Folder.iconTextMaxGraphemes &&
+        _withoutSpaces(oldValue.text).characters.length ==
             Folder.iconTextMaxGraphemes) {
-      final oldStripped = _withoutSpaces(oldValue.text);
-      if (oldStripped.isNotEmpty &&
-          oldStripped.characters.length <= Folder.iconTextMaxGraphemes) {
-        return oldValue;
-      }
+      return oldValue;
     }
     return limit(newValue);
   }

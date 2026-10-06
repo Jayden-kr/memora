@@ -9,6 +9,7 @@
 // TextField가 둘(아이콘 입력칸 + 색 선택창의 헥스 입력)이 되므로 색 선택창의 입력은
 // `_pickerHexField()`로만 찾는다. 글자는 전부 \u 이스케이프로 적는다.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memora/l10n/app_localizations.dart';
 import 'package:memora/l10n/app_localizations_en.dart';
@@ -774,7 +775,8 @@ void main() {
     });
 
     // ── 한도(2글자)에 찬 칸에 3번째 글자를 치면 그 입력을 거부한다(기본 길이 제한기처럼) ──
-    // 붙여넣기는 예외: 칸이 비어 있으면 앞 2글자로 자른다(거부하면 빈 칸이 남아 더 나쁘다).
+    // 거부는 "이미 2글자 + 접힌 선택(끼워 넣기)"일 때만. 그 밖의 여러 글자 편집(빈 칸·"A"에 붙여넣기,
+    // 전체 선택 후 붙여넣기)은 앞 2글자로 자른다(기본 길이 제한기와 같다).
     Future<void> typeRaw(WidgetTester tester, String text, int caret) async {
       tester.testTextInput.updateEditingValue(TextEditingValue(
         text: text,
@@ -855,14 +857,88 @@ void main() {
       expect(fieldSelection(tester).baseOffset, 2);
     });
 
-    testWidgets('"A"가 있는 칸에 "BCD"가 붙은 값은 거부된다(이미 글자가 있으면 거부)', (tester) async {
+    testWidgets('"A"가 있는 칸에 "BCD"가 붙은 값은 거부가 아니라 앞 2글자("AB")로 잘린다(기본 길이 제한기와 같다)',
+        (tester) async {
       await _open(tester, _ResultBox(), Folder(name: 'A'));
       await tester.showKeyboard(_textField);
       await typeRaw(tester, 'A', 1);
 
       await typeRaw(tester, 'ABCD', 4);
 
-      expect(_fieldText(tester), 'A');
+      expect(_fieldText(tester), 'AB');
+      expect(fieldSelection(tester).baseOffset, 2);
+    });
+
+    testWidgets('"A"가 있는 칸에 "BC"를 붙여넣으면 "AB"', (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      await tester.showKeyboard(_textField);
+      await typeRaw(tester, 'A', 1);
+
+      await typeRaw(tester, 'ABC', 3);
+
+      expect(_fieldText(tester), 'AB');
+    });
+
+    // ── 여러 글자 편집은 거부하지 않고 자른다: 거부는 "가득 찬 칸 + 접힌 선택(끼워 넣기)"뿐 ──
+    TextInputFormatter formatterOf(WidgetTester tester) =>
+        tester.widget<TextField>(_textField).inputFormatters!.last;
+
+    testWidgets('"AB" 전체 선택 후 "XYZ"를 붙여넣으면 "XY"(선택이 접혀 있지 않으면 거부하지 않는다)',
+        (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+
+      final out = formatterOf(tester).formatEditUpdate(
+        const TextEditingValue(
+          text: 'AB',
+          selection: TextSelection(baseOffset: 0, extentOffset: 2),
+        ),
+        const TextEditingValue(
+          text: 'XYZ',
+          selection: TextSelection.collapsed(offset: 3),
+        ),
+      );
+
+      expect(out.text, 'XY');
+      expect(out.selection.baseOffset, 2);
+    });
+
+    testWidgets('접힌 선택으로 "AB"에 "XYZ"를 끼워 넣으면 여전히 거부돼 "AB"', (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+      const oldValue = TextEditingValue(
+        text: 'AB',
+        selection: TextSelection.collapsed(offset: 2),
+      );
+
+      final out = formatterOf(tester).formatEditUpdate(
+        oldValue,
+        const TextEditingValue(
+          text: 'ABXYZ',
+          selection: TextSelection.collapsed(offset: 5),
+        ),
+      );
+
+      expect(out.text, 'AB');
+      expect(out.selection, oldValue.selection);
+    });
+
+    testWidgets('옛 값이 조합 중이면 거부로 조합 범위를 되돌려 보내지 않는다("한글"의 "글" 조합 중 + "1")',
+        (tester) async {
+      await _open(tester, _ResultBox(), Folder(name: 'A'));
+
+      final out = formatterOf(tester).formatEditUpdate(
+        const TextEditingValue(
+          text: '\uD55C\uAE00',
+          selection: TextSelection.collapsed(offset: 2),
+          composing: TextRange(start: 1, end: 2),
+        ),
+        const TextEditingValue(
+          text: '\uD55C\uAE001',
+          selection: TextSelection.collapsed(offset: 3),
+        ),
+      );
+
+      expect(out.text, '\uD55C\uAE00');
+      expect(out.composing, TextRange.empty);
     });
 
     testWidgets('빈 칸에 " EN"을 붙여넣으면 공백이 빠진 "EN"(키보드 경로)', (tester) async {
