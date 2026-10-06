@@ -92,9 +92,9 @@ Folder fixtureFolder({
   );
 }
 
-/// 레거시 스키마(v1/v2/v3)로 DB 파일을 직접 만든다 — `onCreate`/`onUpgrade`를 거치지
+/// 레거시 스키마(v1/v2/v3/v4)로 DB 파일을 직접 만든다 — `onCreate`/`onUpgrade`를 거치지
 /// 않는다. 그 뒤 [DatabaseHelper.instance.database]로 열면 `_upgradeDB`가
-/// v(version)→4로 실제 프로덕션 경로를 그대로 탄다.
+/// v(version)→5로 실제 프로덕션 경로를 그대로 탄다.
 Future<void> openLegacyDb(Directory docs, int version) async {
   final path = p.join(docs.path, AppConstants.dbName);
   final db = await databaseFactoryFfi.openDatabase(path);
@@ -106,14 +106,16 @@ Future<void> openLegacyDb(Directory docs, int version) async {
   }
 }
 
-/// [database_helper.dart]의 `_createDB`(v4 fresh create)를 기준으로, 각 버전에서
+/// [database_helper.dart]의 `_createDB`(v5 fresh create)를 기준으로, 각 버전에서
 /// 아직 없었던 부분을 뺀 DDL. `_upgradeDB`의 각 `if (oldVersion < N)` 분기와
 /// 정확히 짝이 맞아야 한다:
 ///  - v1: is_bundle 없음, exported_files/push_alarms 없음, idx_cards_folder_seq 없음
 ///  - v2: v1 + is_bundle + exported_files + push_alarms(mode/start_time/end_time/interval_min 없음)
 ///  - v3: v2 + push_alarms에 그 네 컬럼 추가
-/// (idx_cards_folder_seq는 오직 `_upgradeDB`의 `oldVersion < 4` 분기에서만 생기므로
-/// v1/v2/v3 전부 이 인덱스가 없는 채로 만든다.)
+///  - v4: v3 + idx_cards_folder_seq 인덱스 (folders에 icon/icon_color 아직 없음)
+/// (idx_cards_folder_seq는 `_upgradeDB`의 `oldVersion < 4` 분기에서 생기므로
+/// v1/v2/v3는 이 인덱스가 없는 채로, v4는 있는 채로 만든다. icon/icon_color는 v5 분기가
+/// 붙이므로 v1~v4 전부 folders에 이 두 열이 없다.)
 Future<void> _createLegacySchema(Database db, int version) async {
   await db.execute('''
     CREATE TABLE ${AppConstants.tableFolders} (
@@ -219,6 +221,12 @@ Future<void> _createLegacySchema(Database db, int version) async {
   await db.execute('''
     CREATE INDEX idx_cards_uuid ON ${AppConstants.tableCards}(uuid)
   ''');
+  // v4에서 `_upgradeDB`의 `oldVersion < 4` 분기가 만든 인덱스 — v4 DB는 이미 갖고 있다.
+  if (version >= 4) {
+    await db.execute('''
+      CREATE INDEX idx_cards_folder_seq ON ${AppConstants.tableCards}(folder_id, sequence)
+    ''');
+  }
 
   await db.execute('''
     CREATE TABLE ${AppConstants.tableCounters} (

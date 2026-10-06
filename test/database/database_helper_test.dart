@@ -12,6 +12,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:memora/database/database_helper.dart';
+import 'package:memora/models/folder.dart';
 import 'package:memora/utils/constants.dart';
 import 'package:memora/utils/name_sort.dart';
 
@@ -21,7 +22,7 @@ import '../helpers/db_test_harness.dart';
 /// - 컬럼 모양(name|type|notnull|dflt_value|pk, cid/정의 순서는 무시 — upgrade는
 ///   컬럼을 뒤에 ALTER로 붙이므로 순서가 다를 수 있다)의 Set
 /// - 인덱스 이름별로 unique 플래그 + PRAGMA index_info 컬럼 목록(순서 유지)
-/// 을 모아 테이블별로 담는다. 업그레이드된 DB와 새로 만든(fresh) v4 DB가 정확히 같은
+/// 을 모아 테이블별로 담는다. 업그레이드된 DB와 새로 만든(fresh) v5 DB가 정확히 같은
 /// 모양인지 맵 전체로 비교하는 데 쓴다 — 실패하면 어느 테이블/컬럼/인덱스가 다른지
 /// diff에 그대로 드러난다.
 Future<Map<String, Object?>> _schemaFingerprint(Database db) async {
@@ -63,7 +64,7 @@ Future<Map<String, Object?>> _schemaFingerprint(Database db) async {
 }
 
 void main() {
-  group('#1 _upgradeDB — v1/v2/v3 → v4', () {
+  group('#1 _upgradeDB — v1/v2/v3/v4 → v5', () {
     late Map<String, Object?> freshFingerprint;
 
     setUpAll(() async {
@@ -77,8 +78,8 @@ void main() {
     setUp(() async => docs = await initDbTestEnv());
     tearDown(() async => tearDownDbTestEnv(docs));
 
-    for (final legacyVersion in [1, 2, 3]) {
-      test('v$legacyVersion → v4: 스키마가 fresh v4와 일치하고 기존 행이 보존된다',
+    for (final legacyVersion in [1, 2, 3, 4]) {
+      test('v$legacyVersion → v5: 스키마가 fresh v5와 일치하고 기존 행이 보존된다',
           () async {
         await openLegacyDb(docs, legacyVersion);
 
@@ -97,7 +98,7 @@ void main() {
         final db = await DatabaseHelper.instance.database;
 
         final versionRow = await db.rawQuery('PRAGMA user_version');
-        expect(Sqflite.firstIntValue(versionRow), 4);
+        expect(Sqflite.firstIntValue(versionRow), 5);
 
         final fp = await _schemaFingerprint(db);
         expect(fp, equals(freshFingerprint));
@@ -105,10 +106,59 @@ void main() {
         final folders =
             await db.query('folders', where: 'name = ?', whereArgs: ['legacy-folder']);
         expect(folders, hasLength(1));
+        // 새로 붙은 아이콘 열은 기존 행에서 NULL(= 기본 아이콘)이다.
+        expect(folders.single.containsKey('icon'), isTrue);
+        expect(folders.single.containsKey('icon_color'), isTrue);
+        expect(folders.single['icon'], isNull);
+        expect(folders.single['icon_color'], isNull);
         final cards =
             await db.query('cards', where: 'uuid = ?', whereArgs: ['legacy-uuid-1']);
         expect(cards, hasLength(1));
         expect(cards.single['question'], 'legacy-q');
+      });
+    }
+
+    // sqflite는 onDowngrade가 없으면 열을 둔 채 user_version만 낮춘다(앱을 v5 → 옛 버전
+    // → 다시 v5로 오가면 생긴다). 이때 무조건 ADD COLUMN 하면 duplicate column으로 DB가
+    // 아예 안 열린다 — 이미 있는 열은 건너뛰어야 한다.
+    for (final leftover in [
+      ['icon'],
+      ['icon_color'],
+      ['icon', 'icon_color'],
+    ]) {
+      test('v4 + 다운그레이드가 남긴 열 $leftover → v5: 열려야 하고 스키마가 fresh와 같다',
+          () async {
+        await openLegacyDb(docs, 4);
+
+        final path = p.join(docs.path, AppConstants.dbName);
+        final raw = await databaseFactoryFfi.openDatabase(path);
+        if (leftover.contains('icon')) {
+          await raw.execute('ALTER TABLE folders ADD COLUMN icon TEXT');
+        }
+        if (leftover.contains('icon_color')) {
+          await raw.execute('ALTER TABLE folders ADD COLUMN icon_color INTEGER');
+        }
+        // 남은 열에 들어 있던 값은 업그레이드 뒤에도 살아 있어야 한다.
+        final folderId = await raw.insert('folders', {
+          'name': 'leftover-folder',
+          'sequence': 0,
+          if (leftover.contains('icon')) 'icon': 'star',
+          if (leftover.contains('icon_color')) 'icon_color': 0xFF112233,
+        });
+        // user_version은 4 그대로 — 다운그레이드 직후의 모습.
+        expect(Sqflite.firstIntValue(await raw.rawQuery('PRAGMA user_version')), 4);
+        await raw.close();
+
+        final db = await DatabaseHelper.instance.database;
+
+        expect(Sqflite.firstIntValue(await db.rawQuery('PRAGMA user_version')), 5);
+        expect(await _schemaFingerprint(db), equals(freshFingerprint));
+
+        final row =
+            (await db.query('folders', where: 'id = ?', whereArgs: [folderId])).single;
+        expect(row['icon'], leftover.contains('icon') ? 'star' : isNull);
+        expect(row['icon_color'],
+            leftover.contains('icon_color') ? 0xFF112233 : isNull);
       });
     }
   });
@@ -1058,6 +1108,140 @@ void main() {
       expect(DatabaseHelper.pathColumns.toSet().length,
           DatabaseHelper.pathColumns.length,
           reason: '_pathColumns에 중복 항목이 있다');
+    });
+  });
+
+  group('#20 폴더 아이콘(v5)', () {
+    late Directory docs;
+    setUp(() async => docs = await initDbTestEnv());
+    tearDown(() async => tearDownDbTestEnv(docs));
+
+    test('(a) 모든 폴더 조회 경로가 icon/iconColor를 돌려준다 (묶음 안 자식 경로 포함)',
+        () async {
+      // 스키마 지문 테스트(#1)는 `_folderSelectWithBundleName`에서 f.icon을 빠뜨려도
+      // 못 잡는다 — 열은 있는데 읽는 쪽 SELECT 목록만 빠지는 경우라서. 묶음 안·폴더 선택
+      // 경로(getChildFolders/getNonBundleFolders)는 이 테스트로만 지킨다.
+      final db = await DatabaseHelper.instance.database;
+      final bundleId = await db.insert(
+          'folders',
+          Folder(
+                  name: 'B',
+                  isBundle: true,
+                  sequence: 0,
+                  icon: 'book',
+                  iconColor: 0xFFAABBCC)
+              .toDb());
+      final childId = await db.insert(
+          'folders',
+          Folder(
+                  name: 'C',
+                  sequence: 1,
+                  parentFolderId: bundleId,
+                  icon: 'star',
+                  iconColor: 0xFF112233)
+              .toDb());
+      final plainId = await db.insert(
+          'folders', Folder(name: 'P', sequence: 2).toDb());
+
+      Folder byId(List<Folder> list, int id) =>
+          list.singleWhere((f) => f.id == id);
+
+      final children = await DatabaseHelper.instance.getChildFolders(bundleId);
+      expect(children.map((f) => f.id), [childId]);
+      expect(children.single.icon, 'star');
+      expect(children.single.iconColor, 0xFF112233);
+
+      final nonBundle = await DatabaseHelper.instance.getNonBundleFolders();
+      expect(nonBundle.map((f) => f.id).toSet(), {childId, plainId});
+      expect(byId(nonBundle, childId).icon, 'star');
+      expect(byId(nonBundle, childId).iconColor, 0xFF112233);
+      expect(byId(nonBundle, plainId).icon, isNull);
+      expect(byId(nonBundle, plainId).iconColor, isNull);
+
+      final all = await DatabaseHelper.instance.getAllFolders();
+      expect(all, hasLength(3));
+      expect(byId(all, bundleId).icon, 'book');
+      expect(byId(all, bundleId).iconColor, 0xFFAABBCC);
+      expect(byId(all, childId).icon, 'star');
+      expect(byId(all, childId).iconColor, 0xFF112233);
+      expect(byId(all, plainId).icon, isNull);
+
+      final byIdResult = await DatabaseHelper.instance.getFolderById(childId);
+      expect(byIdResult!.icon, 'star');
+      expect(byIdResult.iconColor, 0xFF112233);
+      final bundleById = await DatabaseHelper.instance.getFolderById(bundleId);
+      expect(bundleById!.icon, 'book');
+      expect(bundleById.iconColor, 0xFFAABBCC);
+
+      final byName = await DatabaseHelper.instance.getFolderByName('C');
+      expect(byName!.icon, 'star');
+      final nonBundleByName =
+          await DatabaseHelper.instance.getNonBundleFolderByName('C');
+      expect(nonBundleByName!.icon, 'star');
+      expect(nonBundleByName.iconColor, 0xFF112233);
+    });
+
+    test('(b) updateFolderIcon은 icon/icon_color만 바꾸고, (null, null)로 지운다', () async {
+      final db = await DatabaseHelper.instance.database;
+      final bundleId = await db.insert(
+          'folders', Folder(name: 'B', isBundle: true, sequence: 0).toDb());
+      final targetId = await db.insert(
+          'folders',
+          Folder(
+                  name: 'T',
+                  sequence: 3,
+                  cardCount: 7,
+                  parentFolderId: bundleId)
+              .toDb());
+      final otherId = await db.insert(
+          'folders',
+          Folder(name: 'O', sequence: 4, icon: 'heart', iconColor: 0xFFFF0000)
+              .toDb());
+
+      Future<Map<String, Object?>> rowOf(int id) async =>
+          (await db.query('folders', where: 'id = ?', whereArgs: [id])).single;
+
+      final changed = await DatabaseHelper.instance
+          .updateFolderIcon(targetId, icon: 'star', iconColor: 0xFF112233);
+      expect(changed, 1);
+      var row = await rowOf(targetId);
+      expect(row['icon'], 'star');
+      expect(row['icon_color'], 0xFF112233);
+      // 다른 열은 그대로 — 스냅샷 전체를 되쓰지 않는다(renameFolder와 같은 규칙).
+      expect(row['name'], 'T');
+      expect(row['card_count'], 7);
+      expect(row['parent_folder_id'], bundleId);
+      expect(row['sequence'], 3);
+      // 다른 폴더는 건드리지 않는다.
+      final other = await rowOf(otherId);
+      expect(other['icon'], 'heart');
+      expect(other['icon_color'], 0xFFFF0000);
+
+      // 아이콘과 색을 각각 따로 바꿀 수 있다(색만 지우기).
+      await DatabaseHelper.instance
+          .updateFolderIcon(targetId, icon: 'star', iconColor: null);
+      row = await rowOf(targetId);
+      expect(row['icon'], 'star');
+      expect(row['icon_color'], isNull);
+
+      // (null, null) = 기본값으로 되돌리기. 값이 실제로 NULL이 돼야 한다.
+      await DatabaseHelper.instance
+          .updateFolderIcon(targetId, icon: 'star', iconColor: 0xFF112233);
+      await DatabaseHelper.instance
+          .updateFolderIcon(targetId, icon: null, iconColor: null);
+      row = await rowOf(targetId);
+      expect(row['icon'], isNull);
+      expect(row['icon_color'], isNull);
+      expect(row['name'], 'T');
+      expect(row['card_count'], 7);
+      expect(row['parent_folder_id'], bundleId);
+      expect(row['sequence'], 3);
+
+      // 없는 id는 0행.
+      expect(
+          await DatabaseHelper.instance
+              .updateFolderIcon(999999, icon: 'star', iconColor: null),
+          0);
     });
   });
 }

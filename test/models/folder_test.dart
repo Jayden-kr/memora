@@ -166,4 +166,99 @@ void main() {
       expect(bundle.name, folder.name);
     });
   });
+
+  group('icon / iconColor', () {
+    test('JSON round-trip — 값 보존', () {
+      final jsonWithIcon = Map<String, dynamic>.from(sampleJson)
+        ..['icon'] = 'star'
+        ..['iconColor'] = 0xFF2196F3;
+      final folder = Folder.fromJson(jsonWithIcon);
+      expect(folder.icon, 'star');
+      expect(folder.iconColor, 0xFF2196F3);
+      final json = folder.toJson();
+      expect(json['icon'], 'star');
+      expect(json['iconColor'], 0xFF2196F3);
+    });
+
+    test('DB round-trip — 값 보존', () {
+      final dbMap = Map<String, dynamic>.from(sampleDbMap)
+        ..['icon'] = 'heart'
+        ..['icon_color'] = 0xFFFF0000;
+      final folder = Folder.fromDb(dbMap);
+      expect(folder.icon, 'heart');
+      expect(folder.iconColor, 0xFFFF0000);
+      final db = folder.toDb();
+      expect(db['icon'], 'heart');
+      expect(db['icon_color'], 0xFFFF0000);
+    });
+
+    test('전체 round-trip: JSON → DB → JSON', () {
+      final jsonWithIcon = Map<String, dynamic>.from(sampleJson)
+        ..['icon'] = 'school'
+        ..['iconColor'] = 0xFF112233;
+      final json2 = Folder.fromDb(Folder.fromJson(jsonWithIcon).toDb()).toJson();
+      expect(json2['icon'], 'school');
+      expect(json2['iconColor'], 0xFF112233);
+    });
+
+    test('옛 JSON/DB 맵(키 없음) → null, toJson/toDb는 키를 null로 낸다', () {
+      final fromJson = Folder.fromJson(sampleJson);
+      expect(fromJson.icon, isNull);
+      expect(fromJson.iconColor, isNull);
+      final fromDb = Folder.fromDb(sampleDbMap);
+      expect(fromDb.icon, isNull);
+      expect(fromDb.iconColor, isNull);
+
+      final json = fromJson.toJson();
+      expect(json.containsKey('icon'), true);
+      expect(json.containsKey('iconColor'), true);
+      expect(json['icon'], isNull);
+      expect(json['iconColor'], isNull);
+      final db = fromDb.toDb();
+      expect(db.containsKey('icon'), true);
+      expect(db.containsKey('icon_color'), true);
+      expect(db['icon'], isNull);
+      expect(db['icon_color'], isNull);
+    });
+
+    test('타입이 틀린 JSON 값(icon:123, iconColor:"red")은 던지지 않고 null', () {
+      // Folder.fromJson은 import의 try 바깥에서 돈다 — 던지면 가져오기 전체가 죽는다.
+      final bad = Map<String, dynamic>.from(sampleJson)
+        ..['icon'] = 123
+        ..['iconColor'] = 'red';
+      late Folder folder;
+      expect(() => folder = Folder.fromJson(bad), returnsNormally);
+      expect(folder.icon, isNull);
+      expect(folder.iconColor, isNull);
+    });
+
+    test('빈 문자열 icon은 null로 본다', () {
+      final empty = Map<String, dynamic>.from(sampleJson)..['icon'] = '';
+      expect(Folder.fromJson(empty).icon, isNull);
+    });
+
+    test('iconColor는 실수(double)로 와도 정수로 읽는다', () {
+      final dbl = Map<String, dynamic>.from(sampleJson)
+        ..['iconColor'] = 4280391411.0;
+      expect(Folder.fromJson(dbl).iconColor, 4280391411);
+    });
+
+    test('copyWith(icon: null, iconColor: null)은 지우고, 다른 필드 변경은 유지한다', () {
+      final folder = Folder.fromJson(Map<String, dynamic>.from(sampleJson)
+        ..['icon'] = 'star'
+        ..['iconColor'] = 0xFF2196F3);
+
+      final cleared = folder.copyWith(icon: null, iconColor: null);
+      expect(cleared.icon, isNull);
+      expect(cleared.iconColor, isNull);
+
+      final renamed = folder.copyWith(name: '일본어');
+      expect(renamed.icon, 'star');
+      expect(renamed.iconColor, 0xFF2196F3);
+
+      final changed = folder.copyWith(icon: 'heart', iconColor: 0xFFFF0000);
+      expect(changed.icon, 'heart');
+      expect(changed.iconColor, 0xFFFF0000);
+    });
+  });
 }

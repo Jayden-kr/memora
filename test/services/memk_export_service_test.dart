@@ -51,6 +51,23 @@ void main() {
       expect(json['isSelected'], false);
     });
 
+    test('Folder.toJson()이 아이콘 폴더는 icon/iconColor 값을, 기본 폴더는 null 키를 낸다', () {
+      final withIcon = Folder(
+        id: 4,
+        name: '아이콘',
+        icon: 'star',
+        iconColor: 0xFF2196F3,
+      ).toJson();
+      expect(withIcon['icon'], 'star');
+      expect(withIcon['iconColor'], 0xFF2196F3);
+
+      final plain = Folder(id: 5, name: '기본').toJson();
+      expect(plain.containsKey('icon'), true);
+      expect(plain.containsKey('iconColor'), true);
+      expect(plain['icon'], isNull);
+      expect(plain['iconColor'], isNull);
+    });
+
     test('CardModel.toJson()이 folderName 포함', () {
       final card = CardModel(
         uuid: 'test-uuid',

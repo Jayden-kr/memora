@@ -15,6 +15,13 @@ class Folder {
   final bool isSpecialFolder;
   final bool isBundle;
 
+  /// 폴더 아이콘 키(예: 'star'). 코드포인트가 아니라 키를 저장한다 — null이면 기본
+  /// 아이콘. 알 수 없는 키도 그대로 보존한다(앱 버전 간 왕복에서 값을 잃지 않게).
+  final String? icon;
+
+  /// 아이콘 색 ARGB(0xAARRGGBB). null이면 테마 기본색.
+  final int? iconColor;
+
   Folder({
     this.id,
     required this.name,
@@ -28,6 +35,8 @@ class Folder {
     this.parentFolderName,
     this.isSpecialFolder = false,
     this.isBundle = false,
+    this.icon,
+    this.iconColor,
   });
 
   /// .memk JSON → Dart (camelCase 키)
@@ -45,8 +54,18 @@ class Folder {
       parentFolderName: json['parentFolderName'] as String?,
       isSpecialFolder: _parseBool(json['isSpecialFolder']),
       isBundle: _parseBool(json['isBundle']),
+      icon: _parseIconKey(json['icon']),
+      iconColor: _parseIconColor(json['iconColor']),
     );
   }
+
+  /// JSON value → 아이콘 키. 폴더 파싱은 import의 try 바깥에서 도니(Folder.fromJson이
+  /// 던지면 가져오기 전체가 죽는다) 이 두 필드는 타입이 틀려도 던지지 않고 null로 본다.
+  static String? _parseIconKey(dynamic value) =>
+      value is String && value.isNotEmpty ? value : null;
+
+  static int? _parseIconColor(dynamic value) =>
+      value is num ? value.toInt() : null;
 
   /// JSON value → bool (handles bool, int 0/1, String "true"/"1", null)
   static bool _parseBool(dynamic value) {
@@ -71,6 +90,8 @@ class Folder {
       'parentFolderName': parentFolderName,
       'isSpecialFolder': isSpecialFolder,
       'isBundle': isBundle,
+      'icon': icon,
+      'iconColor': iconColor,
       'isDirty': false,
       'isSelected': false,
     };
@@ -91,6 +112,8 @@ class Folder {
       parentFolderName: map['parent_folder_name'] as String?,
       isSpecialFolder: (map['is_special_folder'] as int? ?? 0) == 1,
       isBundle: (map['is_bundle'] as int? ?? 0) == 1,
+      icon: map['icon'] as String?,
+      iconColor: map['icon_color'] as int?,
     );
   }
 
@@ -118,6 +141,8 @@ class Folder {
       // updateFolder를 지운 이유였던 D1-03/D8-09가 다른 경로로 돌아온다.
       'is_special_folder': isSpecialFolder ? 1 : 0,
       'is_bundle': isBundle ? 1 : 0,
+      'icon': icon,
+      'icon_color': iconColor,
     };
     if (id != null) {
       map['id'] = id;
@@ -138,6 +163,8 @@ class Folder {
     Object? parentFolderName = _absent,
     bool? isSpecialFolder,
     bool? isBundle,
+    Object? icon = _absent,
+    Object? iconColor = _absent,
   }) {
     return Folder(
       id: id ?? this.id,
@@ -156,6 +183,9 @@ class Folder {
           : parentFolderName as String?,
       isSpecialFolder: isSpecialFolder ?? this.isSpecialFolder,
       isBundle: isBundle ?? this.isBundle,
+      icon: identical(icon, _absent) ? this.icon : icon as String?,
+      iconColor:
+          identical(iconColor, _absent) ? this.iconColor : iconColor as int?,
     );
   }
 }

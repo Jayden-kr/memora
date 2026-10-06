@@ -89,6 +89,9 @@ void main() {
       expect(folder.cardCount, 13992);
       expect(folder.parent, false);
       expect(folder.isSpecialFolder, false);
+      // 아이콘 기능 이전에 만든(또는 원본 Memorize의) 백업에는 icon/iconColor 키가 없다 → null.
+      expect(folder.icon, isNull);
+      expect(folder.iconColor, isNull);
     });
 
     // ('여러 폴더 파싱' 테스트 삭제 — dart:convert의 jsonDecode만 검증하고 프로덕션 코드를

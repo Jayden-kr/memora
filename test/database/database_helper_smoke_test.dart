@@ -20,11 +20,11 @@ void main() {
     await tearDownDbTestEnv(docs);
   });
 
-  test('DatabaseHelper.instance.database가 v4 스키마로 새로 열린다', () async {
+  test('DatabaseHelper.instance.database가 v5 스키마로 새로 열린다', () async {
     final db = await DatabaseHelper.instance.database;
 
     final versionRow = await db.rawQuery('PRAGMA user_version');
-    expect(Sqflite.firstIntValue(versionRow), 4);
+    expect(Sqflite.firstIntValue(versionRow), 5);
 
     final fkRow = await db.rawQuery('PRAGMA foreign_keys');
     expect(Sqflite.firstIntValue(fkRow), 1);

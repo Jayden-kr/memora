@@ -71,7 +71,9 @@ class DatabaseHelper {
         parent_folder_id  INTEGER,
         parent_folder_name TEXT,
         is_special_folder INTEGER NOT NULL DEFAULT 0,
-        is_bundle         INTEGER NOT NULL DEFAULT 0
+        is_bundle         INTEGER NOT NULL DEFAULT 0,
+        icon              TEXT,
+        icon_color        INTEGER
       )
     ''');
 
@@ -268,6 +270,25 @@ class DatabaseHelper {
       await db.execute(
           'ALTER TABLE ${AppConstants.tablePushAlarms} ADD COLUMN interval_min INTEGER');
     }
+    if (oldVersion < 5) {
+      // 폴더 아이콘(v5). DEFAULT 없음 — _createDB와 같게(스키마 지문 테스트 #1).
+      // ⚠️ 실패를 삼키지 않는다(<4 인덱스 블록과 다름): _folderSelectWithBundleName이
+      // 이 열을 이름으로 읽으므로, 열이 없는 채로 열리면 폴더 목록 전체가 죽는다.
+      // 이미 있는 열은 건너뛴다: sqflite는 onDowngrade가 없으면 열을 둔 채 user_version만
+      // 낮춘다 — 다시 올릴 때 ADD COLUMN이 duplicate column으로 DB를 못 열게 한다.
+      final cols = (await db
+              .rawQuery('PRAGMA table_info(${AppConstants.tableFolders})'))
+          .map((r) => r['name'] as String)
+          .toSet();
+      if (!cols.contains('icon')) {
+        await db.execute(
+            'ALTER TABLE ${AppConstants.tableFolders} ADD COLUMN icon TEXT');
+      }
+      if (!cols.contains('icon_color')) {
+        await db.execute(
+            'ALTER TABLE ${AppConstants.tableFolders} ADD COLUMN icon_color INTEGER');
+      }
+    }
   }
 
   // ─── Folder CRUD ───
@@ -290,10 +311,13 @@ class DatabaseHelper {
   /// `parent_folder_name` 컬럼 자체는 신뢰할 수 없다 — 묶음 편집은 `parent_folder_id`만
   /// UPDATE하므로 이름 컬럼은 묶음 이름이 바뀌어도 낡은 채로 남는다. 그래서 f.*를 쓰지
   /// 않고 컬럼을 하나하나 적은 뒤 묶음 행에서 이름을 다시 읽어 덮어쓴다.
+  /// 새 열은 여기에도 적을 것 — 빠뜨리면 묶음 안·폴더 선택 경로에서만 값이 사라진다
+  /// (테스트 #20).
   static const _folderSelectWithBundleName = '''
     SELECT f.id, f.name, f.card_count, f.folder_count, f.sequence,
            f.original_sequence, f.modified, f.parent, f.parent_folder_id,
-           f.is_special_folder, f.is_bundle, p.name AS parent_folder_name
+           f.is_special_folder, f.is_bundle, f.icon, f.icon_color,
+           p.name AS parent_folder_name
     FROM %t f
     LEFT JOIN %t p ON p.id = f.parent_folder_id AND p.is_bundle = 1
   ''';
@@ -376,6 +400,21 @@ class DatabaseHelper {
     return await db.update(
       AppConstants.tableFolders,
       {'name': newName},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// 아이콘·색만 바꾼다. [renameFolder]와 같은 규칙 — 폴더 스냅샷 전체를 되쓰지 않고
+  /// 두 열만 UPDATE해서, 화면이 들고 있던 옛 card_count/parent_folder_id가 DB를
+  /// 덮어쓰는 일(D1-03/D8-09)을 막는다. null을 그대로 쓴다 — (null, null)이 '기본값으로
+  /// 되돌리기'다.
+  Future<int> updateFolderIcon(int id,
+      {required String? icon, required int? iconColor}) async {
+    final db = await database;
+    return await db.update(
+      AppConstants.tableFolders,
+      {'icon': icon, 'icon_color': iconColor},
       where: 'id = ?',
       whereArgs: [id],
     );
