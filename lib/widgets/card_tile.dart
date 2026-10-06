@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderFlex, RenderParagraph;
 
 import '../l10n/app_localizations.dart';
 import '../models/card.dart';
@@ -75,7 +76,9 @@ class CardTile extends StatelessWidget {
                   ),
                 ),
               // Question row
-              Row(
+              KeyedSubtree(
+                key: const ValueKey(_CardTileSlot.questionRow),
+                child: Row(
                 children: [
                   if (isSelectionMode)
                     Padding(
@@ -90,7 +93,9 @@ class CardTile extends StatelessWidget {
                       ),
                     ),
                   Expanded(
-                    child: GestureDetector(
+                    child: KeyedSubtree(
+                      key: const ValueKey(_CardTileSlot.questionArea),
+                      child: GestureDetector(
                       onTap: onQuestionTap,
                       behavior: HitTestBehavior.opaque,
                       child: Column(
@@ -157,6 +162,7 @@ class CardTile extends StatelessWidget {
                         ],
                       ),
                     ),
+                    ),
                   ),
                   if (!isSelectionMode && onMenuAction != null)
                     PopupMenuButton<String>(
@@ -177,9 +183,13 @@ class CardTile extends StatelessWidget {
                     ),
                 ],
               ),
+              ),
               // Answer area (collapsible)
               if (!isFolded)
-                _buildAnswerArea(context, colorScheme, answerVisible),
+                KeyedSubtree(
+                  key: const ValueKey(_CardTileSlot.answerArea),
+                  child: _buildAnswerArea(context, colorScheme, answerVisible),
+                ),
             ],
           ),
         ),
@@ -242,14 +252,14 @@ class CardTile extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Divider(height: 16),
+          const Divider(height: _kDividerHeight),
           if (answerVisible) ...[
             if (card.answer.isNotEmpty)
               _buildHighlightedText(
                 context,
                 card.answer,
                 searchQuery,
-                const TextStyle(fontSize: 16),
+                _kAnswerStyle,
               ),
             if (card.answerImagePaths.isNotEmpty)
               Padding(
@@ -281,17 +291,169 @@ class CardTile extends StatelessWidget {
           ] else
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: const EdgeInsets.symmetric(vertical: _kHintVerticalPadding),
               child: Text(
                 AppLocalizations.of(context).cardViewTapToReveal,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                      fontStyle: FontStyle.italic,
-                    ),
+                style: _hintStyle(context),
               ),
             ),
         ],
       ),
     );
   }
+}
+
+// ─── 접기/보이기 직전 "바뀐 뒤 높이" 예측 (목록이 누른 카드를 손가락 밑에 남기는 데 쓴다) ───
+// ⚠️ 이 예측은 이 파일의 레이아웃(여백·구분선·안내 문구·접힌 질문 1줄)을 그대로 따라 한다 — 레이아웃을
+// 바꾸면 card_tile_height_prediction_test가 잡는다.
+const double _kDividerHeight = 16;
+const double _kHintVerticalPadding = 8;
+const TextStyle _kAnswerStyle = TextStyle(fontSize: 16);
+
+TextStyle? _hintStyle(BuildContext context) =>
+    Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          fontStyle: FontStyle.italic,
+        );
+
+/// 카드 안쪽 영역 표식 — KeyedSubtree의 키라 렌더 객체도 동작도 바꾸지 않는다.
+enum _CardTileSlot { questionRow, questionArea, answerArea }
+
+/// 높이를 바꿀 수 있는 탭.
+enum CardTileTap { question, answer }
+
+/// [context] 아래(자기 포함) 첫 CardTile이 [tap] 한 번 뒤 가질 높이(dp, 카드 바깥 여백 포함).
+/// 탭 직전(높이를 바꾸는 setState 전)에 부른다. 커지는 것이 확실한 탭(접힌 카드 펴기, 이미지가 있는
+/// 답 보이기), 높이가 안 바뀌는 탭(숨김 모드가 아닐 때 답 탭), 렌더 트리를 못 읽을 때는 null.
+double? predictCardTileHeightAfterTap(BuildContext context, CardTileTap tap) {
+  Element? tileElement;
+  void findTile(Element e) {
+    if (tileElement != null) return;
+    if (e.widget is CardTile) {
+      tileElement = e;
+      return;
+    }
+    e.visitChildElements(findTile);
+  }
+
+  if (context is Element && context.widget is CardTile) {
+    tileElement = context;
+  } else {
+    context.visitChildElements(findTile);
+  }
+  final te = tileElement;
+  if (te == null) return null;
+  final tile = te.widget as CardTile;
+  final tileBox = te.findRenderObject();
+  if (tileBox is! RenderBox || !tileBox.attached || !tileBox.hasSize) return null;
+
+  final slots = <_CardTileSlot, Element>{};
+  void findSlots(Element e) {
+    final key = e.widget.key;
+    if (key is ValueKey<_CardTileSlot>) slots[key.value] = e;
+    e.visitChildElements(findSlots);
+  }
+
+  te.visitChildElements(findSlots);
+  RenderBox? box(_CardTileSlot s) {
+    final r = slots[s]?.findRenderObject();
+    return (r is RenderBox && r.attached && r.hasSize) ? r : null;
+  }
+
+  final height = tileBox.size.height;
+
+  switch (tap) {
+    case CardTileTap.question:
+      if (tile.isFolded) return null; // 펴기는 항상 커진다
+      final row = box(_CardTileSlot.questionRow);
+      final q = box(_CardTileSlot.questionArea);
+      if (row == null || q == null) return null;
+      RenderParagraph? para;
+      void findPara(RenderObject r) {
+        if (para != null) return;
+        if (r is RenderParagraph) {
+          para = r;
+          return;
+        }
+        r.visitChildren(findPara);
+      }
+
+      findPara(q);
+      final p = para;
+      if (p == null) return null;
+      final oneLine = _oneLineHeight(p);
+      // 줄(Row)의 다른 자식(메뉴 버튼·선택 표시)은 접어도 그대로다. 줄 높이 = 자식 중 최대.
+      var others = 0.0;
+      if (row is RenderFlex) {
+        for (RenderBox? c = row.firstChild; c != null; c = row.childAfter(c)) {
+          if (!identical(c, q) && c.hasSize && c.size.height > others) others = c.size.height;
+        }
+      }
+      final foldedRow = oneLine > others ? oneLine : others;
+      final answerH = box(_CardTileSlot.answerArea)?.size.height ?? 0;
+      return height - row.size.height - answerH + foldedRow;
+    case CardTileTap.answer:
+      if (!tile.isHidden || tile.isFolded) return null; // 숨김 모드가 아니면 높이가 안 바뀐다
+      final a = box(_CardTileSlot.answerArea);
+      final areaContext = slots[_CardTileSlot.answerArea];
+      if (a == null || areaContext == null) return null;
+      final width = a.size.width;
+      final double newArea;
+      if (tile.isRevealed) {
+        // 숨기기: 답 → 구분선 + "탭하여 정답 보기"
+        newArea = _kDividerHeight +
+            2 * _kHintVerticalPadding +
+            _textHeight(areaContext, AppLocalizations.of(areaContext).cardViewTapToReveal,
+                _hintStyle(areaContext), width);
+      } else {
+        // 보이기: 이미지 높이는 디코딩 전엔 모른다 — 이미지가 있으면 커지는 탭으로 본다.
+        if (tile.card.answerImagePaths.isNotEmpty) return null;
+        newArea = _kDividerHeight +
+            (tile.card.answer.isEmpty
+                ? 0
+                : _textHeight(areaContext, tile.card.answer, _kAnswerStyle, width));
+      }
+      return height - a.size.height + newArea;
+  }
+}
+
+/// 살아 있는 질문 문단을 그대로 한 줄(말줄임)로 배치했을 때의 높이 — 접힌 질문과 같은 설정.
+double _oneLineHeight(RenderParagraph p) {
+  final tp = TextPainter(
+    text: p.text,
+    textAlign: p.textAlign,
+    textDirection: p.textDirection,
+    locale: p.locale,
+    textScaler: p.textScaler,
+    maxLines: 1,
+    ellipsis: '\u2026',
+    strutStyle: p.strutStyle,
+    textWidthBasis: p.textWidthBasis,
+    textHeightBehavior: p.textHeightBehavior,
+  )..layout(maxWidth: p.constraints.maxWidth);
+  final h = tp.height;
+  tp.dispose();
+  return h;
+}
+
+/// Text 위젯이 [context]에서 [style]로 [text]를 [maxWidth] 폭에 그릴 때의 높이 (Text.build와 같은 규칙).
+double _textHeight(BuildContext context, String text, TextStyle? style, double maxWidth) {
+  final dts = DefaultTextStyle.of(context);
+  var effective = (style == null || style.inherit) ? dts.style.merge(style) : style;
+  if (MediaQuery.boldTextOf(context)) {
+    effective = effective.merge(const TextStyle(fontWeight: FontWeight.bold));
+  }
+  final tp = TextPainter(
+    text: TextSpan(style: effective, text: text),
+    textAlign: dts.textAlign ?? TextAlign.start,
+    textDirection: Directionality.of(context),
+    locale: Localizations.maybeLocaleOf(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: dts.maxLines,
+    textWidthBasis: dts.textWidthBasis,
+    textHeightBehavior: dts.textHeightBehavior ?? DefaultTextHeightBehavior.maybeOf(context),
+  )..layout(maxWidth: maxWidth);
+  final h = tp.height;
+  tp.dispose();
+  return h;
 }
