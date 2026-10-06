@@ -144,6 +144,13 @@ void main() {
     test('키 대소문자는 구분한다("Star"는 모르는 키)', () {
       expect(folderIconData('Star', isBundle: false), Icons.folder);
     });
+
+    test('글자 아이콘("t:…")은 키가 아니므로 기본 아이콘 — 글자는 FolderIconView가 그린다', () {
+      // 키만 아는 빌드·위젯도 글자 아이콘 폴더를 기본 아이콘으로 안전하게 그려야 한다.
+      expect(folderIconData('t:\u{1F1EE}\u{1F1F1}', isBundle: false), Icons.folder);
+      expect(folderIconData('t:\u05D0', isBundle: true), Icons.folder_special);
+      expect(folderIconData('t:en', isBundle: false), Icons.folder);
+    });
   });
 
   group('folderIconColor', () {

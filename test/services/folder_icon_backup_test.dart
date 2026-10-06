@@ -20,11 +20,13 @@ void main() {
   tearDown(() async => tearDownDbTestEnv(docs));
 
   /// 폴더 하나 + 카드 한 장을 만들고 그 폴더만 `<docs>/a.mra`로 내보낸다.
-  Future<({int folderId, String path})> seedAndExport() async {
+  /// 아이콘/색은 기본이 star/파랑, 글자 아이콘('t:…') 왕복을 볼 때는 값을 넘긴다.
+  Future<({int folderId, String path})> seedAndExport(
+      {String icon = 'star', int iconColor = 0xFF2196F3}) async {
     final db = await DatabaseHelper.instance.database;
     final aId = await db.insert(
         'folders',
-        Folder(name: 'A', sequence: 0, icon: 'star', iconColor: 0xFF2196F3)
+        Folder(name: 'A', sequence: 0, icon: icon, iconColor: iconColor)
             .toDb());
     await db.insert(
         'cards',
@@ -167,5 +169,31 @@ void main() {
     expect(folders.single.name, 'A');
     expect(folders.single.icon, 'favorite');
     expect(folders.single.iconColor, 0xFFFF0000);
+  });
+
+  test('(5) 글자 아이콘(국기 이모지 "t:…")도 내보내기 → 새 이름으로 가져오기에서 같은 글자·색으로 살아남는다', () async {
+    // 글자는 \u 이스케이프로 적는다(이스라엘 국기 = 지역 표시 문자 2개).
+    const flag = 't:\u{1F1EE}\u{1F1F1}';
+    final seeded = await seedAndExport(icon: flag, iconColor: 0xFFFF0000);
+
+    final result = await MemkImportService().importSelectedFolders(
+      filePath: seeded.path,
+      selectedFolderNames: ['A'],
+      onProgress: (_) {},
+      conflictPolicy: 'rename',
+    );
+    expect(result.newFolders, 1, reason: '전제: 새 폴더가 실제로 만들어져야 한다');
+    expect(result.mergedFolders, 0);
+
+    final copy = await DatabaseHelper.instance.getFolderByName('A_1');
+    expect(copy, isNotNull);
+    expect(copy!.icon, flag);
+    expect(Folder.iconTextOf(copy.icon), '\u{1F1EE}\u{1F1F1}');
+    expect(copy.iconColor, 0xFFFF0000);
+
+    // 원본은 그대로.
+    final original = await DatabaseHelper.instance.getFolderById(seeded.folderId);
+    expect(original!.icon, flag);
+    expect(original.iconColor, 0xFFFF0000);
   });
 }

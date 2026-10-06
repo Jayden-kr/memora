@@ -1,3 +1,5 @@
+import 'package:characters/characters.dart';
+
 /// copyWith에서 nullable 필드를 명시적으로 null로 설정하기 위한 sentinel
 const _absent = Object();
 
@@ -15,8 +17,12 @@ class Folder {
   final bool isSpecialFolder;
   final bool isBundle;
 
-  /// 폴더 아이콘 키(예: 'star'). 코드포인트가 아니라 키를 저장한다 — null이면 기본
-  /// 아이콘. 알 수 없는 키도 그대로 보존한다(앱 버전 간 왕복에서 값을 잃지 않게).
+  /// 폴더 아이콘. 세 모양 중 하나다.
+  ///  - null: 기본 아이콘
+  ///  - 키(예: 'star'): folder_icons.dart 표의 키. 코드포인트가 아니라 키를 저장한다.
+  ///    알 수 없는 키도 그대로 보존한다(앱 버전 간 왕복에서 값을 잃지 않게).
+  ///  - 't:' + 글자(예: 't:🇮🇱', 't:א', 't:EN'): 사용자가 직접 넣은 이모지·글자 1~2개.
+  ///    글자는 [iconTextOf]로 꺼낸다.
   final String? icon;
 
   /// 아이콘 색 ARGB(0xAARRGGBB). null이면 테마 기본색.
@@ -54,7 +60,7 @@ class Folder {
       parentFolderName: json['parentFolderName'] as String?,
       isSpecialFolder: _parseBool(json['isSpecialFolder']),
       isBundle: _parseBool(json['isBundle']),
-      icon: _parseIconKey(json['icon']),
+      icon: _parseIcon(json['icon']),
       iconColor: _parseIconColor(json['iconColor']),
     );
   }
@@ -66,10 +72,79 @@ class Folder {
   /// ⚠️ 키 길이/문자 집합을 넓힐 때는 folder_test의 icon 경계 테스트를 함께 볼 것.
   static final RegExp _iconKeyPattern = RegExp(r'^[a-z_]{1,32}$');
 
-  /// JSON value → 아이콘 키. 폴더 파싱은 import의 try 바깥에서 도니(Folder.fromJson이
-  /// 던지면 가져오기 전체가 죽는다) 이 두 필드는 타입이 틀려도 던지지 않고 null로 본다.
-  static String? _parseIconKey(dynamic value) =>
-      value is String && _iconKeyPattern.hasMatch(value) ? value : null;
+  /// 글자 아이콘 저장값의 접두사. 영구 약속이다: 이미 이 접두사로 저장된 폴더가 있으니
+  /// 바꾸면 그 폴더의 글자가 사라진다. 키는 ':'를 쓰지 않으므로(folder_icons_test가
+  /// 고정) 키와 글자 모양이 절대 겹치지 않는다 — 글자 'en'을 접두사 없이 저장하면
+  /// 모르는 키 'en'과 구분이 안 되기 때문에 접두사는 필수다.
+  static const String iconTextPrefix = 't:';
+
+  /// 글자 아이콘이 가질 수 있는 최대 글자 수(그래핌 = 사용자가 보는 글자 단위).
+  static const int iconTextMaxGraphemes = 2;
+
+  /// 글자 아이콘 UTF-16 코드 단위 상한. 가족 이모지 2개(22)·스코틀랜드 깃발 2개(28)·
+  /// 피부색 키스(30)가 들어가는 크기이고, 조작된 .mra의 수 MB 문자열이나 결합문자 도배
+  /// (zalgo)는 막는다. 길이를 가장 먼저 본다(아래 두 함수 모두 — 수 MB를 훑지 않게).
+  static const int iconTextMaxCodeUnits = 32;
+
+  /// 입력 → 저장할 글자(앞뒤 공백 제거) 또는 null(쓸 수 없음). 던지지 않는다.
+  static String? normalizeIconText(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty || text.length > iconTextMaxCodeUnits) return null; // 길이 먼저(수 MB 방어)
+    var visible = false;
+    for (final r in text.runes) {
+      if (_isForbiddenIconRune(r)) return null;
+      if (!_isInvisibleIconRune(r)) visible = true;
+    }
+    if (!visible) return null; // 안 보이는 아이콘 금지(folder_icons.dart의 알파 0 보정과 같은 약속)
+    if (text.characters.length > iconTextMaxGraphemes) return null;
+    return text;
+  }
+
+  /// 저장값 → 그릴 글자. 't:' + 정규형 글자일 때만 글자를 주고, 그 밖(null·키·규칙
+  /// 위반)은 null. 한도는 읽을 때 검사한다(가져오기·그리기 모두 이 함수를 지난다).
+  static String? iconTextOf(String? stored) {
+    if (stored == null || !stored.startsWith(iconTextPrefix)) return null;
+    if (stored.length > iconTextPrefix.length + iconTextMaxCodeUnits) return null;
+    final text = stored.substring(iconTextPrefix.length);
+    return normalizeIconText(text) == text ? text : null; // 정규형만(' star' 거부와 같은 규칙)
+  }
+
+  // C0·DEL·C1(개행·탭 포함), 줄/문단 구분자, 짝 없는 서로게이트(.runes가 그대로 줌)
+  static bool _isForbiddenIconRune(int r) =>
+      r <= 0x1F ||
+      (r >= 0x7F && r <= 0x9F) ||
+      r == 0x2028 ||
+      r == 0x2029 ||
+      (r >= 0xD800 && r <= 0xDFFF);
+
+  // 그려지는 게 없는 서식·채움 문자: 이것만 있으면 안 보이는 아이콘(한글 채움 U+3164 포함)
+  static bool _isInvisibleIconRune(int r) =>
+      r == 0x00AD ||
+      r == 0x034F ||
+      r == 0x061C ||
+      r == 0x115F ||
+      r == 0x1160 ||
+      (r >= 0x180B && r <= 0x180F) ||
+      (r >= 0x200B && r <= 0x200F) ||
+      (r >= 0x202A && r <= 0x202E) ||
+      (r >= 0x2060 && r <= 0x206F) ||
+      r == 0x3164 ||
+      (r >= 0xFE00 && r <= 0xFE0F) ||
+      r == 0xFEFF ||
+      r == 0xFFA0 ||
+      (r >= 0x1D173 && r <= 0x1D17A) ||
+      (r >= 0xE0000 && r <= 0xE0FFF);
+
+  /// JSON value → 아이콘(키 또는 't:' 글자). 폴더 파싱은 import의 try 바깥에서 도니
+  /// (Folder.fromJson이 던지면 가져오기 전체가 죽는다) 이 두 필드는 타입이 틀려도
+  /// 던지지 않고 null로 본다.
+  /// ⚠️ 글자 아이콘 한도·문자 집합을 바꿀 때는 folder_test의 '글자 아이콘' 경계 테스트를
+  /// 함께 볼 것.
+  static String? _parseIcon(dynamic value) {
+    if (value is! String) return null;
+    if (_iconKeyPattern.hasMatch(value)) return value;
+    return iconTextOf(value) == null ? null : value;
+  }
 
   /// JSON value → ARGB 색. 0..0xFFFFFFFF 범위의 **정수값**만 받는다. 그 밖은 전부
   /// null(테마 기본색): NaN/±Infinity(JSON `1e400`은 Infinity로 읽히고, 이 값의 toInt()는

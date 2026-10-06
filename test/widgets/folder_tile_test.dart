@@ -4,7 +4,8 @@
 // 1. 고른 아이콘+색이 그대로 그려진다. 2. 아이콘이 없으면 예전과 같은 기본(폴더/묶음
 // 폴더 + 테마 primary). 3. 모르는 키는 기본으로 폴백. 4. 기본 색은 테마를 따라가고
 // 고른 색은 테마와 무관. 5. 드래그 핸들(reorderIndex)·선택 체크박스(isSelecting) 동작은
-// 아이콘 변경과 무관하게 그대로.
+// 아이콘 변경과 무관하게 그대로. 6. 글자 아이콘('t:…')은 FolderIconView가 글자로 그린다
+// (글자 글리프는 \u 이스케이프로 적는다).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memora/l10n/app_localizations.dart';
@@ -84,6 +85,33 @@ void main() {
       expect(_leadingIcon(tester, Icons.folder).color, const Color(blue));
     });
 
+    testWidgets('글자 아이콘("t:…")은 그 글자를 고른 색으로 그리고 기본 폴더 아이콘은 안 그린다',
+        (tester) async {
+      await tester.pumpWidget(_app(FolderTile(
+        folder: Folder(name: 'A', icon: 't:\u05D0', iconColor: blue),
+        onTap: () {},
+      )));
+
+      expect(find.text('\u05D0'), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(const ValueKey('folderIconGlyph'))).style?.color,
+          const Color(blue));
+      expect(find.byIcon(Icons.folder), findsNothing);
+      expect(find.byType(Icon), findsNothing);
+    });
+
+    testWidgets('묶음 폴더의 글자 아이콘도 글자로 그려지고 부제목은 그대로', (tester) async {
+      await tester.pumpWidget(_app(FolderTile(
+        folder: Folder(name: 'B', isBundle: true, icon: 't:\u{1F1EE}\u{1F1F1}'),
+        onTap: () {},
+      )));
+
+      expect(find.byKey(const ValueKey('folderIconGlyph')), findsOneWidget);
+      expect(find.text('\u{1F1EE}\u{1F1F1}'), findsOneWidget);
+      expect(find.byIcon(Icons.folder_special), findsNothing);
+      expect(find.byType(Icon), findsNothing);
+      expect(find.text('Bundle folder'), findsOneWidget);
+    });
+
     testWidgets('기본 색은 테마를 따라가고 고른 색은 테마가 바뀌어도 고정', (tester) async {
       final light = ThemeData(
           colorSchemeSeed: const Color(0xFFFF6B6B), brightness: Brightness.light);
@@ -127,6 +155,22 @@ void main() {
       );
     });
 
+    testWidgets('reorderIndex가 있으면 글자 아이콘도 드래그 핸들 안에 있다', (tester) async {
+      await tester.pumpWidget(_app(FolderTile(
+        folder: Folder(name: 'A', icon: 't:EN', iconColor: blue),
+        onTap: () {},
+        reorderIndex: 0,
+      )));
+
+      expect(
+        find.descendant(
+          of: find.byType(ReorderableDragStartListener),
+          matching: find.byKey(const ValueKey('folderIconGlyph')),
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('reorderIndex가 없으면 드래그 핸들이 없다', (tester) async {
       await tester.pumpWidget(_app(FolderTile(
         folder: Folder(name: 'A', icon: 'star', iconColor: blue),
@@ -148,6 +192,17 @@ void main() {
       expect(find.byType(Checkbox), findsOneWidget);
       expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue);
       expect(find.byIcon(Icons.star), findsNothing);
+    });
+
+    testWidgets('isSelecting이면 글자 아이콘도 체크박스에 자리를 내준다', (tester) async {
+      await tester.pumpWidget(_app(FolderTile(
+        folder: Folder(name: 'A', icon: 't:\u05D0', iconColor: blue),
+        onTap: () {},
+        isSelecting: true,
+      )));
+
+      expect(find.byType(Checkbox), findsOneWidget);
+      expect(find.byKey(const ValueKey('folderIconGlyph')), findsNothing);
     });
   });
 }

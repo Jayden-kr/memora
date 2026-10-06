@@ -6,7 +6,8 @@
 // 띄우기 어렵다(홈/묶음 화면은 sqlite와 플랫폼 채널에 물려 있어 testWidgets에서 교착한다).
 // 그래서 정리/리팩터링 중에 메뉴 항목 하나, 버튼 하나, 호출 한 줄이 빠져도 모든 테스트가
 // 초록인 채로 "아이콘을 바꿀 방법이 없는 앱"이 나갈 수 있다. 소스를 텍스트로 읽어 그 이음새만
-// 확인한다(lock_screen_native_contract_test.dart와 같은 방식).
+// 확인한다(lock_screen_native_contract_test.dart와 같은 방식). 같은 방식으로 아이콘 선택
+// 창의 직접 입력칸 컨트롤러가 State.dispose()에서만 정리되는지(whenComplete 금지)도 본다.
 //
 // 주석을 걷어낸 소스만 본다 — 안 그러면 "주석 처리된 코드"를 살아 있는 코드로 착각한다.
 import 'dart:io';
@@ -106,6 +107,17 @@ String _methodBody(String code, String signature) {
 /// 식별자 경계를 보는 호출 탐지: `folderIconData(`는 잡고 `myfolderIconData(`는 안 잡는다.
 bool _calls(String code, String name) =>
     RegExp('(^|[^A-Za-z0-9_\$])$name\\s*\\(').hasMatch(code);
+
+/// `name(...)` 호출의 인자 텍스트(괄호 포함). 호출이 정확히 하나여야 한다 — 둘 이상이면 어느
+/// 쪽을 보는지 모호하다. 식별자 경계는 [_calls]와 같다.
+String _callArgs(String code, String name) {
+  final matches =
+      RegExp('(^|[^A-Za-z0-9_\$])$name\\s*\\(').allMatches(code).toList();
+  expect(matches, hasLength(1),
+      reason: '`$name(` 호출이 정확히 하나여야 한다(지금 ${matches.length}개) — '
+          '둘이 됐거나 없어졌다면 이 테스트도 함께 고칠 것.');
+  return _balanced(code, matches.single.end - 1); // 패턴이 `(`로 끝난다
+}
 
 void main() {
   group('탐지기 자체 점검', () {
@@ -225,21 +237,105 @@ class A {
     });
   });
 
-  group('저장한 아이콘을 실제로 그리는 자리', () {
-    test('묶음 편집 화면(bundle_folder_screen.dart)이 folderIconData(를 쓴다', () {
-      final code = _read('lib/screens/bundle_folder_screen.dart');
-      expect(_calls(code, 'folderIconData'), isTrue, reason: '''
-묶음 편집 화면의 폴더 목록이 folderIconData(...)로 아이콘을 그리지 않는다 — 저장된 아이콘이
-이 화면에서만 기본 폴더 아이콘으로 보인다.
+  // 아이콘 선택 창의 직접 입력칸 컨트롤러는 State가 소유하고 dispose()에서만 정리한다.
+  // `showDialog(...).whenComplete(() => controller.dispose())`는 퇴장 애니메이션이 끝나기
+  // 전에 dispose돼 크래시를 낸다(color_picker_dialog.dart의 ⚠️ 주석과 같은 이유) — 위젯
+  // 테스트의 닫기 시나리오는 타이밍이 맞으면 통과해 버리니 소스에서 구조로 고정한다.
+  group('아이콘 선택 창(folder_icon_dialog.dart) 입력칸 컨트롤러', () {
+    late String code;
+
+    setUpAll(() => code = _read('lib/widgets/folder_icon_dialog.dart'));
+
+    test('whenComplete로 dispose를 걸지 않는다', () {
+      expect(code.contains('whenComplete'), isFalse, reason: '''
+folder_icon_dialog.dart 에 whenComplete 가 있다 — 컨트롤러 dispose 를 Future 완료에 걸면
+퇴장 애니메이션 중 이미 dispose 된 컨트롤러를 TextField 가 참조해 크래시가 난다.
+컨트롤러는 State.dispose() 에서만 정리할 것.
 ''');
     });
 
-    test('폴더 행(folder_tile.dart)이 folderIconData(와 folderIconColor(를 쓴다', () {
+    test('State.dispose()가 _textController.dispose()를 부른다', () {
+      final body = _methodBody(code, 'void dispose()');
+      expect(body.contains('_textController.dispose();'), isTrue, reason: '''
+_FolderIconDialogState.dispose() 가 _textController.dispose() 를 부르지 않는다 —
+다이얼로그를 열고 닫을 때마다 컨트롤러가 샌다.
+''');
+    });
+  });
+
+  // 그리는 규칙(키 아이콘/글자 아이콘/비활성)은 FolderIconView 한 곳에 있다. 폴더 행과 묶음
+  // 편집 화면은 그 위젯을 부르면서 폴더의 icon·iconColor를 그대로 넘기는지만 본다 — 한
+  // 인자가 빠지면(예: enabled를 안 넘기면 이미 다른 묶음에 있는 폴더도 컬러로 보인다) 모든
+  // 테스트가 초록인 채로 어긋난다.
+  group('저장한 아이콘을 실제로 그리는 자리', () {
+    test('탐지기 자체 점검: 호출 인자만 잡고 주석·비슷한 이름은 안 잡는다', () {
+      final code = _stripComments('''
+Widget a() => FolderIconView(icon: folder.icon, nested: foo(1));
+// FolderIconView(icon: fake)
+Widget b() => MyFolderIconView(icon: other);
+''');
+      final args = _callArgs(code, 'FolderIconView');
+      expect(args, startsWith('('));
+      expect(args, endsWith(')'));
+      expect(args.contains('folder.icon'), isTrue);
+      expect(args.contains('nested: foo(1)'), isTrue); // 안쪽 괄호까지 짝을 맞춘다
+      expect(args.contains('fake'), isFalse, reason: '주석 속 호출을 잡았다');
+      expect(args.contains('other'), isFalse, reason: '이름만 비슷한 위젯을 잡았다');
+    });
+
+    void expectPassesFolderFields(String args, String file,
+        {required List<(String, String)> fields}) {
+      for (final (pattern, label) in fields) {
+        expect(RegExp(pattern).hasMatch(args), isTrue, reason: '''
+$file 이 FolderIconView를 부르면서 `$label` 인자를 넘기지 않는다 — 저장된 아이콘이 이 자리에서
+어긋나게 그려진다.
+''');
+      }
+    }
+
+    test('묶음 편집 화면(bundle_folder_screen.dart)이 FolderIconView로 그리고 icon·iconColor·enabled를 넘긴다',
+        () {
+      final code = _read('lib/screens/bundle_folder_screen.dart');
+      expect(_calls(code, 'FolderIconView'), isTrue, reason: '''
+묶음 편집 화면의 폴더 목록이 FolderIconView(...)로 아이콘을 그리지 않는다 — 저장된 아이콘이
+이 화면에서만 기본 폴더 아이콘으로 보인다.
+''');
+      expectPassesFolderFields(
+        _callArgs(code, 'FolderIconView'),
+        'bundle_folder_screen.dart',
+        fields: [
+          (r'\bicon:\s*folder\.icon\b', 'icon: folder.icon'),
+          (r'\biconColor:\s*folder\.iconColor\b', 'iconColor: folder.iconColor'),
+          // 이미 다른 묶음에 있는 폴더는 흐린 회색 — enabled를 빼면 컬러로 보인다.
+          (r'\benabled:\s*available\b', 'enabled: available'),
+        ],
+      );
+    });
+
+    test('폴더 행(folder_tile.dart)이 FolderIconView로 그리고 icon·iconColor·isBundle을 넘긴다', () {
       final code = _read('lib/widgets/folder_tile.dart');
+      expect(_calls(code, 'FolderIconView'), isTrue,
+          reason: '폴더 행이 FolderIconView로 저장된 아이콘을 그리지 않는다');
+      expectPassesFolderFields(
+        _callArgs(code, 'FolderIconView'),
+        'folder_tile.dart',
+        fields: [
+          (r'\bicon:\s*folder\.icon\b', 'icon: folder.icon'),
+          (r'\biconColor:\s*folder\.iconColor\b', 'iconColor: folder.iconColor'),
+          // 묶음 폴더의 기본 아이콘(folder_special)은 이 값으로 정해진다.
+          (r'\bisBundle:\s*folder\.isBundle\b', 'isBundle: folder.isBundle'),
+        ],
+      );
+    });
+
+    test('FolderIconView(folder_icon_view.dart)가 folderIconData(·folderIconColor(·iconTextOf(를 쓴다', () {
+      final code = _read('lib/widgets/folder_icon_view.dart');
       expect(_calls(code, 'folderIconData'), isTrue,
-          reason: '폴더 행이 저장된 아이콘을 그리지 않는다');
+          reason: '키 아이콘을 folderIconData(...)로 고르지 않는다');
       expect(_calls(code, 'folderIconColor'), isTrue,
-          reason: '폴더 행이 저장된 아이콘 색을 쓰지 않는다');
+          reason: '저장된 아이콘 색(folderIconColor)을 쓰지 않는다');
+      expect(_calls(code, 'iconTextOf'), isTrue,
+          reason: '글자 아이콘을 Folder.iconTextOf(...)로 검증해 꺼내지 않는다 — 규칙을 어긴 값이 그려진다');
     });
   });
 }

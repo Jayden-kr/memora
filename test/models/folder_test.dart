@@ -337,6 +337,122 @@ void main() {
       });
     });
 
+    // ── 글자 아이콘: 't:' + 이모지·글자 1~2개(그래핌), 최대 32 UTF-16 코드 단위 ──
+    // 한도는 읽을 때(가져오기·그리기) 검사한다. 글자는 전부 \u 이스케이프로 적는다 —
+    // 소스 인코딩·편집기에 따라 이모지가 조용히 바뀌는 일을 막는다.
+    // ⚠️ 아래 목록은 lib/models/folder.dart의 글자 아이콘 한도·문자 집합과 한 쌍이다.
+    final family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}'; // 11 단위
+    final scotland =
+        '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}'; // 14 단위
+    final acceptedTexts = <String, String>{
+      '국기 이스라엘(지역 표시 문자 2개 = 1글자)': '\u{1F1EE}\u{1F1F1}',
+      '다윗의 별 + VS16': '\u2721\uFE0F',
+      '이모지 책': '\u{1F4D6}',
+      '히브리어 알레프': '\u05D0',
+      '히브리어 2글자': '\u05D0\u05D1',
+      '히라가나 あ': '\u3042',
+      '한자 2글자 日本': '\u65E5\u672C',
+      '라틴 대문자 EN': 'EN',
+      '라틴 소문자 en': 'en',
+      '분해형 é(e + U+0301) = 1글자': 'e\u0301',
+      '키캡 숫자 1(1 + VS16 + U+20E3) = 1글자':'1\uFE0F\u20E3',
+      '가족 이모지(ZWJ) 2개 = 22 단위': '$family$family',
+      '스코틀랜드 깃발 2개 = 28 단위': '$scotland$scotland',
+      '정확히 32 단위(a + 결합문자 30 + b, 2글자)': 'a${'\u0301' * 30}b',
+    };
+    acceptedTexts.forEach((label, glyph) {
+      test('글자 아이콘 허용·그대로 보존: $label', () {
+        final stored = 't:$glyph';
+        expect(parseIcon(stored).icon, stored);
+        expect(Folder.iconTextOf(stored), glyph);
+        expect(Folder.normalizeIconText(glyph), glyph);
+      });
+    });
+
+    test('경계 단위 수 확인: 가족 11·스코틀랜드 14·32단위 케이스', () {
+      // 위 허용 목록이 정말 단위 상한(32)에 걸리는 값인지 못박는다.
+      expect(family.length, 11);
+      expect(scotland.length, 14);
+      expect('a${'\u0301' * 30}b'.length, Folder.iconTextMaxCodeUnits);
+      expect('$family$family'.length, 22);
+      expect('$scotland$scotland'.length, 28);
+    });
+
+    final rejectedTexts = <String, String>{
+      '접두사만 "t:"': 't:',
+      '접두사 + 공백 한 칸': 't: ',
+      '앞 공백 "t: A"(정규형 아님)': 't: A',
+      '뒤 공백 "t:A "(정규형 아님)': 't:A ',
+      '앞 BOM(U+FEFF)': 't:\uFEFFA',
+      '3글자 "ABC"': 't:ABC',
+      '국기 3개': 't:${'\u{1F1EE}\u{1F1F1}' * 3}',
+      '결합문자 도배 41 단위': 't:a${'\u0301' * 40}',
+      '33 단위(a + 결합문자 31 + b)': 't:a${'\u0301' * 31}b',
+      '접두사 + 수 MB 문자열': 't:${'a' * (2 * 1024 * 1024)}',
+      '접두사 없는 수 MB 문자열': 'a' * (2 * 1024 * 1024),
+      '제어문자 BEL 섞임': 't:A\u0007',
+      'NUL만': 't:\u0000',
+      '개행 섞임': 't:A\nB',
+      '폭 없는 공백 U+200B만': 't:\u200B',
+      '한글 채움 U+3164만': 't:\u3164',
+      '변이 선택자 U+FE0F만': 't:\uFE0F',
+      '짝 없는 서로게이트': 't:\uD83C',
+      '접두사 대문자 "T:A"': 'T:A',
+      '다른 접두사 "x:A"': 'x:A',
+    };
+    rejectedTexts.forEach((label, value) {
+      test('글자 아이콘 거부 → null, 던지지 않음: $label', () {
+        late Folder folder;
+        expect(() => folder = parseIcon(value), returnsNormally);
+        expect(folder.icon, isNull);
+        expect(Folder.iconTextOf(value), isNull);
+      });
+    });
+
+    test('키와 글자 모양은 겹치지 않는다: 접두사 없는 "en"은 모르는 키, 글자가 아니다', () {
+      expect(parseIcon('en').icon, 'en');
+      expect(Folder.iconTextOf('en'), isNull);
+      expect(Folder.iconTextOf('star'), isNull);
+      expect(Folder.iconTextOf(null), isNull);
+      expect(Folder.iconTextOf(''), isNull);
+      expect(Folder.iconTextPrefix, 't:');
+    });
+
+    test('normalizeIconText: 앞뒤 공백(전각 포함)은 벗기고, 쓸 수 없으면 null', () {
+      expect(Folder.normalizeIconText(' \u05D0 '), '\u05D0');
+      expect(Folder.normalizeIconText('\u3000EN\u3000'), 'EN');
+      expect(Folder.normalizeIconText(''), isNull);
+      expect(Folder.normalizeIconText('   '), isNull);
+      expect(Folder.normalizeIconText('\n'), isNull);
+      expect(Folder.normalizeIconText('ABC'), isNull);
+      expect(Folder.normalizeIconText('A\nB'), isNull);
+      expect(Folder.normalizeIconText('\u200B'), isNull);
+      expect(Folder.normalizeIconText('a${'\u0301' * 40}'), isNull);
+    });
+
+    test('글자 아이콘 round-trip: JSON → DB → JSON 에서 글자·색 보존', () {
+      final flag = 't:\u{1F1EE}\u{1F1F1}';
+      final json = Map<String, dynamic>.from(sampleJson)
+        ..['icon'] = flag
+        ..['iconColor'] = 0xFFFF0000;
+      final db = Folder.fromJson(json).toDb();
+      expect(db['icon'], flag);
+      final json2 = Folder.fromDb(db).toJson();
+      expect(json2['icon'], flag);
+      expect(json2['iconColor'], 0xFFFF0000);
+      expect(Folder.iconTextOf(json2['icon'] as String?), '\u{1F1EE}\u{1F1F1}');
+    });
+
+    test('copyWith(icon: 글자 아이콘)은 값을 그대로 넣고 다른 필드는 유지한다', () {
+      final folder = Folder.fromJson(Map<String, dynamic>.from(sampleJson)
+        ..['icon'] = 'star'
+        ..['iconColor'] = 0xFF2196F3);
+      final changed = folder.copyWith(icon: 't:\u05D0');
+      expect(changed.icon, 't:\u05D0');
+      expect(changed.iconColor, 0xFF2196F3);
+      expect(changed.name, folder.name);
+    });
+
     test('copyWith(icon: null, iconColor: null)은 지우고, 다른 필드 변경은 유지한다', () {
       final folder = Folder.fromJson(Map<String, dynamic>.from(sampleJson)
         ..['icon'] = 'star'

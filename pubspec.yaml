@@ -33,6 +33,8 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   intl: any
+  # Folder 아이콘 글자 수(그래핌) 검사 — SDK가 버전을 고정
+  characters: any
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 /// ⚠️ 값은 반드시 `Icons.*` 상수로만 적는다. 코드포인트를 숫자로 직접 만든 아이콘
 /// 객체는 릴리스 빌드의 아이콘 폰트 트리 셰이킹이 막혀 빌드가 실패한다
 /// (테스트: folder_icons_test의 소스 스캔).
+/// ⚠️ DB 값은 null / 이 표의 키 / 't:'+글자(Folder.iconTextOf) 셋 중 하나다. 키에 ':'를
+/// 쓰지 말 것 — 키와 글자 두 모양이 안 겹친다는 전제다(folder_icons_test가 고정).
 const Map<String, IconData> folderIcons = {
   'book': Icons.menu_book,
   'language': Icons.translate,
@@ -39,6 +41,8 @@ const Map<String, IconData> folderIcons = {
 /// 폴더가 그릴 아이콘. 키가 없거나(null) 표에 없으면(다른 버전이 만든 키, 빈 문자열
 /// 등) 묶음 여부에 맞는 기본 아이콘으로 떨어진다 — 알 수 없는 키가 화면을 깨뜨리면
 /// 안 된다. DB에 있는 키 자체는 건드리지 않는다.
+/// 글자 아이콘('t:…')도 키가 아니므로 여기선 기본 아이콘이다 — 글자는 FolderIconView가
+/// 그린다. 키만 아는 빌드는 이 폴백 덕에 글자 아이콘 폴더도 기본 아이콘으로 보여 준다.
 IconData folderIconData(String? key, {required bool isBundle}) =>
     folderIcons[key] ?? (isBundle ? Icons.folder_special : Icons.folder);
 
