@@ -36,33 +36,335 @@ int? firstVisibleItemIndex(Iterable<ItemPosition> positions) {
   return best;
 }
 
+/// 닫기 직전 검색 결과 목록에서 [index]번째 칸의 카드 id. 범위 밖이거나 [index]가 null이면 null.
+///
+/// 화면 맨 위에 보이던 결과(인덱스)를 "카드 id"로 바꿔 둔다 — 인덱스는 결과 목록 기준이라
+/// 전체 목록이 올라온 뒤에는 의미가 없고, 카드 id만 전체 목록에서 다시 찾을 수 있다.
+@visibleForTesting
+int? resultIdAt(List<int?> resultIds, int? index) {
+  if (index == null || index < 0 || index >= resultIds.length) return null;
+  return resultIds[index];
+}
+
 /// 검색을 닫을 때 전체 목록에서 맨 위에 둘 카드의 id를 고른다.
 ///
-/// 우선순위: 마지막으로 누른 카드(아직 검색 결과에 있을 때) > 화면 맨 위에 보이던 결과 > 없음(null).
-/// null이면 호출자가 목록 맨 위로 보낸다. [resultIds]는 닫기 직전에 화면에 있던 결과의
-/// id 순서이고, [firstVisibleIndex]는 그 결과 목록 기준 인덱스라 범위를 벗어나면 무시한다.
+/// 우선순위: 마지막으로 누른 카드 > 닫기 직전 화면 맨 위에 보이던 결과 > 없음(null).
+/// 두 후보 모두 **다시 불러온 전체 목록([fullListIds])에 있을 때만** 쓴다 — 결과 목록이 아니라
+/// 전체 목록 기준이다. 누른 카드를 편집해 검색어와 안 맞게 돼서 결과에서는 사라졌어도 전체
+/// 목록에는 그대로 있으니 그 카드에 머물러야 한다. 전체 목록에도 없으면(삭제·이동) 다음 후보로
+/// 넘어간다. 둘 다 없으면 null이고, 호출자가 목록 맨 위로 보낸다.
 @visibleForTesting
 int? pickSearchExitAnchor({
   required int? tappedCardId,
-  required List<int?> resultIds,
-  required int? firstVisibleIndex,
+  required int? firstVisibleCardId,
+  required Iterable<int?> fullListIds,
 }) {
-  if (tappedCardId != null && resultIds.contains(tappedCardId)) {
+  if (tappedCardId != null && fullListIds.contains(tappedCardId)) {
     return tappedCardId;
   }
-  final i = firstVisibleIndex;
-  if (i != null && i >= 0 && i < resultIds.length) return resultIds[i];
+  if (firstVisibleCardId != null && fullListIds.contains(firstVisibleCardId)) {
+    return firstVisibleCardId;
+  }
+  return null;
+}
+
+/// 새 검색 결과 묶음이 올라왔을 때 계속 들고 갈 "누른 카드" id.
+///
+/// 검색어를 한 글자씩 지우면("apple"→"appl"→…→"") 글자마다 새 결과 묶음이 올라온다. 누른 카드가
+/// 새 결과에도 있으면 그 카드를 계속 앵커로 둔다 — 묶음마다 앵커를 비우면 검색을 닫을 때 누른
+/// 카드가 아니라 맨 위 결과로 가 버린다. 새 결과에 없으면 null(앵커는 "지금 떠 있는 결과에서
+/// 누른 카드"일 때만 의미가 있고, 없는 카드를 쥐고 있으면 안 눌렀을 때의 규칙으로 못 돌아간다).
+@visibleForTesting
+int? keepAnchorForNewResults({
+  required int? tappedCardId,
+  required Iterable<int?> newResultIds,
+}) {
+  if (tappedCardId != null && newResultIds.contains(tappedCardId)) {
+    return tappedCardId;
+  }
   return null;
 }
 
 /// 누른 카드를 화면에서 그 자리에 붙잡아 둘 정렬값(뷰포트 대비 위쪽 가장자리 비율).
 ///
-/// ScrollablePositionedList는 target 카드의 위쪽 가장자리를 기준으로 배치하는데,
-/// RenderViewport.anchor는 0~1만 허용한다 — 카드가 위로 반쯤 잘려 있거나(음수) 화면
-/// 아래로 벗어났으면(1 초과) 붙잡을 수 없으니 null. NaN도 null이어야 한다.
+/// ScrollablePositionedList는 target 카드의 위쪽 가장자리를 이 정렬 위치에 두고 배치한다.
+/// 이 목록의 뷰포트는 0~1 밖의 값도 받아들이므로 범위 제한 때문에 막는 것은 아니다.
+/// 위로 잘린 카드(음수)를 붙잡지 않는 이유: 접혀서 줄어들 때 카드의 아래쪽이 위로 끌려 올라오는데,
+/// 위쪽 가장자리를 화면 밖에 붙잡아 두면 손가락 밑이 다음 카드가 된다. 붙잡지 않으면 아래쪽
+/// 가장자리가 유지돼 카드가 계속 손가락 밑에 남는다. 화면 아래로 벗어난 카드(1 초과)는 눌릴 수
+/// 없다. NaN도 null이어야 한다.
 @visibleForTesting
 double? pinAlignmentFor(double itemLeadingEdge) =>
     (itemLeadingEdge >= 0 && itemLeadingEdge <= 1) ? itemLeadingEdge : null;
+
+/// 접기/보이기로 [tappedIndex] 카드 높이가 바뀔 때 target을 누른 카드로 옮겨 붙잡아야 하는가.
+///
+/// ScrollablePositionedList는 target 카드부터 아래쪽을 target 위쪽 가장자리에서 아래로 쌓고,
+/// target 위쪽 칸들은 target에서 위로 쌓는다. 그래서 target 이하 칸(인덱스 ≥ target)은 높이가
+/// 바뀌어도 위쪽 가장자리가 움직이지 않고, target보다 위에 있는 칸(인덱스 < target)만 위쪽으로
+/// 자라거나 줄어들어 손가락 밑 카드가 바뀐다. 필요 없는데 target을 바꾸면 보이는 칸이 전부
+/// 다시 만들어져 물결(ripple)이 끊기고 접근성(TalkBack) 포커스를 잃는다.
+///
+/// [targetIndex]는 화면이 마지막으로 지정한 값이라 목록이 줄어든 뒤에는 실제 target보다 클 수
+/// 있다(SPL은 itemCount - 1로 줄여 쓴다) — 같은 규칙으로 줄여서 비교한다.
+@visibleForTesting
+bool tappedCardNeedsPin({
+  required int tappedIndex,
+  required int targetIndex,
+  required int itemCount,
+}) {
+  if (itemCount <= 0 || tappedIndex < 0 || tappedIndex >= itemCount) {
+    return false;
+  }
+  return tappedIndex < targetIndex.clamp(0, itemCount - 1);
+}
+
+// ─── 소량 목록(ListView) 위치 읽기 · 탐색 ───
+//
+// 소량 목록은 ScrollablePositionedList가 아니라 ListView라 _itemPositionsListener가 갱신되지
+// 않는다(대량 목록에서 남은 낡은 값이 들어 있다). 칸 위치를 렌더 트리에서 직접 읽는다.
+// 화면 상태(sqlite)에 의존하지 않도록 최상위 함수로 두어 평범한 ListView로 테스트한다.
+
+/// 소량 목록(ListView)에서 레이아웃된 칸들을 ScrollablePositionedList의 ItemPosition과 같은
+/// 단위(뷰포트 대비 비율)로 만든다. 레이아웃 전이거나 렌더 객체를 못 찾으면 빈 목록.
+///
+/// ListView.builder는 화면 밖 칸을 만들지 않으므로(캐시 범위 밖) 결과에는 지금 레이아웃된
+/// 칸만 들어 있다.
+@visibleForTesting
+List<ItemPosition> simpleListItemPositions(ScrollController controller) {
+  if (!controller.hasClients) return const [];
+  final position = controller.position;
+  // 붙기만 하고 아직 레이아웃을 안 거친 ListView는 pixels/viewportDimension이 null이라
+  // 읽는 순간 null 검사 오류가 난다 — 먼저 확인한다.
+  if (!position.hasPixels || !position.hasViewportDimension) return const [];
+  final viewport = position.viewportDimension;
+  if (viewport <= 0) return const [];
+  final root = position.context.storageContext.findRenderObject();
+  if (root == null) return const [];
+  RenderSliverMultiBoxAdaptor? found;
+  void visit(RenderObject node) {
+    if (found != null) return;
+    if (node is RenderSliverMultiBoxAdaptor) {
+      found = node;
+      return;
+    }
+    node.visitChildren(visit);
+  }
+
+  visit(root);
+  final sliver = found; // 클로저에서 대입된 변수라 승격이 안 되므로 지역 변수로 복사
+  if (sliver == null || sliver.geometry == null) return const [];
+  final positions = <ItemPosition>[];
+  for (RenderBox? child = sliver.firstChild;
+      child != null;
+      child = sliver.childAfter(child)) {
+    if (!child.hasSize) continue;
+    final top = sliver.constraints.precedingScrollExtent +
+        (sliver.childScrollOffset(child) ?? 0) -
+        position.pixels;
+    positions.add(ItemPosition(
+      index: sliver.indexOf(child),
+      itemLeadingEdge: top / viewport,
+      itemTrailingEdge: (top + child.size.height) / viewport,
+    ));
+  }
+  return positions;
+}
+
+/// 레이아웃이 끝난 소량 목록을 맨 위로 보낸다. 움직였으면 true.
+/// 붙기만 하고 레이아웃 전이면 jumpTo가 null 검사 오류를 던지므로 건드리지 않는다
+/// (레이아웃 전의 새 목록은 어차피 맨 위에서 시작한다).
+@visibleForTesting
+bool jumpToStartIfLaidOut(ScrollController controller) {
+  if (!controller.hasClients) return false;
+  final position = controller.position;
+  if (!position.hasPixels ||
+      !position.hasContentDimensions ||
+      !position.hasViewportDimension) {
+    return false;
+  }
+  position.jumpTo(0);
+  return true;
+}
+
+/// 검색을 닫은 직후 소량 목록이 모든 칸을 첫 프레임에 한꺼번에 레이아웃하게 하는 캐시 범위(px).
+/// 이 목록은 30장 이하라서 전부 만들어도 비용이 작고, 칸이 전부 레이아웃돼 있어야 누른 카드의
+/// 정확한 위치를 한 번에 읽어 단 한 번의 점프로 맨 위에 올릴 수 있다. 탐색이 끝나면 평소 값으로
+/// 되돌려 화면 밖 칸을 다시 해제한다(이미지가 많은 카드의 메모리 때문에 평소엔 쓰지 않는다).
+@visibleForTesting
+const double kSearchExitSeekCacheExtent = 1e7;
+
+/// 위치를 잡는 중([settling])에만 큰 캐시 범위, 평소엔 null(ListView 기본값).
+@visibleForTesting
+double? searchExitCacheExtent({required bool settling}) =>
+    settling ? kSearchExitSeekCacheExtent : null;
+
+/// 위치를 잡는 중([settling])에는 목록을 투명하게 둔다. 전체 목록이 처음 그려지는 프레임은
+/// 아직 결과 목록에서 물려받은 엉뚱한 위치라, 그 프레임을 보이면 엉뚱한 카드가 한 프레임
+/// 번쩍인다. 레이아웃은 그대로 이뤄지므로(칸 위치를 읽을 수 있다) 보이기만 막는다.
+@visibleForTesting
+double searchExitListOpacity({required bool settling}) => settling ? 0.0 : 1.0;
+
+@visibleForTesting
+enum SimpleListSeekStep {
+  /// 카드를 맨 위에 올렸다 (끝).
+  arrived,
+
+  /// 카드가 아직 레이아웃되지 않아, 레이아웃된 칸 중 카드 쪽 끝으로 한 걸음 옮겼다.
+  stepped,
+
+  /// 아직 읽을 수 있는 레이아웃이 없거나 더 움직일 수 없다 — 다음 프레임에 다시.
+  notReady,
+}
+
+/// 소량 목록에서 [index] 칸을 맨 위로 올리는 한 걸음.
+///
+/// 칸이 레이아웃돼 있으면 그 칸의 실제 위치로 점프한다. 아니면 비율로 어림하지 않고,
+/// 레이아웃된 칸 중 [index] 쪽 끝 칸의 가장자리(실제 위치)가 뷰포트 끝에 오도록 옮긴다 —
+/// 그러면 다음 레이아웃에서 그 바로 옆 칸들이 반드시 새로 만들어져 매 걸음 최소 한 칸씩
+/// 전진하고(빈 화면 프레임 없음), 칸 높이가 제각각이어도 어림 오차로 지나치지 않는다.
+///
+/// 목록 끝 칸([itemCount] - 1)이 아직 레이아웃되지 않았으면 maxScrollExtent가 어림값이라 점프
+/// 위치가 그 어림값에 막혀 앵커가 맨 위에 못 닿을 수 있다. 그렇게 막혀서 움직인 경우는
+/// [SimpleListSeekStep.stepped]로 돌려 다음 프레임(더 정확해진 max)에 한 번 더 확인한다.
+/// 끝 칸이 레이아웃돼 있으면 max가 정확하므로(앵커 아래 내용의 길이를 다 안다) 막혔어도 도착이다
+/// — 목록 끝에 가까운 카드는 맨 위에 못 오는 게 정상이다.
+@visibleForTesting
+SimpleListSeekStep seekSimpleListStep(
+  ScrollController controller,
+  int index, {
+  required int itemCount,
+}) {
+  final positions = simpleListItemPositions(controller);
+  if (positions.isEmpty) return SimpleListSeekStep.notReady;
+  final position = controller.position;
+  if (!position.hasContentDimensions) return SimpleListSeekStep.notReady;
+  final viewport = position.viewportDimension;
+  final pixels = position.pixels;
+
+  ItemPosition? self;
+  var first = positions.first;
+  var last = positions.first;
+  for (final p in positions) {
+    if (p.index == index) self = p;
+    if (p.index < first.index) first = p;
+    if (p.index > last.index) last = p;
+  }
+
+  final double to;
+  if (self != null) {
+    to = pixels + self.itemLeadingEdge * viewport;
+  } else if (index > last.index) {
+    to = pixels + last.itemTrailingEdge * viewport; // 마지막 칸 끝이 뷰포트 맨 위에
+  } else if (index < first.index) {
+    to = pixels + first.itemLeadingEdge * viewport - viewport; // 첫 칸 시작이 뷰포트 맨 아래에
+  } else {
+    return SimpleListSeekStep.notReady; // 레이아웃된 칸은 연속이라 여기 올 수 없다 (방어)
+  }
+  final clamped = to.clamp(position.minScrollExtent, position.maxScrollExtent);
+  final moved = (clamped - pixels).abs() >= 0.5;
+  if (self == null) {
+    if (!moved) return SimpleListSeekStep.notReady; // 더 움직일 수 없다 (끝에 닿음)
+    position.jumpTo(clamped);
+    return SimpleListSeekStep.stepped;
+  }
+  if (moved) position.jumpTo(clamped);
+  final blockedByEstimatedMax =
+      moved && to > clamped + 0.5 && last.index < itemCount - 1;
+  return blockedByEstimatedMax
+      ? SimpleListSeekStep.stepped
+      : SimpleListSeekStep.arrived;
+}
+
+/// 소량 목록에서 [indexOf]가 가리키는 칸을 맨 위로 올린다. 프레임이 끝날 때마다 한 걸음씩
+/// ([seekSimpleListStep]) 진행하며, 칸이 전부 레이아웃돼 있으면(캐시 범위를 크게 잡았을 때)
+/// 첫 프레임에서 한 번의 점프로 끝난다.
+///
+/// - [indexOf]는 콜백 안에서 매번 다시 부른다 — 예약 시점의 인덱스는 그 사이 목록이 바뀌면
+///   틀어진다(⚠️ 스크롤 목표는 실제로 로드된 목록 기준). 음수면 그 카드가 사라진 것이라 끝낸다.
+/// - [isCurrent]가 false가 되면(화면이 닫히거나 더 새로운 로드가 시작됨) 손대지 않고 끝낸다.
+/// - [onDone]은 어떤 경우에도(도착·포기·중단) 정확히 한 번 불린다 — 목록을 가려 둔 화면이
+///   반드시 다시 보이게 하는 장치라, 예외가 나도 호출된다.
+/// - [itemCount]도 콜백 안에서 매번 다시 읽는다. 걸음 수는 [maxAttempts]번(기본 시작 시점의
+///   [itemCount] + 6)으로 제한한다. 매 걸음 최소 한 칸씩 전진하고
+///   max 어림값을 다듬는 재확인이 몇 번 더 붙을 뿐이라 그 안에 끝난다 — 넘으면 포기하고 끝낸다.
+@visibleForTesting
+void seekSimpleListToIndex(
+  ScrollController controller, {
+  required int Function() indexOf,
+  required bool Function() isCurrent,
+  required int Function() itemCount,
+  int? maxAttempts,
+  VoidCallback? onDone,
+}) {
+  final attemptLimit = maxAttempts ?? itemCount() + 6;
+  void attempt(int n) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      var done = true;
+      try {
+        if (!isCurrent() || !controller.hasClients) return;
+        final index = indexOf();
+        if (index < 0) return;
+        final step =
+            seekSimpleListStep(controller, index, itemCount: itemCount());
+        if (step == SimpleListSeekStep.arrived || n + 1 >= attemptLimit) return;
+        // jumpTo만으로는 프레임이 안 잡힐 수 있어 직접 깨운다 (card_edit_screen과 같은 이유).
+        WidgetsBinding.instance.ensureVisualUpdate();
+        done = false;
+        attempt(n + 1);
+      } finally {
+        if (done) onDone?.call();
+      }
+    });
+  }
+
+  attempt(0);
+  WidgetsBinding.instance.ensureVisualUpdate();
+}
+
+/// 카드 위(카드 바깥 여백 포함)에서 일어난 "누름"(탭/롱프레스 — 스크롤 드래그 제외)을 관찰만 한다.
+///
+/// Listener는 제스처 아레나에 끼지 않는 순수 포인터 관찰자라 안쪽 CardTile의 탭/롱프레스
+/// 처리(특히 ⚠️ 선택모드에서 콜백이 null이어야 InkWell이 탭을 받는 규칙)에 영향이 없다.
+/// HitTestBehavior.translucent라서 자식이 직접 받지 않는 곳(카드 margin·카드 사이 틈)을 눌러도
+/// 기록되고, 같은 자리의 다른 위젯 처리도 막지 않는다. [child]가 margin까지 포함한 크기여야
+/// 여백이 덮인다(CardTile은 Card의 margin이 위젯 크기에 들어 있다).
+@visibleForTesting
+class PressObserver extends StatefulWidget {
+  const PressObserver({super.key, required this.onPress, required this.child});
+
+  /// 누름이 끝났을 때(손가락을 뗐고 touch slop 안에서만 움직였을 때) 불린다.
+  final VoidCallback onPress;
+  final Widget child;
+
+  @override
+  State<PressObserver> createState() => _PressObserverState();
+}
+
+class _PressObserverState extends State<PressObserver> {
+  int? _pointer;
+  Offset? _downPosition;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (e) {
+        _pointer = e.pointer;
+        _downPosition = e.position;
+      },
+      onPointerUp: (e) {
+        final down = _downPosition;
+        if (e.pointer != _pointer || down == null) return;
+        _pointer = null;
+        _downPosition = null;
+        if ((e.position - down).distance > kTouchSlop) return; // 스크롤 드래그는 누름이 아님
+        widget.onPress();
+      },
+      child: widget.child,
+    );
+  }
+}
 
 class CardListScreen extends StatefulWidget {
   final Folder folder;
@@ -117,11 +419,15 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   // _performSearch=검색어)가 전부 이 값을 같이 갱신해야 한다.
   String? _resultsQuery;
   // 검색 결과에서 마지막으로 누른 카드 (검색을 닫을 때 전체 목록에서 그 카드를 맨 위에 둔다).
-  // 결과가 화면에 떠 있는 동안에만 non-null — 새 결과 묶음/전체 목록이 올라오면 비운다.
+  // 결과가 화면에 떠 있는 동안에만 non-null — 전체 목록이 올라오면 비우고, 새 결과 묶음이
+  // 올라오면 그 카드가 새 결과에도 있을 때만 이어 간다(keepAnchorForNewResults).
   int? _searchAnchorCardId;
-  // 카드 위 포인터 추적 — 누름(탭)과 스크롤 드래그를 구분해 _searchAnchorCardId를 기록한다.
-  int? _pressPointer;
-  Offset? _pressPosition;
+  // 검색을 닫고 전체 목록이 올라온 직후, 누른 카드 위치로 옮기는 동안 true.
+  // 그동안 목록을 투명하게 둬서(첫 프레임은 결과 목록에서 물려받은 엉뚱한 위치) 엉뚱한 카드가 한
+  // 프레임 보이지 않게 하고, 소량 목록(ListView)은 캐시 범위를 크게 잡아 모든 칸을 레이아웃시킨다.
+  // ⚠️ true로 만든 setState 뒤에는 반드시 _finishSearchExitSettle로 끝나는 예약이 따라와야 한다 —
+  // 안 그러면 목록이 영영 안 보인다 (_settleAfterSearchExit의 모든 경로가 끝에서 부른다).
+  bool _settlingSearchExit = false;
 
   // 잠금화면 편집 후 pop 감지용 (one-shot)
   bool _autoEditRefreshPending = false;
@@ -150,6 +456,12 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
+  // SPL의 target(배치 기준 칸) 인덱스 — 이 화면이 _jumpSplTo로 마지막에 지정한 값. SPL은
+  // target을 읽는 API가 없다. 접기/보이기 때 "누른 카드가 target 위쪽인가"(= 붙잡아야 하나)를
+  // 가르는 데 쓴다. SPL이 목록 축소 때 스스로 줄이거나 ListView→SPL로 새로 붙으면 실제 target이
+  // 이 값보다 작아질 수 있는데, 그때는 붙잡을 필요 없는 카드를 붙잡을 뿐이라 안전한 쪽이다
+  // (실제보다 작게 어긋나는 경우는 없다 — target은 이 화면의 jumpTo로만 커진다).
+  int _splTargetIndex = 0;
 
   // 드래그 점프 스로틀링 (프레임당 최대 1회)
   bool _jumpScheduled = false;
@@ -234,7 +546,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       if (targetIndex >= 0 && targetIndex < cards.length) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || !_itemScrollController.isAttached) return;
-          _itemScrollController.jumpTo(index: targetIndex);
+          _jumpSplTo(targetIndex);
         });
       }
 
@@ -306,6 +618,14 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     _scrollFractionNotifier.dispose();
     _isDraggingThumb.dispose();
     super.dispose();
+  }
+
+  /// SPL을 [index] 칸으로 점프시키고 target 인덱스를 기록한다. 호출 전에 isAttached를 확인할 것.
+  /// SPL jumpTo는 이 화면 안에서 반드시 이 함수로만 부른다 — 기록이 빠지면 접기/보이기에서
+  /// "붙잡아야 하나" 판단이 틀어진다(_splTargetIndex).
+  void _jumpSplTo(int index, {double alignment = 0}) {
+    _splTargetIndex = index;
+    _itemScrollController.jumpTo(index: index, alignment: alignment);
   }
 
   /// ItemPositionsListener 콜백 (스크롤 위치 추적)
@@ -384,10 +704,13 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     // 덮어써지는 것을 방지)
     final gen = ++_searchGeneration;
     // 검색 결과가 떠 있다가 이 로드로 전체 목록으로 돌아가는 중인가. 첫 await 전에 — 결과
-    // 목록이 아직 화면에 그대로 있을 때 — 전체 목록에서 맨 위에 둘 카드를 정해 둔다
-    // (누른 카드 > 화면 맨 위 결과 > 없음). 알림 모드/일반 모드 양쪽 분기가 같은 값을 쓴다.
+    // 목록이 아직 화면에 그대로 있을 때 — 후보 두 개(누른 카드, 화면 맨 위 결과)의 id를 잡아 둔다.
+    // 둘 중 무엇을 쓸지는 전체 목록이 로드된 뒤 그 목록 기준으로 고른다(_settleAfterSearchExit):
+    // 누른 카드가 편집으로 결과에서는 빠졌어도 전체 목록에 있으면 그 카드를 써야 한다.
+    // 알림 모드/일반 모드 양쪽 분기가 같은 값을 쓴다.
     final leavingSearch = _resultsQuery != null && _searchQuery.isEmpty;
-    final exitAnchorId = leavingSearch ? _pickExitAnchorOnScreen() : null;
+    final exitTappedId = leavingSearch ? _searchAnchorCardId : null;
+    final exitFirstVisibleId = leavingSearch ? _firstVisibleResultId() : null;
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {
       // 카운트도 세대 검사 뒤에 대입한다 — 취소된(stale) 리로드가 앱바 숫자를 오염시키던 구멍.
@@ -411,10 +734,14 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         _loading = false;
         _resultsQuery = null;
         _searchAnchorCardId = null;
+        // 위치를 잡는 동안 목록을 가린다 (⚠️ 아래 _settleAfterSearchExit가 반드시 해제한다).
+        if (leavingSearch) _settlingSearchExit = true;
         _pruneSelection();
       });
       _precacheCardImages();
-      if (leavingSearch) _settleAfterSearchExit(exitAnchorId, gen);
+      if (leavingSearch) {
+        _settleAfterSearchExit(exitTappedId, exitFirstVisibleId, gen);
+      }
       return;
     }
 
@@ -467,12 +794,14 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       _loading = false;
       _resultsQuery = null;
       _searchAnchorCardId = null;
+      // 위치를 잡는 동안 목록을 가린다 (⚠️ 아래 _settleAfterSearchExit가 반드시 해제한다).
+      if (leavingSearch) _settlingSearchExit = true;
       _pruneSelection();
     });
     _precacheCardImages();
     // 검색을 닫고 돌아온 경우: 누른 카드(없으면 맨 위 결과)를 맨 위에 두고 끝낸다.
     if (leavingSearch) {
-      _settleAfterSearchExit(exitAnchorId, gen);
+      _settleAfterSearchExit(exitTappedId, exitFirstVisibleId, gen);
       return;
     }
     // 스크롤 위치 복원
@@ -480,7 +809,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       final idx = savedIndex.clamp(0, _cards.length - 1);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _itemScrollController.isAttached) {
-          _itemScrollController.jumpTo(index: idx);
+          _jumpSplTo(idx);
         }
       });
     }
@@ -488,116 +817,75 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   // ─── 검색을 닫을 때 위치 유지 ───
 
-  /// 소량 목록(ListView)에서 화면에 걸친 칸들을 ScrollablePositionedList의 ItemPosition과
-  /// 같은 단위(뷰포트 대비 비율)로 만든다. ListView에는 _itemPositionsListener가 갱신되지
-  /// 않아(대량 목록에서 남은 낡은 값이 들어 있다) 렌더 트리에서 직접 읽는다.
-  /// 렌더 객체를 못 찾거나 아직 레이아웃 전이면 빈 목록 (호출자가 "없음"으로 처리).
-  List<ItemPosition> _simpleListItemPositions() {
-    if (!_simpleScrollController.hasClients) return const [];
-    final position = _simpleScrollController.position;
-    final viewport = position.viewportDimension;
-    if (viewport <= 0) return const [];
-    final root = position.context.storageContext.findRenderObject();
-    if (root == null) return const [];
-    RenderSliverMultiBoxAdaptor? found;
-    void visit(RenderObject node) {
-      if (found != null) return;
-      if (node is RenderSliverMultiBoxAdaptor) {
-        found = node;
-        return;
-      }
-      node.visitChildren(visit);
-    }
-
-    visit(root);
-    final sliver = found; // 클로저에서 대입된 변수라 승격이 안 되므로 지역 변수로 복사
-    if (sliver == null) return const [];
-    final positions = <ItemPosition>[];
-    for (RenderBox? child = sliver.firstChild;
-        child != null;
-        child = sliver.childAfter(child)) {
-      if (!child.hasSize) continue;
-      final top = sliver.constraints.precedingScrollExtent +
-          (sliver.childScrollOffset(child) ?? 0) -
-          position.pixels;
-      positions.add(ItemPosition(
-        index: sliver.indexOf(child),
-        itemLeadingEdge: top / viewport,
-        itemTrailingEdge: (top + child.size.height) / viewport,
-      ));
-    }
-    return positions;
-  }
-
-  /// 지금 화면에 떠 있는 검색 결과 기준으로 "전체 목록에서 맨 위에 둘 카드"의 id를 고른다.
+  /// 닫기 직전 화면 맨 위에 보이던 검색 결과의 카드 id (없으면 null).
   /// 반드시 _cards가 아직 결과 목록일 때(_loadCards의 첫 await 전에) 불러야 한다.
-  int? _pickExitAnchorOnScreen() {
-    return pickSearchExitAnchor(
-      tappedCardId: _searchAnchorCardId,
-      resultIds: [for (final c in _cards) c.id],
-      firstVisibleIndex: _useSimpleList
-          ? firstVisibleItemIndex(_simpleListItemPositions())
-          : firstVisibleItemIndex(_itemPositionsListener.itemPositions.value),
-    );
+  /// 소량 목록(ListView)은 _itemPositionsListener가 갱신되지 않아 렌더 트리에서 직접 읽는다.
+  int? _firstVisibleResultId() {
+    final firstVisibleIndex = _useSimpleList
+        ? firstVisibleItemIndex(simpleListItemPositions(_simpleScrollController))
+        : firstVisibleItemIndex(_itemPositionsListener.itemPositions.value);
+    return resultIdAt([for (final c in _cards) c.id], firstVisibleIndex);
   }
 
-  /// 검색을 닫고 전체 목록이 올라온 직후: [anchorId] 카드를 맨 위에 두고 5초 하이라이트
-  /// (알림으로 들어왔을 때와 같은 표시). 앵커가 없거나 전체 목록에 없으면 맨 위로 보낸다.
-  /// [gen]은 _loadCards가 발급한 세대 토큰 — 그 사이 더 새로운 로드/검색이 시작됐으면 손대지 않는다.
-  void _settleAfterSearchExit(int? anchorId, int gen) {
-    final found = anchorId != null && _cards.any((c) => c.id == anchorId);
-    if (found) {
+  /// 위치 잡기가 끝나면(도착·포기·중단 어느 경우든) 가려 둔 목록을 다시 보이게 한다.
+  void _finishSearchExitSettle() {
+    if (!mounted || !_settlingSearchExit) return;
+    setState(() => _settlingSearchExit = false);
+  }
+
+  /// 검색을 닫고 전체 목록이 올라온 직후: 앵커 카드를 맨 위에 두고 5초 하이라이트
+  /// (알림으로 들어왔을 때와 같은 표시). 앵커가 없으면 맨 위로 보낸다.
+  ///
+  /// 앵커는 여기서 **방금 불러온 전체 목록 기준으로** 고른다 — 누른 카드[tappedId]가 있으면
+  /// 그것, 전체 목록에 없으면(삭제·이동) 닫기 직전 맨 위 결과[firstVisibleId], 그것도 없으면 없음
+  /// (pickSearchExitAnchor). [gen]은 _loadCards가 발급한 세대 토큰 — 그 사이 더 새로운
+  /// 로드/검색이 시작됐으면 위치는 건드리지 않는다.
+  ///
+  /// 호출 직전 setState에서 _settlingSearchExit를 true로 올렸으므로 모든 경로가 끝에서
+  /// _finishSearchExitSettle로 해제해야 한다 (목록이 가려진 채 남지 않게).
+  void _settleAfterSearchExit(int? tappedId, int? firstVisibleId, int gen) {
+    final anchorId = pickSearchExitAnchor(
+      tappedCardId: tappedId,
+      firstVisibleCardId: firstVisibleId,
+      fullListIds: [for (final c in _cards) c.id],
+    );
+    if (anchorId != null) {
       setState(() => _highlightCardId = anchorId);
       _highlightTimer?.cancel();
       _highlightTimer = Timer(const Duration(seconds: 5), () {
         if (mounted) setState(() => _highlightCardId = null);
       });
       if (_useSimpleList) {
-        _seekSimpleListToCard(anchorId, gen);
+        // 캐시 범위를 크게 잡아 둔 덕에 첫 프레임에 모든 칸이 레이아웃돼 있어 한 번에 끝난다.
+        seekSimpleListToIndex(
+          _simpleScrollController,
+          // 스크롤 목표는 프레임 시점의 실제 목록 기준으로 다시 찾는다 (_initLoad의 ⚠️와 같은 이유).
+          indexOf: () => _cards.indexWhere((c) => c.id == anchorId),
+          isCurrent: () => mounted && gen == _searchGeneration && _useSimpleList,
+          itemCount: () => _cards.length,
+          onDone: _finishSearchExitSettle,
+        );
         return;
       }
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || gen != _searchGeneration) return;
-      if (_useSimpleList) {
-        if (_simpleScrollController.hasClients) {
-          _simpleScrollController.jumpTo(0);
+      try {
+        if (!mounted || gen != _searchGeneration) return;
+        if (_useSimpleList) {
+          jumpToStartIfLaidOut(_simpleScrollController);
+          return;
         }
-        return;
+        if (!_itemScrollController.isAttached) return;
+        // 스크롤 목표는 프레임 시점의 실제 목록 기준으로 다시 찾는다 (_initLoad의 ⚠️와 같은 이유).
+        final idx =
+            anchorId == null ? -1 : _cards.indexWhere((c) => c.id == anchorId);
+        _jumpSplTo(idx >= 0 ? idx : 0);
+      } finally {
+        _finishSearchExitSettle();
       }
-      if (!_itemScrollController.isAttached) return;
-      // 스크롤 목표는 프레임 시점의 실제 목록 기준으로 다시 찾는다 (_initLoad의 ⚠️와 같은 이유).
-      final idx = found ? _cards.indexWhere((c) => c.id == anchorId) : -1;
-      _itemScrollController.jumpTo(index: idx >= 0 ? idx : 0);
     });
-  }
-
-  /// 소량 목록(ListView)에서 [cardId] 카드를 맨 위로 올린다. ListView.builder는 화면 밖 칸을
-  /// 만들지 않아 칸 위치를 모르면 정확한 오프셋을 알 수 없다 — 칸이 레이아웃돼 있으면 그 위치로
-  /// 정확히 이동하고, 아니면 "전체 길이 중 인덱스 비율"로 어림 이동한 뒤 다음 프레임에 다시 시도한다.
-  void _seekSimpleListToCard(int cardId, int gen, [int attempt = 0]) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || gen != _searchGeneration) return;
-      if (!_useSimpleList || !_simpleScrollController.hasClients) return;
-      final index = _cards.indexWhere((c) => c.id == cardId);
-      if (index < 0) return;
-      final position = _simpleScrollController.position;
-      for (final p in _simpleListItemPositions()) {
-        if (p.index != index) continue;
-        position.jumpTo(
-          (position.pixels + p.itemLeadingEdge * position.viewportDimension)
-              .clamp(position.minScrollExtent, position.maxScrollExtent),
-        );
-        return;
-      }
-      if (attempt >= 3) return;
-      position.jumpTo(_cards.length <= 1
-          ? 0
-          : position.maxScrollExtent * index / (_cards.length - 1));
-      // jumpTo만으로는 프레임이 안 잡힐 수 있어 직접 깨운다 (card_edit_screen과 같은 이유).
-      WidgetsBinding.instance.ensureVisualUpdate();
-      _seekSimpleListToCard(cardId, gen, attempt + 1);
-    });
+    // setState가 이미 프레임을 예약했지만, 호출 시점에 따라 아닐 수 있어 확실히 한다.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   /// 카드 1장만 DB에서 다시 가져와 _cards 같은 인덱스에 in-place 교체.
@@ -704,15 +992,20 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       _totalCount = results.length;
       _loading = false;
       _resultsQuery = query;
-      // 앵커는 "지금 떠 있는 결과 묶음에서 누른 카드"만 의미가 있다.
-      if (isNewResultSet) _searchAnchorCardId = null;
+      // 앵커는 "지금 떠 있는 결과 묶음에서 누른 카드"만 의미가 있다. 새 묶음에도 그 카드가
+      // 있으면 이어 가고(검색어를 한 글자씩 지울 때 앵커가 매번 초기화되던 문제), 없으면 비운다.
+      if (isNewResultSet) {
+        _searchAnchorCardId = keepAnchorForNewResults(
+          tappedCardId: _searchAnchorCardId,
+          newResultIds: [for (final c in results) c.id],
+        );
+      }
       _pruneSelection();
     });
     if (isNewResultSet) {
-      if (_simpleScrollController.hasClients) _simpleScrollController.jumpTo(0);
-      if (_itemScrollController.isAttached) {
-        _itemScrollController.jumpTo(index: 0);
-      }
+      // 레이아웃 전의 ListView는 jumpTo가 던지므로 확인 뒤에만 (새 목록은 어차피 맨 위에서 시작).
+      jumpToStartIfLaidOut(_simpleScrollController);
+      if (_itemScrollController.isAttached) _jumpSplTo(0);
     }
   }
 
@@ -1233,21 +1526,28 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   /// 대량 목록(ScrollablePositionedList)에서 접기/보이기로 카드 높이가 바뀔 때, 누른 카드의
   /// 위쪽 가장자리가 화면에서 움직이지 않게 한다. 이 목록은 target 카드를 기준으로 배치하는데
-  /// target이 누른 카드가 아니면(예: 검색 결과가 전체 목록 target을 물려받은 경우) 누른 카드
-  /// 위쪽 칸의 높이 변화가 위쪽으로 밀려 올라가 손가락 밑에 다른 카드가 미끄러져 온다.
-  /// 그래서 setState 전에 target을 "누른 카드, 지금 화면 위치 그대로"로 옮겨 둔다.
+  /// target보다 위쪽 칸은 target에서 위로 쌓여서, 그런 카드의 높이가 바뀌면 위쪽으로 밀려
+  /// 올라가 손가락 밑에 다른 카드가 미끄러져 온다(예: 검색 결과가 전체 목록 target을 물려받은
+  /// 경우). 그래서 setState 전에 target을 "누른 카드, 지금 화면 위치 그대로"로 옮겨 둔다.
+  /// target 이하 칸(인덱스 ≥ target)은 어차피 안 움직이므로 건드리지 않는다 — target을
+  /// 바꾸면 보이는 칸이 전부 다시 만들어져 물결·접근성 포커스가 끊긴다(tappedCardNeedsPin).
   /// 소량 목록(ListView)은 픽셀 오프셋 기준이라 해당 없음. 카드가 위로 잘려 있거나 화면 밖이면
   /// (pinAlignmentFor가 null) 건드리지 않는다.
   void _keepTappedCardInPlace(int cardId) {
     if (_useSimpleList || !_itemScrollController.isAttached) return;
     final index = _cards.indexWhere((c) => c.id == cardId);
     if (index < 0) return;
+    if (!tappedCardNeedsPin(
+      tappedIndex: index,
+      targetIndex: _splTargetIndex,
+      itemCount: _cards.length,
+    )) {
+      return;
+    }
     for (final p in _itemPositionsListener.itemPositions.value) {
       if (p.index != index) continue;
       final alignment = pinAlignmentFor(p.itemLeadingEdge);
-      if (alignment != null) {
-        _itemScrollController.jumpTo(index: index, alignment: alignment);
-      }
+      if (alignment != null) _jumpSplTo(index, alignment: alignment);
       return;
     }
   }
@@ -1297,21 +1597,14 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   Widget _buildCardItem(BuildContext context, int index) {
     final card = _cards[index];
     final isHighlighted = _highlightCardId == card.id;
-    // Listener는 제스처 아레나에 끼지 않는 순수 포인터 관찰자라 아래 CardTile의 탭/롱프레스
-    // 처리(특히 ⚠️ 선택모드 규칙)에 영향이 없다. 검색 결과에서 "마지막으로 누른 카드"를
-    // 기록해 두었다가, 검색을 닫을 때 전체 목록에서 그 카드를 맨 위에 둔다.
-    return Listener(
-      onPointerDown: (e) {
-        _pressPointer = e.pointer;
-        _pressPosition = e.position;
-      },
-      onPointerUp: (e) {
-        final down = _pressPosition;
-        if (e.pointer != _pressPointer || down == null) return;
-        _pressPointer = null;
-        _pressPosition = null;
+    // PressObserver(Listener)는 제스처 아레나에 끼지 않는 순수 포인터 관찰자라 아래 CardTile의
+    // 탭/롱프레스 처리(특히 ⚠️ 선택모드 규칙)에 영향이 없다. 검색 결과에서 "마지막으로 누른
+    // 카드"를 기록해 두었다가, 검색을 닫을 때 전체 목록에서 그 카드를 맨 위에 둔다.
+    // CardTile의 바깥 여백(Card margin)은 CardTile 크기에 들어 있어 여백·카드 사이 틈을
+    // 눌러도 기록된다(리스트 자체에는 padding이 없다).
+    return PressObserver(
+      onPress: () {
         if (_resultsQuery == null) return; // 검색 결과가 떠 있을 때만
-        if ((e.position - down).distance > kTouchSlop) return; // 스크롤 드래그는 누름이 아님
         _searchAnchorCardId = card.id; // setState 불필요(화면에 안 그림)
       },
       child: CardTile(
@@ -1345,28 +1638,38 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   /// 소량 카드(≤30)는 ListView.builder (ScrollablePositionedList 소량 스크롤 버그 회피)
   /// 대량 카드는 ScrollablePositionedList (index 기반 점프, 드래그 인디케이터)
   Widget _buildCardList() {
+    final Widget list;
     if (_useSimpleList) {
-      final list = ListView.builder(
+      final simple = ListView.builder(
         controller: _simpleScrollController,
         itemCount: _cards.length,
         itemBuilder: _buildCardItem,
         physics: const ClampingScrollPhysics(),
+        // 검색을 닫고 위치를 잡는 동안만 모든 칸을 레이아웃시킨다 (평소엔 null = 기본값).
+        cacheExtent: searchExitCacheExtent(settling: _settlingSearchExit),
       );
-      if (_showScrollbar) {
-        return Scrollbar(
-          controller: _simpleScrollController,
-          thumbVisibility: true,
-          child: list,
-        );
-      }
-      return list;
+      list = _showScrollbar
+          ? Scrollbar(
+              controller: _simpleScrollController,
+              thumbVisibility: true,
+              child: simple,
+            )
+          : simple;
+    } else {
+      list = ScrollablePositionedList.builder(
+        itemCount: _cards.length,
+        itemBuilder: _buildCardItem,
+        itemScrollController: _itemScrollController,
+        itemPositionsListener: _itemPositionsListener,
+        physics: const ClampingScrollPhysics(),
+      );
     }
-    return ScrollablePositionedList.builder(
-      itemCount: _cards.length,
-      itemBuilder: _buildCardItem,
-      itemScrollController: _itemScrollController,
-      itemPositionsListener: _itemPositionsListener,
-      physics: const ClampingScrollPhysics(),
+    // 항상 감싸 둔다(트리 모양이 바뀌면 목록이 새로 만들어져 스크롤 상태를 잃는다). 위치를
+    // 잡는 동안만 투명 — 레이아웃은 그대로라 칸 위치를 읽을 수 있고, 엉뚱한 위치의 첫 프레임만
+    // 가려진다. 불투명(1.0)일 때는 추가 레이어 없이 그대로 그려진다.
+    return Opacity(
+      opacity: searchExitListOpacity(settling: _settlingSearchExit),
+      child: list,
     );
   }
 
@@ -1594,7 +1897,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _jumpScheduled = false;
         if (!mounted || !_itemScrollController.isAttached) return;
-        _itemScrollController.jumpTo(index: _pendingJumpIndex);
+        _jumpSplTo(_pendingJumpIndex);
       });
     }
   }
