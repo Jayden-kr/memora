@@ -53,6 +53,13 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   bool _scheduleEnabled = false;
   List<LockScreenSlot> _slots = [];
 
+  // 화면에 보이는 시간대 전환 상태. 잠금화면이 꺼져 있으면 저장값과 무관하게 OFF로
+  // 보이고 손댈 수 없다(사용자 요청 2026-09-28 — 꺼진 잠금화면 아래 켜진 시간대 전환은
+  // 막을 것). 저장값 _scheduleEnabled·슬롯은 그대로 둬서 잠금화면을 다시 켜면 돌아온다.
+  // ⚠️ 저장·가드 로직(hasValidSlots, saveSettings)은 계속 _scheduleEnabled를 쓴다 —
+  // 여기로 바꾸면 잠금화면을 끄는 순간 OFF가 저장돼 복원이 깨진다.
+  bool get _scheduleShown => _enabled && _scheduleEnabled;
+
   static const _sortOptions = <String>[
     'sequence',
     'newest',
@@ -916,10 +923,10 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _scheduleEnabled ? t.lockBaseFolder : t.lockSelectFolder,
+                  _scheduleShown ? t.lockBaseFolder : t.lockSelectFolder,
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-                if (_scheduleEnabled) ...[
+                if (_scheduleShown) ...[
                   const SizedBox(height: 2),
                   Text(
                     t.lockBaseFolderHint,
@@ -985,13 +992,15 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           SwitchListTile(
             title: Text(t.lockScheduleEnable),
             subtitle: Text(t.lockScheduleEnableSubtitle),
-            value: _scheduleEnabled,
-            onChanged: (v) {
-              setState(() => _scheduleEnabled = v);
-              _onSettingChanged();
-            },
+            value: _scheduleShown,
+            onChanged: _enabled
+                ? (v) {
+                    setState(() => _scheduleEnabled = v);
+                    _onSettingChanged();
+                  }
+                : null,
           ),
-          if (_scheduleEnabled) ..._buildScheduleSection(t),
+          if (_scheduleShown) ..._buildScheduleSection(t),
 
           // 카드 순서
           Padding(
