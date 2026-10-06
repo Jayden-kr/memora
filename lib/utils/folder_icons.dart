@@ -44,5 +44,9 @@ IconData folderIconData(String? key, {required bool isBundle}) =>
 
 /// 폴더 아이콘 색. null이면 테마 기본색(밝은/어두운 테마를 따라간다), 값이 있으면
 /// 사용자가 고른 색을 테마와 무관하게 그대로 쓴다.
+///
+/// 알파는 항상 0xFF로 올린다: 폴더 아이콘 색은 불투명만 의미가 있는데(선택 창이 투명도를
+/// 감춘다), 다른 경로(가져온 데이터 등)로 알파 0이 저장돼 있으면 `Color(argb)`를 그대로
+/// 쓸 때 아이콘이 보이지 않게 된다.
 Color folderIconColor(int? argb, ColorScheme scheme) =>
-    argb == null ? scheme.primary : Color(argb);
+    argb == null ? scheme.primary : Color(argb | 0xFF000000);

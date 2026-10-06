@@ -412,6 +412,50 @@ void main() {
       expect(box.value, 0xFF1A1A2E);
     });
 
+    // 미리보기 스와치가 "적용"이 돌려줄 색과 같아야 한다 — 알파가 섞인 입력이 스와치만
+    // 투명하게 보이게 하면 사용자는 보이지 않는 색을 고른 줄 안다.
+    testWidgets('showOpacity:false면 알파 0 hex(#00112233)를 입력해도 미리보기가 불투명',
+        (tester) async {
+      final box = await open(tester, initial: 0xFF1A1A2E, showOpacity: false);
+
+      await tester.enterText(find.byType(TextField), '#00112233');
+      await tester.pump();
+
+      final preview =
+          tester.widget<ColorSwatchPreview>(find.byType(ColorSwatchPreview));
+      expect(preview.color, const Color(0xFF112233));
+
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+      expect(box.value, 0xFF112233, reason: '미리보기와 적용 결과가 같은 색이어야 한다');
+    });
+
+    testWidgets('showOpacity:false면 초기값 알파가 0이어도 미리보기가 불투명', (tester) async {
+      await open(tester, initial: 0x00112233, showOpacity: false);
+
+      final preview =
+          tester.widget<ColorSwatchPreview>(find.byType(ColorSwatchPreview));
+      expect(preview.color, const Color(0xFF112233));
+    });
+
+    testWidgets('showOpacity:true(기본)면 알파 0 hex는 투명 미리보기 그대로(기존 동작)',
+        (tester) async {
+      final box = await open(tester, initial: 0xFF1A1A2E);
+
+      await tester.enterText(find.byType(TextField), '#00112233');
+      await tester.pump();
+
+      final preview = tester
+          .widgetList<ColorSwatchPreview>(find.byType(ColorSwatchPreview))
+          .first;
+      expect(preview.color, const Color(0x00112233));
+      expect(find.text('0%'), findsOneWidget);
+
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+      expect(box.value, 0x00112233);
+    });
+
     testWidgets('기본값(true)은 슬라이더가 있고 알파를 그대로 돌려준다(기존 동작)',
         (tester) async {
       final box = await open(tester, initial: 0xFF1A1A2E);

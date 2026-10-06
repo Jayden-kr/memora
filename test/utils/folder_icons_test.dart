@@ -159,6 +159,16 @@ void main() {
           seedColor: const Color(0xFFFF6B6B), brightness: Brightness.dark);
       expect(folderIconColor(0xFF2196F3, dark), const Color(0xFF2196F3));
     });
+
+    test('알파가 0이거나 반투명으로 저장돼 있어도 불투명하게 그린다(안 보이는 아이콘 방지)', () {
+      // 선택 창은 항상 불투명 값만 저장하지만 다른 경로(가져온 데이터 등)의 값은 알파가
+      // 섞여 있을 수 있다 — Color(argb)를 그대로 쓰면 알파 0이 투명한 아이콘이 된다.
+      expect(folderIconColor(0x00112233, scheme), const Color(0xFF112233));
+      expect(folderIconColor(0x80112233, scheme), const Color(0xFF112233));
+      expect(folderIconColor(0x00112233, scheme).a, 1.0);
+      // 이미 불투명한 값은 그대로.
+      expect(folderIconColor(0xFF112233, scheme), const Color(0xFF112233));
+    });
   });
 
   group('구조적 트립와이어: 동적 아이콘 금지(릴리스 트리 셰이킹)', () {

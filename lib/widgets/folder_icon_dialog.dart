@@ -24,6 +24,40 @@ Future<FolderIconChoice?> showFolderIconDialog({
   );
 }
 
+/// 아이콘 키 → 사용자에게 읽어줄 이름(툴팁·접근성 라벨). 표에 없는 키(다른 버전이 만든
+/// 값)는 `null`이라 라벨이 붙지 않는다.
+///
+/// ⚠️ [folderIcons]에 아이콘을 추가하면 여기와 두 arb(app_ko/app_en)의 `folderIconName*`
+/// 키도 같이 추가할 것 — 이름이 없는 아이콘 버튼은 스크린리더가 "버튼"으로만 읽는다
+/// (테스트: folder_icon_dialog_test의 "모든 키에 이름이 있다").
+String? folderIconName(AppLocalizations t, String key) => switch (key) {
+      'book' => t.folderIconNameBook,
+      'language' => t.folderIconNameLanguage,
+      'star' => t.folderIconNameStar,
+      'heart' => t.folderIconNameHeart,
+      'school' => t.folderIconNameSchool,
+      'science' => t.folderIconNameScience,
+      'music' => t.folderIconNameMusic,
+      'work' => t.folderIconNameWork,
+      'idea' => t.folderIconNameIdea,
+      'flag' => t.folderIconNameFlag,
+      'bookmark' => t.folderIconNameBookmark,
+      'math' => t.folderIconNameMath,
+      'code' => t.folderIconNameCode,
+      'globe' => t.folderIconNameGlobe,
+      'mind' => t.folderIconNameMind,
+      'history' => t.folderIconNameHistory,
+      'art' => t.folderIconNameArt,
+      'sports' => t.folderIconNameSports,
+      'travel' => t.folderIconNameTravel,
+      'medical' => t.folderIconNameMedical,
+      'pets' => t.folderIconNamePets,
+      'food' => t.folderIconNameFood,
+      'chat' => t.folderIconNameChat,
+      'home' => t.folderIconNameHome,
+      _ => null,
+    };
+
 class _FolderIconDialog extends StatefulWidget {
   const _FolderIconDialog({required this.folder});
 
@@ -63,58 +97,63 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
     // 128dp를 뺀 값. 아이콘은 GridView/LayoutBuilder가 아니라 Wrap으로 깐다 —
     // AlertDialog는 content를 IntrinsicWidth로 감싸 크기를 재는데 둘 다 intrinsic
     // 치수 계산을 지원하지 않아 예외가 난다(color_picker_dialog.dart와 같은 이유).
-    // 폭이 한 줄 아이콘 수를 정하고 넘치면 줄바꿈 + 스크롤이라 좁은 화면·가로 모드에서도
-    // 잘리지 않는다.
+    // 폭이 한 줄 아이콘 수를 정하고 넘치면 줄바꿈이라 좁은 화면·가로 모드에서도 잘리지 않는다.
     final width = (MediaQuery.sizeOf(context).width - 128).clamp(120.0, 288.0);
 
     return AlertDialog(
+      // 제목+내용을 통째로 스크롤 영역에 넣는다(액션 줄만 고정). content 안에 따로
+      // SingleChildScrollView를 두면 큰 글자 크기·낮은 화면에서 제목이 스크롤되지 않고
+      // 고정 영역(제목+액션)이 화면을 다 먹어 오버플로가 난다. SizedBox가 고정 폭을 주므로
+      // 이 경로의 IntrinsicWidth 측정도 안전하다.
+      scrollable: true,
       title: Text(t.folderIconTitle),
-      content: SingleChildScrollView(
-        child: SizedBox(
-          width: width,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                children: [
-                  for (final entry in folderIcons.entries)
-                    IconButton(
-                      key: ValueKey('folderIconOption_${entry.key}'),
-                      isSelected: entry.key == _icon,
-                      // 고른 아이콘만 고른 색(없으면 테마색)으로 미리 보여주고 테두리로
-                      // 표시한다. 나머지는 기본 아이콘색이라 선택된 것이 한눈에 보인다.
-                      icon: Icon(
-                        entry.value,
-                        color: entry.key == _icon ? shownColor : null,
-                      ),
-                      style: entry.key == _icon
-                          ? IconButton.styleFrom(
-                              side: BorderSide(color: scheme.primary, width: 2),
-                            )
-                          : null,
-                      onPressed: () => setState(() => _icon = entry.key),
+      content: SizedBox(
+        width: width,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              children: [
+                for (final entry in folderIcons.entries)
+                  IconButton(
+                    key: ValueKey('folderIconOption_${entry.key}'),
+                    // 아이콘만 있는 버튼이라 이름을 안 붙이면 스크린리더가 "버튼"으로만
+                    // 읽는다(길게 누르면 이름이 뜨기도 한다).
+                    tooltip: folderIconName(t, entry.key),
+                    isSelected: entry.key == _icon,
+                    // 고른 아이콘만 고른 색(없으면 테마색)으로 미리 보여주고 테두리로
+                    // 표시한다. 나머지는 기본 아이콘색이라 선택된 것이 한눈에 보인다.
+                    icon: Icon(
+                      entry.value,
+                      color: entry.key == _icon ? shownColor : null,
                     ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              InkWell(
-                key: const ValueKey('folderIconColorRow'),
-                borderRadius: BorderRadius.circular(8),
-                onTap: _pickColor,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Row(
-                    children: [
-                      ColorSwatchPreview(color: shownColor, size: 32),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(t.folderIconColor)),
-                    ],
+                    style: entry.key == _icon
+                        ? IconButton.styleFrom(
+                            side: BorderSide(color: scheme.primary, width: 2),
+                          )
+                        : null,
+                    onPressed: () => setState(() => _icon = entry.key),
                   ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            InkWell(
+              key: const ValueKey('folderIconColorRow'),
+              borderRadius: BorderRadius.circular(8),
+              onTap: _pickColor,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    ColorSwatchPreview(color: shownColor, size: 32),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(t.folderIconColor)),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
       actions: [

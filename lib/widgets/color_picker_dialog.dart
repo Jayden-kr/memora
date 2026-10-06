@@ -229,7 +229,7 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
   @override
   void initState() {
     super.initState();
-    _hsv = HSVColor.fromColor(Color(widget.initialColor));
+    _hsv = _opaqueIfNoOpacity(HSVColor.fromColor(Color(widget.initialColor)));
     _hexController = TextEditingController(text: _hexFromHsv(_hsv));
   }
 
@@ -238,6 +238,12 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
     _hexController.dispose();
     super.dispose();
   }
+
+  /// 투명도 슬라이더를 감춘 모드에선 알파를 바꿀 길이 없으니, 초기값·헥스 입력(#AARRGGBB)에
+  /// 섞인 알파를 미리보기 단계에서부터 1.0으로 고정한다 — 안 그러면 스와치는 투명하게
+  /// 보이는데 "적용"은 불투명을 돌려주는 불일치가 생긴다.
+  HSVColor _opaqueIfNoOpacity(HSVColor hsv) =>
+      widget.showOpacity ? hsv : hsv.withAlpha(1.0);
 
   String _hexFromHsv(HSVColor hsv) {
     final rgb = hsv.toColor().toARGB32() & 0x00FFFFFF;
@@ -266,7 +272,7 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
   void _onHexChanged(String text) {
     final parsed = tryParseHexColor(text);
     if (parsed == null) return; // 무효 입력은 조용히 무시 — 에러 표시 없음.
-    setState(() => _hsv = HSVColor.fromColor(parsed));
+    setState(() => _hsv = _opaqueIfNoOpacity(HSVColor.fromColor(parsed)));
   }
 
   void _onOpacityChanged(double percent) {
