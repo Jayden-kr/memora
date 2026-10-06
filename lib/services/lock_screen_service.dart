@@ -181,6 +181,48 @@ class LockScreenSchedule {
   }
 }
 
+/// 잠금화면을 켤 때의 판정 결과([LockToggleRule.decideEnable]).
+enum LockEnableOutcome {
+  /// 그대로 켠다(이미 고른 폴더가 있거나, 유효한 시간대 슬롯만으로 도는 상태).
+  proceed,
+
+  /// 고른 폴더가 없으니 첫 폴더를 자동 선택하고 켠다.
+  autoSelectFirstFolder,
+
+  /// 폴더가 아예 없어 켤 수 없다(안내 스낵바).
+  blockedNoFolder,
+}
+
+/// 잠금화면 ON/OFF와 "시간대별 폴더 전환"의 관계 규칙(사용자 요청 2026-10-06).
+///
+/// 잠금화면을 켜든 끄든(사용자 토글, 오버레이 권한 거부, 폴더 삭제로 인한 자동 꺼짐) 시간대
+/// 전환 플래그는 항상 꺼진다 — 잠금화면을 켰는데 시간대 전환이 저절로 켜져 있으면 안 된다.
+/// 슬롯 목록(scheduleCsv)은 지우지 않는다: 사용자가 시간대 전환을 다시 켜면 그대로 쓴다.
+/// ⚠️ 예전(d67c468)에는 "꺼져 있는 동안 저장값을 보존했다가 다시 켜면 복원"이었다. 이 규칙은
+/// 그 반대다 — 복원 로직을 되살리지 말 것(테스트: test/lock_toggle_rule_test.dart).
+class LockToggleRule {
+  /// 잠금화면이 토글된 뒤 저장되는 시간대 전환 플래그.
+  static const bool scheduleEnabledAfterToggle = false;
+
+  /// 잠금화면을 켤 때의 판정. [scheduleEnabled]에는 켠 뒤에 저장될 값
+  /// ([scheduleEnabledAfterToggle])을 넘긴다 — 그래서 실제로는 슬롯이 있어도 "유효한 슬롯"이
+  /// 아니고, 폴더가 없으면 막고 있으면 첫 폴더를 고른다.
+  /// ⚠️ 유효한 슬롯(시간대 전환 ON + 슬롯 1개 이상)이면 기본 폴더 없이도 켤 수 있다는 예외는
+  /// LockScreenSettings._applySettings·removeFoldersFromSettingsBatch의 같은 가드와 한 묶음이다.
+  static LockEnableOutcome decideEnable({
+    required bool hasSelectedFolder,
+    required bool hasFolders,
+    required bool scheduleEnabled,
+    required bool hasSlots,
+  }) {
+    final hasValidSlots = scheduleEnabled && hasSlots;
+    if (hasSelectedFolder || hasValidSlots) return LockEnableOutcome.proceed;
+    return hasFolders
+        ? LockEnableOutcome.autoSelectFirstFolder
+        : LockEnableOutcome.blockedNoFolder;
+  }
+}
+
 class LockScreenService {
   static const _channel = MethodChannel('com.henry.memora/lockscreen');
 
@@ -424,6 +466,9 @@ class LockScreenService {
         // 사용자에게 "잠금화면이 꺼졌다"는 안내조차 안 나간다 — 스윕 S-02에서 고쳤던
         // 그 조용한 종료가 그대로 재현된다(리뷰 R7-C). 찢어진 상태를 남기느니
         // 마무리하는 쪽이 낫다.
+        //
+        // 자동으로 꺼질 때도 시간대 전환 플래그는 끈다(LockToggleRule — 사용자 요청
+        // 2026-10-06). 슬롯(scheduleCsv)은 그대로 남아 다시 켜면 쓸 수 있다.
         await saveSettings(
           enabled: false,
           folderIds: const [],
@@ -431,7 +476,7 @@ class LockScreenService {
           sortOrder: sortOrder,
           reversed: reversed,
           bgColor: bgColor,
-          scheduleEnabled: newScheduleEnabled,
+          scheduleEnabled: LockToggleRule.scheduleEnabledAfterToggle,
           scheduleCsv: scheduleCsv,
         );
         // 원래 켜져 있던 것을 이번에 껐을 때만 알린다.

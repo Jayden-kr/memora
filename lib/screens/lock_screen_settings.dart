@@ -53,11 +53,17 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   bool _scheduleEnabled = false;
   List<LockScreenSlot> _slots = [];
 
-  // 화면에 보이는 시간대 전환 상태. 잠금화면이 꺼져 있으면 저장값과 무관하게 OFF로
-  // 보이고 손댈 수 없다(사용자 요청 2026-09-28 — 꺼진 잠금화면 아래 켜진 시간대 전환은
-  // 막을 것). 저장값 _scheduleEnabled·슬롯은 그대로 둬서 잠금화면을 다시 켜면 돌아온다.
-  // ⚠️ 저장·가드 로직(hasValidSlots, saveSettings)은 계속 _scheduleEnabled를 쓴다 —
-  // 여기로 바꾸면 잠금화면을 끄는 순간 OFF가 저장돼 복원이 깨진다.
+  // 화면에 보이는 시간대 전환 상태. 잠금화면이 꺼져 있으면 OFF로 보이고 손댈 수 없다
+  // (사용자 요청 2026-09-28).
+  // ⚠️ 규칙(사용자 요청 2026-10-06, LockToggleRule): 잠금화면을 켜든 끄든 — _onEnabledChanged,
+  // 오버레이 권한 거부로 꺼짐(_checkOverlayAndStartImpl), 폴더 삭제로 자동 꺼짐
+  // (LockScreenService.removeFoldersFromSettingsBatch) — _scheduleEnabled를 false로 만들어
+  // 저장한다. 잠금화면을 켜도 시간대 전환이 저절로 켜지지 않는다. 슬롯(_slots/scheduleCsv)은
+  // 지우지 않아서 사용자가 시간대 전환을 다시 켜면 그대로 쓴다. 예전(d67c468)의 "꺼져 있는
+  // 동안 저장값을 보존했다가 복원"은 폐기됐다 — 되살리지 말 것.
+  // 저장·가드 로직(hasValidSlots, saveSettings)은 계속 _scheduleEnabled를 쓴다(토글 직후엔
+  // false). 이 getter는 구버전이 저장한 "잠금화면 OFF + 시간대 ON" 값이 읽혀 와도 화면에
+  // OFF로 보이게 하는 안전장치이고, 그 값은 다음 토글에서 false로 정리된다.
   bool get _scheduleShown => _enabled && _scheduleEnabled;
 
   static const _sortOptions = <String>[
@@ -236,7 +242,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
         return;
       } else {
         if (!mounted) return;
-        setState(() => _enabled = false);
+        // 잠금화면이 꺼지므로 시간대 전환도 끈다(LockToggleRule). 슬롯은 남긴다.
+        setState(() {
+          _enabled = false;
+          _scheduleEnabled = LockToggleRule.scheduleEnabledAfterToggle;
+        });
         // 화면만 되돌리지 않고 저장도 한다 — 디바운스 저장이 다이얼로그 사이에 _enabled=true로
         // 발화했을 수 있어, 안 그러면 "화면은 OFF, 저장값은 ON"으로 갈린다.
         await _applySettings();
@@ -324,23 +334,35 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   Future<void> _onEnabledChanged(bool value) async {
-    // ⚠️ 유효한 시간대 슬롯이 있으면 기본 폴더 자동선택도, "폴더 없으면 활성화 불가"도
-    // 건너뛴다 — 슬롯만으로 도는 것도 정상 상태다. _applySettings의 같은 가드 참고.
-    final hasValidSlots = _scheduleEnabled && _slots.isNotEmpty;
-    if (value && _selectedFolderIds.isEmpty && _folders.isNotEmpty && !hasValidSlots) {
-      // 폴더 미선택 시 첫 번째 폴더 자동 선택
-      _selectedFolderIds.add(_folders.first.id!);
+    if (value) {
+      // ⚠️ 켠 뒤에 저장될 시간대 전환 값(false)으로 판정한다 — 켜는 순간 시간대 전환은
+      // 꺼지므로 "유효한 슬롯만으로 켜진다"는 예외는 여기선 적용되지 않는다(LockToggleRule).
+      // _applySettings의 같은 가드는 이미 켜진 상태에서 슬롯을 편집할 때를 위해 남아 있다.
+      final outcome = LockToggleRule.decideEnable(
+        hasSelectedFolder: _selectedFolderIds.isNotEmpty,
+        hasFolders: _folders.isNotEmpty,
+        scheduleEnabled: LockToggleRule.scheduleEnabledAfterToggle,
+        hasSlots: _slots.isNotEmpty,
+      );
+      if (outcome == LockEnableOutcome.blockedNoFolder) {
+        // 폴더가 아예 없으면 활성화 불가
+        if (!mounted) return;
+        final t = AppLocalizations.of(context);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(t.homeNoFolderFirst)));
+        return;
+      }
+      if (outcome == LockEnableOutcome.autoSelectFirstFolder) {
+        // 폴더 미선택 시 첫 번째 폴더 자동 선택
+        _selectedFolderIds.add(_folders.first.id!);
+      }
     }
-    if (value && _selectedFolderIds.isEmpty && !hasValidSlots) {
-      // 폴더가 아예 없으면 활성화 불가
-      if (!mounted) return;
-      final t = AppLocalizations.of(context);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(t.homeNoFolderFirst)));
-      return;
-    }
-    setState(() => _enabled = value);
+    // 켜든 끄든 시간대 전환은 꺼진다(슬롯은 보존) — LockToggleRule.
+    setState(() {
+      _enabled = value;
+      _scheduleEnabled = LockToggleRule.scheduleEnabledAfterToggle;
+    });
     if (value) {
       await _checkOverlayAndStart();
     } else {
@@ -395,6 +417,11 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
   }
 
   // ─── 시간대별 폴더 자동 전환 ───
+
+  void _onScheduleToggled(bool v) {
+    setState(() => _scheduleEnabled = v);
+    _onSettingChanged();
+  }
 
   Folder? _folderForId(int id) {
     for (final folder in _folders) {
@@ -988,17 +1015,21 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
               ),
             ),
 
-          // 시간대별 폴더 자동 전환
-          SwitchListTile(
+          // 시간대별 폴더 자동 전환. 앱의 다른 스위치와 같은 모양(ListTile + 0.8배 Switch)이다 —
+          // SwitchListTile은 쓰지 말 것(전체 크기 스위치; 테스트: switch_size_test). 행을 눌러도
+          // 토글되고(onTap), 잠금화면이 꺼져 있으면 행 전체가 비활성(회색)이다.
+          ListTile(
+            enabled: _enabled,
             title: Text(t.lockScheduleEnable),
             subtitle: Text(t.lockScheduleEnableSubtitle),
-            value: _scheduleShown,
-            onChanged: _enabled
-                ? (v) {
-                    setState(() => _scheduleEnabled = v);
-                    _onSettingChanged();
-                  }
-                : null,
+            onTap: _enabled ? () => _onScheduleToggled(!_scheduleShown) : null,
+            trailing: Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: _scheduleShown,
+                onChanged: _enabled ? _onScheduleToggled : null,
+              ),
+            ),
           ),
           if (_scheduleShown) ..._buildScheduleSection(t),
 
