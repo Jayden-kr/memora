@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_icons.dart';
 
 class FolderTile extends StatelessWidget {
   final Folder folder;
@@ -23,9 +24,11 @@ class FolderTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 사용자가 고른 아이콘/색이 있으면 그것을, 없으면 예전과 같은 기본(폴더/묶음 폴더 +
+    // 테마 primary)을 그린다. 기본 색은 테마를 따라가고 고른 색은 고정이다.
     final icon = Icon(
-      folder.isBundle ? Icons.folder_special : Icons.folder,
-      color: Theme.of(context).colorScheme.primary,
+      folderIconData(folder.icon, isBundle: folder.isBundle),
+      color: folderIconColor(folder.iconColor, Theme.of(context).colorScheme),
     );
 
     return ListTile(

@@ -124,6 +124,7 @@
   "homeDeselectAll": "전체 해제",
   "homeSelectAll": "전체 선택",
   "homeBundleEdit": "묶음 폴더 편집",
+  "homeChangeIcon": "아이콘 변경",
   "homeDrawerSummary": "카드 {cards}장 · 폴더 {folders}개",
   "@homeDrawerSummary": {
     "placeholders": {
@@ -602,6 +603,10 @@
   },
 
   "folderTileBundle": "묶음 폴더",
+  "folderIconTitle": "폴더 아이콘",
+  "folderIconColor": "색상",
+  "folderIconReset": "기본으로",
+  "folderIconSaveFail": "아이콘을 바꾸지 못했습니다.",
   "cardTileMenuEdit": "편집",
   "cardTileMenuDuplicate": "복제",
   "cardTileMenuMove": "다른 폴더로 이동",

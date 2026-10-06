@@ -181,20 +181,32 @@ class _HueBarPainter extends CustomPainter {
 /// 잠금화면 배경 커스텀 색상 다이얼로그를 띄운다. 사용자가 "적용"을 누르면
 /// 선택한 색(알파 포함)의 ARGB int를, "취소"하거나 바깥을 탭하면 `null`을
 /// 반환한다.
+///
+/// [showOpacity]가 false면 투명도 슬라이더를 감추고 결과를 항상 완전 불투명(알파
+/// 0xFF)으로 돌려준다 — 폴더 아이콘 색처럼 반투명이 의미 없는 곳에서 쓴다.
+/// [initialColor]에 알파가 섞여 있어도 결과는 RGB만 살린다.
 Future<int?> showColorPickerDialog({
   required BuildContext context,
   required int initialColor,
+  bool showOpacity = true,
 }) {
   return showDialog<int>(
     context: context,
-    builder: (_) => _ColorPickerDialog(initialColor: initialColor),
+    builder: (_) => _ColorPickerDialog(
+      initialColor: initialColor,
+      showOpacity: showOpacity,
+    ),
   );
 }
 
 class _ColorPickerDialog extends StatefulWidget {
-  const _ColorPickerDialog({required this.initialColor});
+  const _ColorPickerDialog({
+    required this.initialColor,
+    required this.showOpacity,
+  });
 
   final int initialColor;
+  final bool showOpacity;
 
   @override
   State<_ColorPickerDialog> createState() => _ColorPickerDialogState();
@@ -330,24 +342,27 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Text(t.lockBgOpacity, style: Theme.of(context).textTheme.bodySmall),
-            Row(
-              children: [
-                Expanded(
-                  child: Slider(
-                    value: opacityPercent.toDouble(),
-                    min: 0,
-                    max: 100,
-                    onChanged: _onOpacityChanged,
+            if (widget.showOpacity) ...[
+              const SizedBox(height: 16),
+              Text(t.lockBgOpacity,
+                  style: Theme.of(context).textTheme.bodySmall),
+              Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      value: opacityPercent.toDouble(),
+                      min: 0,
+                      max: 100,
+                      onChanged: _onOpacityChanged,
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: 44,
-                  child: Text('$opacityPercent%', textAlign: TextAlign.end),
-                ),
-              ],
-            ),
+                  SizedBox(
+                    width: 44,
+                    child: Text('$opacityPercent%', textAlign: TextAlign.end),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -357,7 +372,14 @@ class _ColorPickerDialogState extends State<_ColorPickerDialog> {
           child: Text(t.commonCancel),
         ),
         TextButton(
-          onPressed: () => Navigator.pop(context, previewColor.toARGB32()),
+          // 슬라이더를 감춘 모드에선 알파를 바꿀 길이 없으니 초기값/헥스 입력에 섞인
+          // 알파(#AARRGGBB)가 새어 나가지 않게 0xFF로 고정한다.
+          onPressed: () => Navigator.pop(
+            context,
+            widget.showOpacity
+                ? previewColor.toARGB32()
+                : previewColor.toARGB32() | 0xFF000000,
+          ),
           child: Text(t.lockBgApply),
         ),
       ],

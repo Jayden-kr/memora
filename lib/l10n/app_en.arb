@@ -74,6 +74,7 @@
   "homeDeselectAll": "Deselect all",
   "homeSelectAll": "Select all",
   "homeBundleEdit": "Edit bundle folder",
+  "homeChangeIcon": "Change icon",
   "homeDrawerSummary": "{cards} cards · {folders} folders",
   "homeAllCards": "All cards",
   "homePushAlarm": "Card push notification",
@@ -398,6 +399,10 @@
   "cardMoveResult": "Moved {moved}, skipped {skipped} duplicate(s).",
 
   "folderTileBundle": "Bundle folder",
+  "folderIconTitle": "Folder icon",
+  "folderIconColor": "Color",
+  "folderIconReset": "Reset to default",
+  "folderIconSaveFail": "Failed to change icon.",
   "cardTileMenuEdit": "Edit",
   "cardTileMenuDuplicate": "Duplicate",
   "cardTileMenuMove": "Move to folder",

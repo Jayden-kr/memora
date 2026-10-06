@@ -62,6 +62,11 @@ String _stripComments(String src) {
   return out.toString();
 }
 
+/// 다이얼로그 결과를 담는 상자(int? 반환값).
+class _ResultBox {
+  int? value;
+}
+
 void main() {
   group('tryParseHexColor', () {
     test('6자리 RGB, # 있음/없음 모두 완전 불투명으로 파싱', () {
@@ -335,6 +340,92 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  // showOpacity: 폴더 아이콘 색처럼 반투명이 의미 없는 곳은 슬라이더를 감추고 항상
+  // 불투명으로 돌려받는다. 기본(true)은 기존 동작 그대로여야 한다.
+  group('color picker dialog: showOpacity', () {
+    Future<_ResultBox> open(
+      WidgetTester tester, {
+      required int initial,
+      bool? showOpacity,
+    }) async {
+      final box = _ResultBox();
+      await tester.pumpWidget(MaterialApp(
+        locale: const Locale('en'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () async {
+                box.value = showOpacity == null
+                    ? await showColorPickerDialog(
+                        context: context,
+                        initialColor: initial,
+                      )
+                    : await showColorPickerDialog(
+                        context: context,
+                        initialColor: initial,
+                        showOpacity: showOpacity,
+                      );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.byType(ElevatedButton));
+      await tester.pumpAndSettle();
+      return box;
+    }
+
+    testWidgets('showOpacity:false면 투명도 슬라이더·라벨이 없다', (tester) async {
+      await open(tester, initial: 0xFF1A1A2E, showOpacity: false);
+
+      expect(find.byType(Slider), findsNothing);
+      expect(find.text('Opacity'), findsNothing);
+      // 나머지 선택 도구는 그대로.
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.byType(ColorSwatchPreview), findsOneWidget);
+    });
+
+    testWidgets('showOpacity:false면 알파가 섞인 hex를 적용해도 결과는 불투명', (tester) async {
+      final box = await open(tester, initial: 0xFF1A1A2E, showOpacity: false);
+
+      await tester.enterText(find.byType(TextField), '#80112233');
+      await tester.pump();
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+
+      expect(box.value, 0xFF112233);
+    });
+
+    testWidgets('showOpacity:false면 초기값에 알파가 있어도 그대로 적용하면 불투명',
+        (tester) async {
+      final box = await open(tester, initial: 0x801A1A2E, showOpacity: false);
+
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+
+      expect(box.value, 0xFF1A1A2E);
+    });
+
+    testWidgets('기본값(true)은 슬라이더가 있고 알파를 그대로 돌려준다(기존 동작)',
+        (tester) async {
+      final box = await open(tester, initial: 0xFF1A1A2E);
+
+      expect(find.byType(Slider), findsOneWidget);
+      expect(find.text('Opacity'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '#80112233');
+      await tester.pump();
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+
+      // 0x80 알파가 살아 있다 — 위 :false 테스트가 우연히 초록이 아님을 보이는 대조군.
+      expect(box.value, 0x80112233);
     });
   });
 

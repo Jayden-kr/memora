@@ -13,6 +13,7 @@ import '../utils/folder_label.dart';
 import '../utils/serial_task_queue.dart';
 import '../utils/name_sort.dart';
 import '../widgets/confirm_delete_dialog.dart';
+import '../widgets/folder_icon_dialog.dart';
 import '../widgets/folder_name_dialog.dart';
 import '../widgets/folder_tile.dart';
 import '../app.dart';
@@ -692,6 +693,37 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     await _renameFolder(folder);
   }
 
+  /// 선택한 폴더 하나의 아이콘·색을 바꾼다(일반 폴더·묶음 폴더 공통). [_renameFolder]와
+  /// 같은 규칙 — 아이콘·색 두 열만 UPDATE하고(스냅샷 되쓰기 금지, D1-03) 실패는 알린다.
+  Future<void> _changeSelectedFolderIcon() async {
+    final selectedList =
+        _folders.where((f) => _selectedFolderIds.contains(f.id)).toList();
+    if (selectedList.length != 1) return;
+    final folder = selectedList.first;
+    if (folder.id == null) return;
+    _clearSelection();
+    final t = AppLocalizations.of(context);
+    final choice = await showFolderIconDialog(context: context, folder: folder);
+    if (choice == null) return; // 취소
+    if (!mounted) return;
+    try {
+      await DatabaseHelper.instance.updateFolderIcon(
+        folder.id!,
+        icon: choice.icon,
+        iconColor: choice.iconColor,
+      );
+    } catch (e) {
+      debugPrint('[HOME] change folder icon failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.folderIconSaveFail)),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await _loadFolders();
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -866,6 +898,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'rename') _renameSelectedFolder();
+              if (value == 'icon') _changeSelectedFolderIcon();
               if (value == 'edit_bundle') {
                 final folder = selectedList.first;
                 _clearSelection();
@@ -876,6 +909,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
               PopupMenuItem(
                 value: 'rename',
                 child: Text(t.commonRename),
+              ),
+              // 일반 폴더·묶음 폴더 모두 아이콘을 바꿀 수 있다(조건 없음).
+              PopupMenuItem(
+                value: 'icon',
+                child: Text(t.homeChangeIcon),
               ),
               if (selectedList.first.isBundle)
                 PopupMenuItem(
@@ -1269,6 +1307,37 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
     await _loadChildren();
   }
 
+  /// 선택한 자식 폴더 하나의 아이콘·색을 바꾼다([_renameSelected]와 같은 모양, 같은
+  /// 규칙 — 두 열만 UPDATE, 실패는 알림).
+  Future<void> _changeIconSelected() async {
+    final selected =
+        _children.where((f) => _selectedIds.contains(f.id)).toList();
+    if (selected.length != 1) return;
+    final folder = selected.first;
+    if (folder.id == null) return;
+    final t = AppLocalizations.of(context);
+    final choice = await showFolderIconDialog(context: context, folder: folder);
+    if (choice == null) return; // 취소
+    if (!mounted) return;
+    try {
+      await DatabaseHelper.instance.updateFolderIcon(
+        folder.id!,
+        icon: choice.icon,
+        iconColor: choice.iconColor,
+      );
+    } catch (e) {
+      debugPrint('[BUNDLE] change icon failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(t.folderIconSaveFail)),
+      );
+      return;
+    }
+    if (!mounted) return;
+    _clearSelection();
+    await _loadChildren();
+  }
+
   Future<void> _deleteSelected() async {
     if (_isDeleting) return;
     final t = AppLocalizations.of(context);
@@ -1350,12 +1419,18 @@ class _BundleChildListScreenState extends State<_BundleChildListScreen> {
           tooltip: t.commonDelete,
           onPressed: _deleteSelected,
         ),
-        if (_selectedIds.length == 1)
+        if (_selectedIds.length == 1) ...[
           IconButton(
             icon: const Icon(Icons.drive_file_rename_outline),
             tooltip: t.commonRename,
             onPressed: _renameSelected,
           ),
+          IconButton(
+            icon: const Icon(Icons.palette_outlined),
+            tooltip: t.homeChangeIcon,
+            onPressed: _changeIconSelected,
+          ),
+        ],
       ],
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../database/database_helper.dart';
 import '../l10n/app_localizations.dart';
 import '../models/folder.dart';
+import '../utils/folder_icons.dart';
 import '../utils/folder_label.dart';
 
 class BundleFolderScreen extends StatefulWidget {
@@ -187,10 +188,14 @@ class _BundleFolderScreenState extends State<BundleFolderScreen> {
                                 });
                               }
                             : null,
+                        // 모양은 사용자가 고른 아이콘, 색도 고른 색(없으면 테마색).
+                        // 이미 다른 묶음에 있는(선택 불가) 폴더는 모양만 따르고 색은
+                        // 예전처럼 흐린 회색 — "못 고른다"는 신호를 색으로 덮지 않는다.
                         secondary: Icon(
-                          Icons.folder,
+                          folderIconData(folder.icon, isBundle: false),
                           color: available
-                              ? Theme.of(context).colorScheme.primary
+                              ? folderIconColor(folder.iconColor,
+                                  Theme.of(context).colorScheme)
                               : Theme.of(context)
                                   .colorScheme
                                   .onSurface
