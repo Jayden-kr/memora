@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memora/screens/card_list_screen.dart';
+import 'package:memora/widgets/card_tile.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 /// 대량 목록(ScrollablePositionedList) 점프 = "다시 마운트" 방식의 계약.
@@ -14,8 +15,10 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 /// (F3) 검색을 닫은 뒤 앵커 카드가 화면 위로 벗어나고, (F4) 위치 복원 점프가 어긋났다.
 ///
 /// 화면(sqlite 의존)은 못 띄우므로, 화면이 쓰는 같은 최상위 도우미(SplRemountController·
-/// reanchorTappedCard·laidOutAboveListTarget)를 평범한 SPL 호스트에 붙여서 검증한다. 호스트의
+/// keepTappedCardUnderFinger·laidOutAboveListTarget)를 평범한 SPL 호스트에 붙여서 검증한다. 호스트의
 /// 칸/탭 처리는 화면의 _buildCardItem/_toggleQuestionFold와 같은 모양(Builder → 탭 → 붙잡기 → setState)이다.
+/// 이 파일의 칸은 합성 칸(CardTile 아님)이라 새 높이를 모른다(예측 null) — 위쪽 가장자리 그대로 두되 target 위쪽
+/// 칸은 다시 마운트하는 경로를 본다. 손가락 밑·예측 높이는 card_list_fold_keep_under_finger_test가 진짜 CardTile로 본다.
 /// 기기 크기는 실기기(S20, 뷰포트 약 636dp, 목록 위쪽 약 193dp)와 같게 맞춘다.
 ///
 /// "전제 확인" 테스트는 옛 방식(raw SPL jumpTo)이 실제로 이 SPL에서 틀어진다는 것을 보여 주는 대조군이다 —
@@ -35,14 +38,16 @@ enum _Mode {
 
 typedef _Pin = void Function(_Rig rig, BuildContext itemContext, int index);
 
-/// 화면의 _keepTappedCardInPlace: 같은 reanchorTappedCard를 부른다.
+/// 화면의 _keepTappedCardUnderFinger: 같은 keepTappedCardUnderFinger를 부른다 (손가락 없음, 합성 칸 → 새 높이 모름).
 void _pinReal(_Rig rig, BuildContext c, int i) {
-  reanchorTappedCard(
-    spl: rig.spl,
+  keepTappedCardUnderFinger(
+    hostContext: rig.hostContext,
     itemContext: c,
     index: i,
     itemCount: rig.heights.length,
-    kind: CardResizeKind.questionToggle, // 이 호스트는 질문 탭 모양 (위쪽 가장자리 고정)
+    tap: CardTileTap.question, // 이 호스트는 질문 탭 모양
+    fingerGlobal: null,
+    spl: rig.spl,
     setState: rig.setOuter,
   );
 }
@@ -92,6 +97,7 @@ class _Rig {
   bool showList = true;
   bool settling = false; // wrapInOpacity일 때 true면 투명 (화면의 _settlingSearchExit)
   late StateSetter setOuter;
+  late BuildContext hostContext; // 화면 State의 context 자리 (다시 빌드 대기 중이면 붙잡지 않는다)
 
   /// 화면의 _jumpSplTo 자리.
   void jump(int index, {double alignment = 0}) {
@@ -146,6 +152,7 @@ class _Rig {
               height: kVp,
               child: StatefulBuilder(builder: (context, ss) {
                 setOuter = ss;
+                hostContext = context;
                 // 화면처럼 Stack의 자식으로 둔다 (목록 위에 스크롤 인디케이터가 얹히는 구조).
                 // 점프 도우미는 부모가 Stack이어도 안전해야 한다 (SizedBox.expand 래퍼).
                 final Widget list = showList ? _list() : const SizedBox();
@@ -387,12 +394,14 @@ void main() {
       await tester.pump();
       expect(rig.isc.isAttached, isFalse);
       final epochBefore = rig.spl.epoch;
-      final pinned = reanchorTappedCard(
-        spl: rig.spl,
+      final pinned = keepTappedCardUnderFinger(
+        hostContext: tester.element(find.byType(Scaffold)),
         itemContext: tester.element(find.byType(Scaffold)),
         index: 5,
         itemCount: 50,
-        kind: CardResizeKind.questionToggle,
+        tap: CardTileTap.question,
+        fingerGlobal: null,
+        spl: rig.spl,
         setState: rig.setOuter,
       );
       expect(pinned, isFalse);
@@ -768,45 +777,92 @@ void main() {
       expect(re.hasMatch(b), isTrue, reason: what);
     }
 
-    test('접기/보이기는 붙잡기(_keepTappedCardInPlace)를 setState 전에 칸 컨텍스트(itemContext)와 의도(kind)로 부른다', () {
-      // 질문 탭: 늘어나든 줄어들든 위쪽 가장자리 고정 → 항상 questionToggle.
-      final q = body('void _toggleQuestionFold');
-      final qPin = RegExp(
-              r'_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*,\s*CardResizeKind\.questionToggle\s*\)')
-          .firstMatch(q);
-      expect(qPin, isNotNull,
-          reason: '_toggleQuestionFold가 _keepTappedCardInPlace(cardId, itemContext, CardResizeKind.questionToggle)를 부르지 않는다');
-      expect(q.indexOf('setState('), greaterThan(qPin!.start),
-          reason: '_toggleQuestionFold: 붙잡기는 높이를 바꾸는 setState보다 먼저여야 한다');
-      expect(q.contains('answerHide') || q.contains('answerReveal'), isFalse,
-          reason: '질문 탭이 답 숨기기(아래쪽 고정) 의도를 쓰면 잘린 카드의 손가락 밑 카드가 바뀐다');
+    // 배선 규칙은 한 곳(아래 정규식·검사 함수)에 두고, 실제 소스 검사와 가드 대조군(깨뜨린 합성 소스)이 같이 쓴다.
+    final questionPinRe = RegExp(
+        r'_keepTappedCardUnderFinger\(\s*cardId\s*,\s*itemContext\s*,\s*CardTileTap\.question\s*\)');
+    final answerPinRe = RegExp(
+        r'if\s*\(\s*_allAnswersHidden\s*\)\s*_keepTappedCardUnderFinger\(\s*cardId\s*,\s*itemContext\s*,\s*CardTileTap\.answer\s*\)\s*;');
+    final dirtyGuardRe = RegExp(
+        r'^\s*if\s*\(\s*hostContext\s+is\s+Element\s*&&\s*hostContext\.dirty\s*\)\s*return\s+false;');
 
-      // 답 탭: 숨김 모드일 때만(answerTapResizeKind가 null이면 건너뜀), 지금 보이는 상태에서 의도를 정한다.
-      final a = body('void _toggleAnswerReveal');
-      final kindRe = RegExp(
-          r'final\s+kind\s*=\s*answerTapResizeKind\(\s*allAnswersHidden:\s*_allAnswersHidden\s*,\s*answerRevealed:\s*_revealedCards\.contains\(\s*cardId\s*\)\s*,?\s*\)\s*;');
-      final kindM = kindRe.firstMatch(a);
-      expect(kindM, isNotNull,
-          reason: '_toggleAnswerReveal이 answerTapResizeKind(allAnswersHidden: _allAnswersHidden, answerRevealed: _revealedCards.contains(cardId))로 의도를 정하지 않는다');
-      final aPin = RegExp(
-              r'if\s*\(\s*kind\s*!=\s*null\s*\)\s*_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*,\s*kind\s*\)\s*;')
-          .firstMatch(a);
-      expect(aPin, isNotNull,
-          reason: '_toggleAnswerReveal이 kind != null일 때만 _keepTappedCardInPlace(cardId, itemContext, kind)를 부르지 않는다 (숨김 모드가 아니면 붙잡기 금지)');
-      expect(aPin!.start, greaterThan(kindM!.end));
-      expect(a.indexOf('setState('), greaterThan(aPin.start),
-          reason: '_toggleAnswerReveal: 붙잡기는 높이를 바꾸는 setState보다 먼저여야 한다');
+    /// _toggleQuestionFold: 질문 탭 종류로, 높이를 바꾸는 setState보다 먼저 부른다.
+    bool questionWired(String src) {
+      final q = functionBody(src, 'void _toggleQuestionFold');
+      if (q == null) return false;
+      final m = questionPinRe.firstMatch(q);
+      return m != null && q.indexOf('setState(') > m.start && !q.contains('CardTileTap.answer');
+    }
+
+    /// _toggleAnswerReveal: 숨김 모드일 때만(`if (_allAnswersHidden)`), 답 탭 종류로, setState보다 먼저, 정확히 한 번.
+    bool answerWired(String src) {
+      final a = functionBody(src, 'void _toggleAnswerReveal');
+      if (a == null) return false;
+      final ms = answerPinRe.allMatches(a).toList();
+      return ms.length == 1 &&
+          a.indexOf('setState(') > ms.first.start &&
+          RegExp(r'_keepTappedCardUnderFinger\(').allMatches(a).length == 1;
+    }
+
+    /// _keepTappedCardUnderFinger: 화면 State의 context(hostContext: context)·칸 컨텍스트·탭 종류·손가락 위치를 넘긴다.
+    bool wrapperWired(String src) {
+      final b = functionBody(src, 'void _keepTappedCardUnderFinger');
+      if (b == null) return false;
+      return [
+        RegExp(r'keepTappedCardUnderFinger\('),
+        RegExp(r'hostContext:\s*context\b'),
+        RegExp(r'itemContext:\s*itemContext\b'),
+        RegExp(r'index:\s*index\b'),
+        RegExp(r'itemCount:\s*_cards\.length\b'),
+        RegExp(r'tap:\s*tap\b'),
+        RegExp(r'fingerGlobal:\s*_releaseGlobal\b'),
+        RegExp(r'spl:\s*_useSimpleList\s*\?\s*null\s*:\s*_spl\b'),
+        RegExp(r'setState:\s*setState\b'),
+      ].every((re) => re.hasMatch(b));
+    }
+
+    /// keepTappedCardUnderFinger의 첫 문장: 화면이 다시 빌드를 기다리는 중이면 손대지 않는다.
+    bool dirtyGuarded(String src) {
+      final b = functionBody(src, 'bool keepTappedCardUnderFinger');
+      return b != null && dirtyGuardRe.hasMatch(b);
+    }
+
+    /// _recordRelease가 위치를 저장하고 마이크로태스크로 지우며, 칸 빌더가 onRelease로 연결한다.
+    bool releaseRecorded(String src) {
+      final r = functionBody(src, 'void _recordRelease');
+      return r != null &&
+          RegExp(r'_releaseGlobal\s*=\s*global').hasMatch(r) &&
+          r.contains('scheduleMicrotask(') &&
+          RegExp(r'_releaseGlobal\s*=\s*null').hasMatch(r);
+    }
+
+    bool releaseWired(String src) {
+      final b = functionBody(src, 'Widget _buildCardItem');
+      return b != null && RegExp(r'onRelease:\s*_recordRelease\b').hasMatch(b);
+    }
+
+    test('접기/보이기는 붙잡기(_keepTappedCardUnderFinger)를 setState 전에 칸 컨텍스트(itemContext)와 탭 종류로 부른다', () {
+      // 질문 탭: 질문 탭 종류, 높이를 바꾸는 setState보다 먼저, 답 탭 종류는 쓰지 않는다.
+      expect(questionWired(source), isTrue,
+          reason: '_toggleQuestionFold가 setState 전에 _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question)를 부르지 않는다 (답 탭 종류를 쓰면 예측이 엉뚱한 높이를 읽는다)');
+      // 답 탭: 숨김 모드일 때만. 숨김 모드가 아니면 높이가 안 바뀌어 붙잡으면 물결·접근성 포커스만 끊긴다.
+      expect(answerWired(source), isTrue,
+          reason: '_toggleAnswerReveal이 setState 전에 if (_allAnswersHidden) _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.answer);를 정확히 한 번 부르지 않는다 (숨김 모드가 아니면 붙잡기 금지)');
     });
 
-    test('_keepTappedCardInPlace는 reanchorTappedCard에 컨트롤러·칸 컨텍스트·setState를 넘긴다', () {
-      final b = body('void _keepTappedCardInPlace');
-      expectIn(b, RegExp(r'reanchorTappedCard\('), 'reanchorTappedCard 호출');
-      expectIn(b, RegExp(r'spl:\s*_spl\b'), 'spl: _spl');
-      expectIn(b, RegExp(r'itemContext:\s*itemContext\b'), 'itemContext: itemContext');
-      expectIn(b, RegExp(r'index:\s*index\b'), 'index: index');
-      expectIn(b, RegExp(r'itemCount:\s*_cards\.length\b'), 'itemCount: _cards.length');
-      expectIn(b, RegExp(r'kind:\s*kind\b'), 'kind: kind (호출자가 말한 의도를 그대로 넘긴다)');
-      expectIn(b, RegExp(r'setState:\s*setState\b'), 'setState: setState');
+    test('_keepTappedCardUnderFinger는 keepTappedCardUnderFinger에 화면 context·칸 컨텍스트·탭 종류·손가락 위치·컨트롤러·setState를 넘긴다', () {
+      expect(wrapperWired(source), isTrue,
+          reason: 'keepTappedCardUnderFinger(hostContext: context, itemContext: itemContext, index: index, itemCount: _cards.length, tap: tap, fingerGlobal: _releaseGlobal, spl: _useSimpleList ? null : _spl, setState: setState)');
+    });
+
+    test('keepTappedCardUnderFinger는 화면이 다시 빌드를 기다리는 중이면(hostContext.dirty) 첫 문장에서 손대지 않고 끝낸다', () {
+      expect(dirtyGuarded(source), isTrue,
+          reason: '첫 문장이 if (hostContext is Element && hostContext.dirty) return false; 여야 한다 — 새 검색 결과·점프가 setState만 해 둔 사이의 탭은 낡은 렌더 트리와 새 목록 인덱스를 섞는다');
+    });
+
+    test('손가락 뗀 위치는 _recordRelease가 저장하고 마이크로태스크로 지우며, 칸 빌더가 PressObserver.onRelease로 연결한다', () {
+      expect(releaseRecorded(source), isTrue,
+          reason: '_recordRelease는 _releaseGlobal = global 로 저장하고 scheduleMicrotask(...)로 지워야 한다 (접근성 탭이 옛 손가락 위치를 쓰지 않게)');
+      expect(releaseWired(source), isTrue, reason: '_buildCardItem의 PressObserver에 onRelease: _recordRelease가 없다');
     });
 
     test('칸 빌더는 접기/보이기에 목록 context가 아니라 칸 안쪽 itemContext(Builder)를 넘긴다', () {
@@ -822,6 +878,7 @@ void main() {
           'onAnswerTap → _toggleAnswerReveal(card, itemContext)');
       expect(RegExp(r'_toggle(QuestionFold|AnswerReveal)\(\s*card\s*,\s*context\s*\)').hasMatch(b), isFalse,
           reason: '목록 context를 넘기면 칸의 렌더 객체가 아니라 목록 전체를 보게 된다');
+      expectIn(b, RegExp(r'onRelease:\s*_recordRelease\b'), 'PressObserver(onRelease: _recordRelease) — 손가락 뗀 위치');
     });
 
     test('스크롤바 썸 드래그: 시작에서 beginThumbDrag, 점프는 thumbDragJumpTo(_pendingJumpIndex)', () {
@@ -862,35 +919,108 @@ void main() {
           '_spl.jumpTo(index, alignment: alignment, setState: setState)');
     });
 
-    // 가드 도구 자체의 대조군: 정규식·본문 추출이 "좋은 소스"는 통과시키고 "깨진 소스"는 잡는지.
-    test('가드 대조군: 좋은 소스는 통과, 깨뜨린 소스(호출 삭제·context 전달·본문 밖)는 실패', () {
+    // 가드 도구 자체의 대조군: 위의 같은 검사 함수가 "좋은 소스"는 통과시키고 "깨진 소스"는 잡는지.
+    test('가드 대조군: 좋은 소스는 통과, 깨뜨린 소스(if 삭제·setState 뒤·context 전달·dirty 가드 삭제·손가락 기록 삭제)는 실패', () {
       const good = '''
 class S {
+  void _toggleQuestionFold(CardModel card, BuildContext itemContext) {
+    final cardId = card.id;
+    _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question);
+    setState(() { _folded.add(cardId); });
+  }
   void _toggleAnswerReveal(CardModel card, BuildContext itemContext) {
     final cardId = card.id;
-    _keepTappedCardInPlace(cardId, itemContext);
+    if (_allAnswersHidden) _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.answer);
     setState(() { _revealed.add(cardId); });
+  }
+  void _keepTappedCardUnderFinger(
+      int cardId, BuildContext itemContext, CardTileTap tap) {
+    keepTappedCardUnderFinger(
+      hostContext: context,
+      itemContext: itemContext,
+      index: index,
+      itemCount: _cards.length,
+      tap: tap,
+      fingerGlobal: _releaseGlobal,
+      spl: _useSimpleList ? null : _spl,
+      setState: setState,
+    );
+  }
+  void _recordRelease(Offset global) {
+    _releaseGlobal = global;
+    scheduleMicrotask(() { _releaseGlobal = null; });
+  }
+  Widget _buildCardItem(BuildContext context, int index) {
+    return PressObserver(onRelease: _recordRelease, onPress: () {}, child: x);
   }
   void other({int a = 0}) {
     final cardId = 1;
-    _keepTappedCardInPlace(cardId, itemContext);
+    _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question);
   }
+}
+bool keepTappedCardUnderFinger({required BuildContext hostContext}) {
+  if (hostContext is Element && hostContext.dirty) return false;
+  return true;
 }''';
-      final pinRe = RegExp(r'_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*\)');
-      final g = functionBody(good, 'void _toggleAnswerReveal')!;
-      expect(pinRe.hasMatch(g), isTrue);
-      // 호출 삭제
-      final removed = good.replaceFirst('_keepTappedCardInPlace(cardId, itemContext);', '');
-      expect(pinRe.hasMatch(functionBody(removed, 'void _toggleAnswerReveal')!), isFalse);
-      // 목록 context 전달
-      final wrongCtx = good.replaceFirst('(cardId, itemContext)', '(cardId, context)');
-      expect(pinRe.hasMatch(functionBody(wrongCtx, 'void _toggleAnswerReveal')!), isFalse);
-      // 다른 함수 본문에 같은 호출이 있어도 이 함수 본문이 아니면 잡는다 (본문 범위 검사)
-      final moved = good.replaceFirst('_keepTappedCardInPlace(cardId, itemContext);\n    setState', 'setState');
-      expect(moved, isNot(good), reason: '대조군 치환이 실제로 일어나야 한다');
-      expect(pinRe.hasMatch(moved), isTrue, reason: '소스 전체에는 같은 호출이 남아 있다(다른 함수)');
-      expect(pinRe.hasMatch(functionBody(moved, 'void _toggleAnswerReveal')!), isFalse);
-      expect(pinRe.hasMatch(functionBody(good, 'void other')!), isTrue,
+      bool all(String src) =>
+          questionWired(src) &&
+          answerWired(src) &&
+          wrapperWired(src) &&
+          dirtyGuarded(src) &&
+          releaseRecorded(src) &&
+          releaseWired(src);
+      String broke(String from, String to) {
+        expect(good.contains(from), isTrue, reason: '대조군 치환 대상이 있어야 한다: $from');
+        final r = good.replaceFirst(from, to);
+        expect(r, isNot(good), reason: '대조군 치환이 실제로 일어나야 한다');
+        return r;
+      }
+
+      expect(all(good), isTrue, reason: '좋은 합성 소스는 전부 통과해야 한다');
+
+      // 답 탭: 숨김 모드 조건 삭제
+      final noIf = broke('if (_allAnswersHidden) _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.answer);',
+          '_keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.answer);');
+      expect(answerWired(noIf), isFalse);
+      expect(questionWired(noIf), isTrue, reason: '다른 검사는 영향이 없다');
+      // 답 탭: 호출 삭제
+      expect(
+          answerWired(broke('if (_allAnswersHidden) _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.answer);', '')),
+          isFalse);
+      // 질문 탭: 호출이 setState 뒤
+      final after = broke(
+          '    _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question);\n    setState(() { _folded.add(cardId); });',
+          '    setState(() { _folded.add(cardId); });\n    _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question);');
+      expect(questionWired(after), isFalse);
+      // 질문 탭: 답 탭 종류 / 목록 context
+      expect(questionWired(broke('(cardId, itemContext, CardTileTap.question);\n    setState', '(cardId, itemContext, CardTileTap.answer);\n    setState')), isFalse);
+      expect(questionWired(broke('_keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question);\n    setState', '_keepTappedCardUnderFinger(cardId, context, CardTileTap.question);\n    setState')), isFalse);
+      // 래퍼: 칸 컨텍스트를 화면 context로 대신 넘김 (hostContext 자리에 itemContext)
+      final hostItem = broke('hostContext: context,', 'hostContext: itemContext,');
+      expect(wrapperWired(hostItem), isFalse);
+      expect(wrapperWired(broke('fingerGlobal: _releaseGlobal,', 'fingerGlobal: null,')), isFalse);
+      expect(wrapperWired(broke('spl: _useSimpleList ? null : _spl,', 'spl: _spl,')), isFalse);
+      // dirty 가드 삭제 / 첫 문장이 아님
+      final noGuard = broke('  if (hostContext is Element && hostContext.dirty) return false;\n', '');
+      expect(dirtyGuarded(noGuard), isFalse);
+      expect(
+          dirtyGuarded(broke('  if (hostContext is Element && hostContext.dirty) return false;\n  return true;',
+              '  final x = 1;\n  if (hostContext is Element && hostContext.dirty) return false;\n  return true;')),
+          isFalse,
+          reason: '첫 문장이 아니면 안 된다');
+      // 손가락 기록: 마이크로태스크 삭제 / 저장 삭제 / onRelease 연결 삭제
+      expect(releaseRecorded(broke('scheduleMicrotask(() { _releaseGlobal = null; });', '')), isFalse);
+      expect(releaseRecorded(broke('scheduleMicrotask(() { _releaseGlobal = null; });', 'scheduleMicrotask(() {});')), isFalse,
+          reason: '마이크로태스크가 있어도 안에서 지우지 않으면 옛 손가락 위치가 남는다');
+      expect(releaseRecorded(broke('_releaseGlobal = global;', '')), isFalse);
+      expect(releaseWired(broke('onRelease: _recordRelease, ', '')), isFalse);
+      // 본문 범위: 다른 함수(other)에 같은 호출이 있어도 _toggleQuestionFold 본문이 아니면 잡는다
+      final moved = broke(
+          '    _keepTappedCardUnderFinger(cardId, itemContext, CardTileTap.question);\n    setState(() { _folded.add(cardId); });',
+          '    setState(() { _folded.add(cardId); });');
+      expect(questionPinRe.hasMatch(moved), isTrue, reason: '소스 전체에는 같은 호출이 남아 있다(다른 함수)');
+      expect(questionWired(moved), isFalse);
+      expect(functionBody(good, 'void other')!.contains('CardTileTap.question'), isTrue,
           reason: '이름 있는 매개변수({}) 뒤의 본문도 찾는다');
       expect(functionBody(good, 'void noSuchFunction'), isNull);
       // 닫는 중괄호를 지나쳐 다음 함수까지 먹지 않는다

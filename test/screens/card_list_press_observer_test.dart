@@ -129,4 +129,87 @@ void main() {
     await tester.pump();
     expect(presses, 1);
   });
+
+  // ─── onRelease: 접기/보이기가 "손가락이 카드의 어디였는지"를 읽는 통로 ───
+
+  Widget releaseApp({
+    required List<Offset> released,
+    required List<int> pressed,
+    VoidCallback? onInnerTap,
+    VoidCallback? onAncestorTapUp,
+  }) {
+    Widget tree = PressObserver(
+      onPress: () => pressed.add(1),
+      onRelease: released.add,
+      child: GestureDetector(
+        onTap: onInnerTap,
+        child: const SizedBox(width: 200, height: 200, child: Text('tile')),
+      ),
+    );
+    if (onAncestorTapUp != null) {
+      tree = GestureDetector(onTapUp: (_) => onAncestorTapUp(), child: tree);
+    }
+    return MaterialApp(home: Scaffold(body: Align(alignment: Alignment.topLeft, child: tree)));
+  }
+
+  testWidgets('P1 onRelease는 누름이면 뗀 위치 그대로, touch slop을 넘긴 드래그도 불린다 (onPress는 누름만)', (tester) async {
+    final released = <Offset>[];
+    final pressed = <int>[];
+    await tester.pumpWidget(releaseApp(released: released, pressed: pressed));
+
+    await tester.tapAt(const Offset(50, 60));
+    await tester.pump();
+    expect(released, [const Offset(50, 60)]);
+    expect(pressed.length, 1);
+
+    final g = await tester.startGesture(const Offset(100, 100));
+    await g.moveTo(const Offset(100, 180)); // touch slop(18)을 훌쩍 넘김
+    await g.up();
+    await tester.pump();
+    expect(released.length, 2, reason: '드래그도 손가락을 떼면 onRelease가 불린다');
+    expect(released.last, const Offset(100, 180));
+    expect(pressed.length, 1, reason: '드래그는 누름이 아니라 onPress는 안 불린다');
+  });
+
+  testWidgets('P2 안쪽 GestureDetector.onTap이 불리는 시점에 onRelease가 저장한 위치를 이미 볼 수 있다 (탭보다 먼저)',
+      (tester) async {
+    Offset? stored;
+    Offset? seenInTap;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.topLeft,
+          child: PressObserver(
+            onPress: () {},
+            onRelease: (p) => stored = p,
+            child: GestureDetector(
+              onTap: () => seenInTap = stored,
+              child: const SizedBox(width: 200, height: 200, child: Text('tile')),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.tapAt(const Offset(50, 60));
+    await tester.pump();
+    expect(seenInTap, const Offset(50, 60), reason: 'onRelease가 onTap보다 먼저 불려야 접기 탭이 손가락 위치를 읽는다');
+  });
+
+  testWidgets('NC 조상 GestureDetector.onTapUp은 안쪽이 탭을 이기면 한 번도 안 불린다 (그래서 onRelease는 Listener다)',
+      (tester) async {
+    var ancestorTapUp = 0;
+    var innerTaps = 0;
+    final released = <Offset>[];
+    await tester.pumpWidget(releaseApp(
+      released: released,
+      pressed: <int>[],
+      onInnerTap: () => innerTaps++,
+      onAncestorTapUp: () => ancestorTapUp++,
+    ));
+    await tester.tapAt(const Offset(50, 60));
+    await tester.pump();
+    expect(innerTaps, 1);
+    expect(ancestorTapUp, 0, reason: '탭 제스처는 가장 안쪽이 이긴다 — 위쪽 onTapUp으로는 손가락 위치를 못 읽는다');
+    expect(released, [const Offset(50, 60)], reason: 'Listener 기반 onRelease는 같은 탭에서도 불린다');
+  });
 }
