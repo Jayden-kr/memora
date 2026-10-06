@@ -20,10 +20,14 @@ const double kTop = 193;
 const double kVp = 636;
 
 class _Rig {
-  _Rig(this.heights, {this.pin = true});
+  _Rig(this.heights, {this.pin = true, this.fixedKind});
 
   final List<double> heights;
   final bool pin; // false면 붙잡지 않는 대조군
+
+  /// null이면 "답 탭" 모양: 접히는 탭=답 숨기기(줄어듦), 펴지는 탭=답 보이기(커짐).
+  /// 값이 있으면 그 의도로 고정(예: 질문 탭).
+  final CardResizeKind? fixedKind;
   final isc = ItemScrollController();
   final ipl = ItemPositionsListener.create();
   late final SplRemountController spl =
@@ -43,6 +47,10 @@ class _Rig {
                 itemContext: itemContext,
                 index: i,
                 itemCount: heights.length,
+                kind: fixedKind ??
+                    (folded.contains(i)
+                        ? CardResizeKind.answerReveal
+                        : CardResizeKind.answerHide),
                 setState: setOuter,
               );
             }
@@ -117,7 +125,9 @@ void main() {
   group('위로 잘린 칸을 접으면 아래쪽 가장자리가 고정되어 카드가 화면에 남는다', () {
     List<double> heights() => [for (var i = 0; i < 30; i++) i == 10 ? 500.0 : 200.0];
 
-    for (final fingerY in [100.0, 300.0]) {
+    // 손가락은 줄어든 카드(290~350) 안에 있는 자리만 쓴다. 이 카드는 500→60dp로 줄어서 손가락이 y=290
+    // 위에 있었다면 어느 고정 방식으로도 그 카드를 손가락 밑에 둘 수 없다 (아래 별도 테스트 참고).
+    for (final fingerY in [300.0, 345.0]) {
       testWidgets('target 이상 칸 (target 0), 손가락 y=$fingerY', (tester) async {
         final h = heights();
         final rig = _Rig(h);
@@ -139,11 +149,27 @@ void main() {
         expect(r!.bottom, closeTo(350, 1.0), reason: '아래쪽 가장자리 고정');
         expect(r.top, closeTo(290, 1.0));
         expect(_rect(tester, 11)!.top, closeTo(r.bottom, 0.5), reason: '바로 아래는 다음 카드');
-        if (fingerY > 290) {
-          expect(r.contains(Offset(100, fingerY)), isTrue, reason: '손가락 밑에 그 카드가 남는다');
-        }
+        expect(r.contains(Offset(100, fingerY)), isTrue, reason: '손가락 밑에 그 카드가 남는다');
       });
     }
+
+    testWidgets('손가락이 줄어든 카드 위쪽(y=100)이었어도 카드는 화면에 남고 아래쪽 가장자리는 고정이다', (tester) async {
+      // 500→60dp로 줄어드는 카드(-150~350)의 y=100을 눌렀다면 줄어든 카드(290~350)는 손가락 밑에 올 수 없다
+      // (손가락 자리를 따라가는 방식은 이 화면의 규칙이 아니다). 그래도 카드가 사라지면 안 된다.
+      final h = heights();
+      final rig = _Rig(h);
+      await _mount(tester, rig);
+      _primary(tester).jumpTo(_sum(h, 0, 10) + 150);
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(100, kTop + 100));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(rig.folded, contains(10));
+      final r = _rect(tester, 10);
+      expect(r, isNotNull);
+      expect(r!.bottom, closeTo(350, 1.0));
+      expect(r.top, closeTo(290, 1.0));
+    });
 
     testWidgets('(전제 확인) 붙잡지 않으면 카드가 통째로 화면 위로 사라진다', (tester) async {
       final h = heights();
@@ -197,6 +223,37 @@ void main() {
       expect(r.contains(const Offset(100, 300)), isTrue);
     });
 
+    testWidgets('질문 탭: target 위쪽 칸이 위로 잘려 있어도 위쪽 가장자리가 고정된다 (접기·펴기, 다시 마운트)',
+        (tester) async {
+      final h = [for (var i = 0; i < 60; i++) i == 20 ? 500.0 : 200.0];
+      final rig = _Rig(h, fixedKind: CardResizeKind.questionToggle);
+      await _mount(tester, rig);
+      rig.spl.jumpTo(40, setState: rig.setOuter);
+      await tester.pumpAndSettle();
+      _primary(tester).jumpTo(-_sum(h, 20, 40) + 30); // 카드 20 위쪽 -30 (잘림), 아래쪽 470
+      await tester.pumpAndSettle();
+      expect(_rect(tester, 20)!.top, closeTo(-30, 0.5));
+      var epoch = rig.spl.epoch;
+
+      await tester.tapAt(const Offset(100, kTop + 100)); // 접기
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(rig.folded, contains(20));
+      expect(rig.spl.epoch, greaterThan(epoch), reason: '위쪽 가장자리를 고정하려고 다시 마운트');
+      expect(_rect(tester, 20)!.top, closeTo(-30, 1.0), reason: '질문 탭은 위쪽 가장자리 고정');
+      expect(_rect(tester, 20)!.bottom, closeTo(30, 1.0));
+      expect(_rect(tester, 21)!.top, closeTo(30, 0.5));
+      epoch = rig.spl.epoch;
+
+      await tester.tapAt(const Offset(100, kTop + 10)); // 펴기 (줄어든 카드 -30~30 위)
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(rig.folded, isNot(contains(20)));
+      expect(rig.spl.epoch, epoch, reason: '이제 이 카드가 target이라 위쪽이 원래 고정 — 다시 마운트하지 않는다');
+      expect(_rect(tester, 20)!.top, closeTo(-30, 1.0), reason: '펴도 위쪽 가장자리는 그대로');
+      expect(_rect(tester, 20)!.bottom, closeTo(470, 1.0));
+    });
+
     testWidgets('마지막 칸(다음 칸 없음)이 위로 잘려 있어도 접으면 화면에 남는다', (tester) async {
       final h = [for (var i = 0; i < 30; i++) i == 29 ? 800.0 : 200.0];
       final rig = _Rig(h);
@@ -224,35 +281,115 @@ void main() {
     });
   });
 
-  group('resizePinFor (순수 판정)', () {
+  group('resizePinFor (순수 판정, 의도별)', () {
     // 렌더 트리 위치는 위 통합 테스트가 보증한다. 여기서는 판정 분기만.
-    testWidgets('위쪽이 화면 안인 target 이상 칸은 건드리지 않는다 (null)', (tester) async {
+    ({int index, double alignment})? pinOf(
+      WidgetTester tester,
+      _Rig rig,
+      int index,
+      CardResizeKind kind, {
+      int target = 0,
+    }) =>
+        resizePinFor(
+          itemContext: tester.element(_card(index)),
+          positions: rig.ipl.itemPositions.value,
+          index: index,
+          targetIndex: target,
+          itemCount: rig.heights.length,
+          kind: kind,
+        );
+
+    testWidgets('target 이상 칸: 위쪽이 화면 안이면 어느 의도든 null', (tester) async {
       final h = [for (var i = 0; i < 30; i++) 200.0];
       final rig = _Rig(h);
       await _mount(tester, rig);
       _primary(tester).jumpTo(_sum(h, 0, 5) + 50); // 카드 5 위쪽 -50 → 카드 6 위쪽 150
       await tester.pumpAndSettle();
-      final ctx = tester.element(_card(6));
-      expect(
-        resizePinFor(
-          itemContext: ctx,
-          positions: rig.ipl.itemPositions.value,
-          index: 6,
-          targetIndex: 0,
-          itemCount: 30,
-        ),
-        isNull,
-      );
-      final pin = resizePinFor(
-        itemContext: tester.element(_card(5)),
-        positions: rig.ipl.itemPositions.value,
-        index: 5,
-        targetIndex: 0,
-        itemCount: 30,
-      );
+      for (final k in CardResizeKind.values) {
+        expect(pinOf(tester, rig, 6, k), isNull, reason: '$k');
+      }
+    });
+
+    testWidgets('target 이상 칸이 위로 잘렸을 때: 질문 탭·답 보이기는 위쪽 고정이라 null, 답 숨기기만 다음 칸을 아래쪽에 맞춘다',
+        (tester) async {
+      final h = [for (var i = 0; i < 30; i++) 200.0];
+      final rig = _Rig(h);
+      await _mount(tester, rig);
+      _primary(tester).jumpTo(_sum(h, 0, 5) + 50); // 카드 5: -50 ~ 150
+      await tester.pumpAndSettle();
+      expect(pinOf(tester, rig, 5, CardResizeKind.questionToggle), isNull);
+      expect(pinOf(tester, rig, 5, CardResizeKind.answerReveal), isNull);
+      final pin = pinOf(tester, rig, 5, CardResizeKind.answerHide);
       expect(pin, isNotNull);
       expect(pin!.index, 6);
       expect(pin.alignment, closeTo(150 / kVp, 0.001));
+    });
+
+    testWidgets('target 위쪽 칸: 위쪽이 보이면 의도와 무관하게 그 칸을 지금 자리에 target으로 삼는다', (tester) async {
+      final h = [for (var i = 0; i < 60; i++) 200.0];
+      final rig = _Rig(h);
+      await _mount(tester, rig);
+      rig.spl.jumpTo(40, setState: rig.setOuter);
+      await tester.pumpAndSettle();
+      _primary(tester).jumpTo(_primary(tester).pixels - 500);
+      await tester.pumpAndSettle();
+      final top = _rect(tester, 38)!.top;
+      expect(top, greaterThan(0));
+      for (final k in CardResizeKind.values) {
+        final pin = pinOf(tester, rig, 38, k, target: 40);
+        expect(pin, isNotNull, reason: '$k');
+        expect(pin!.index, 38, reason: '$k');
+        expect(pin.alignment, closeTo(top / kVp, 0.001), reason: '$k');
+      }
+    });
+
+    testWidgets('target 위쪽 칸이 위로 잘렸을 때: 위쪽 고정 의도는 음수 정렬로 위쪽을 붙잡고, 답 숨기기는 원래 아래쪽 고정이라 null',
+        (tester) async {
+      final h = [for (var i = 0; i < 60; i++) 200.0];
+      final rig = _Rig(h);
+      await _mount(tester, rig);
+      rig.spl.jumpTo(40, setState: rig.setOuter);
+      await tester.pumpAndSettle();
+      _primary(tester).jumpTo(_primary(tester).pixels - 500);
+      await tester.pumpAndSettle();
+      _primary(tester).jumpTo(_primary(tester).pixels + (_rect(tester, 38)!.top + 30)); // 카드 38 위쪽 -30
+      await tester.pumpAndSettle();
+      expect(_rect(tester, 38)!.top, closeTo(-30, 0.5));
+      for (final k in [CardResizeKind.questionToggle, CardResizeKind.answerReveal]) {
+        final pin = pinOf(tester, rig, 38, k, target: 40);
+        expect(pin, isNotNull, reason: '$k');
+        expect(pin!.index, 38, reason: '$k');
+        expect(pin.alignment, closeTo(-30 / kVp, 0.001), reason: '$k');
+      }
+      expect(pinOf(tester, rig, 38, CardResizeKind.answerHide, target: 40), isNull);
+    });
+  });
+
+  group('topPinAlignmentFor', () {
+    test('보이는 카드의 위쪽 가장자리를 돌려주고, 위로 잘린 음수도 허용한다', () {
+      expect(topPinAlignmentFor(0.3, 0.8), 0.3);
+      expect(topPinAlignmentFor(0.0, 0.5), 0.0);
+      expect(topPinAlignmentFor(-0.05, 0.4), -0.05);
+      expect(topPinAlignmentFor(1.0, 1.4), 1.0);
+    });
+    test('화면 아래로 벗어났거나(>1) 완전히 위로 지나갔거나(아래쪽 <= 0) 유한하지 않으면 null', () {
+      expect(topPinAlignmentFor(1.01, 1.5), isNull);
+      expect(topPinAlignmentFor(-0.5, 0.0), isNull);
+      expect(topPinAlignmentFor(-0.5, -0.1), isNull);
+      expect(topPinAlignmentFor(double.nan, 0.5), isNull);
+      expect(topPinAlignmentFor(0.2, double.nan), isNull);
+      expect(topPinAlignmentFor(double.negativeInfinity, 0.5), isNull);
+    });
+  });
+
+  group('answerTapResizeKind', () {
+    test('숨김 모드가 아니면 높이가 안 바뀌므로 null (붙잡지 않는다)', () {
+      expect(answerTapResizeKind(allAnswersHidden: false, answerRevealed: true), isNull);
+      expect(answerTapResizeKind(allAnswersHidden: false, answerRevealed: false), isNull);
+    });
+    test('숨김 모드: 보이던 답을 가리면 answerHide(줄어듦), 가려진 답을 펼치면 answerReveal(커짐)', () {
+      expect(answerTapResizeKind(allAnswersHidden: true, answerRevealed: true), CardResizeKind.answerHide);
+      expect(answerTapResizeKind(allAnswersHidden: true, answerRevealed: false), CardResizeKind.answerReveal);
     });
   });
 

@@ -97,15 +97,60 @@ int? keepAnchorForNewResults({
 ///
 /// ScrollablePositionedList는 target 카드의 위쪽 가장자리를 이 정렬 위치에 두고 배치한다.
 /// 이 목록의 뷰포트는 0~1 밖의 값도 받아들이므로 범위 제한 때문에 막는 것은 아니다.
-/// 위로 잘린 카드(음수)는 위쪽 가장자리로 붙잡지 않는다 — 위쪽 가장자리를 화면 밖에 붙잡아 두면
-/// 접혀서 줄어들 때 카드가 통째로 화면 위로 사라지고 손가락 밑이 다음 카드가 된다. 위로 잘린 카드는
-/// **아래쪽 가장자리**를 고정해야 하는데, target 위쪽 칸(역방향 sliver)은 원래 아래쪽 가장자리가
-/// 고정이라 그대로 두면 되고, target 이상 칸(정방향 sliver)은 위쪽이 고정이라 [resizePinFor]가
-/// 다음 칸을 이 카드의 아래쪽 가장자리에 맞춰 target으로 삼는다(그러면 이 카드가 역방향이 된다).
+/// 이 함수는 **화면 안(0~1)** 정렬값만 돌려주고, 위로 잘린 카드(음수)는 null이다 — 위로 잘린 카드의
+/// 위쪽 가장자리 붙잡기는 [topPinAlignmentFor]가 맡는다.
+///
+/// 접기/보이기가 붙잡는 규칙 ([resizePinFor]가 의도별로 고른다):
+/// - 질문 탭(접기/펴기)·답 보이기(커짐): **누른 카드의 위쪽 가장자리를 항상 고정**한다. 위쪽이 잘려
+///   있어도 마찬가지다 — 아래쪽을 고정하면 손가락이 보던 질문 줄이 카드와 함께 위로 밀려 나가거나
+///   (펴기) 손가락 밑이 윗 카드가 된다(접기). target 이상 칸(정방향 sliver)은 원래 위쪽이 고정이라
+///   그대로 두고, target 위쪽 칸(역방향 sliver)만 그 카드를 지금 위치 그대로 target으로 삼아 다시 마운트한다.
+/// - 답 숨기기(줄어듦): 위로 잘렸고 아래쪽이 화면 안이면 **아래쪽 가장자리**를 고정한다(위쪽을 화면
+///   밖에 고정하면 줄어든 카드가 통째로 위로 사라져 손가락 밑이 다음 카드가 된다). target 위쪽 칸은 원래
+///   아래쪽이 고정이라 그대로 두고, target 이상 칸은 다음 칸을 이 카드의 아래쪽 가장자리에 맞춰
+///   target으로 삼는다. 그 밖(위쪽이 화면 안)은 위쪽 가장자리를 고정한다.
 /// 화면 아래로 벗어난 카드(1 초과)는 눌릴 수 없다. NaN도 null이어야 한다.
 @visibleForTesting
 double? pinAlignmentFor(double itemLeadingEdge) =>
     (itemLeadingEdge >= 0 && itemLeadingEdge <= 1) ? itemLeadingEdge : null;
+
+/// 위쪽 가장자리를 그 자리에 붙잡을 정렬값 — [pinAlignmentFor]와 달리 **위로 잘린 카드(음수)도** 허용한다.
+/// 카드가 조금이라도 보여야(아래쪽 가장자리 > 0) 하고 위쪽이 화면 아래로 벗어나지(> 1) 않아야 한다.
+/// NaN·무한대는 null. (SPL 뷰포트 anchor는 음수도 받아들이고, 스크롤 범위도 그만큼 넓혀 준다 — 테스트로 확인.)
+@visibleForTesting
+double? topPinAlignmentFor(double itemLeadingEdge, double itemTrailingEdge) {
+  if (!itemLeadingEdge.isFinite || !itemTrailingEdge.isFinite) return null;
+  if (itemTrailingEdge <= 0 || itemLeadingEdge > 1) return null;
+  return itemLeadingEdge;
+}
+
+/// 접기/보이기 탭의 종류. [resizePinFor]가 기하(잘림 여부)로 짐작하지 않고 호출자가 말해 주는 의도로
+/// 붙잡는 방식을 고른다 (잘린 카드의 질문 탭을 "줄어드는 탭"으로 오해하면 손가락 밑 카드가 바뀐다).
+enum CardResizeKind {
+  /// 질문 탭(접기/펴기). 늘어나든 줄어들든 위쪽 가장자리를 고정한다.
+  questionToggle,
+
+  /// 답 보이기(숨김 모드에서 가려진 답을 펼침, 카드가 커짐). 위쪽 가장자리를 고정한다.
+  answerReveal,
+
+  /// 답 숨기기(숨김 모드에서 보이던 답을 가림, 카드가 줄어듦). 위로 잘리고 아래쪽이 화면 안이면
+  /// 아래쪽 가장자리를 고정하고, 아니면 위쪽 가장자리를 고정한다.
+  answerHide,
+}
+
+/// 답 영역 탭이 어떤 붙잡기를 해야 하는가. 붙잡을 필요가 없으면 null.
+///
+/// ⚠️ 숨김 모드([allAnswersHidden])가 아니면 답은 항상 보여서 이 탭은 카드 높이를 바꾸지 않는다 — 붙잡으면
+/// 목록을 다시 마운트해 물결·접근성 포커스만 끊으니 null이어야 한다. 숨김 모드에서는 지금 보이는 답을
+/// 가리는 탭([answerRevealed] true)이 줄어듦(answerHide), 가려진 답을 펼치는 탭이 커짐(answerReveal)이다.
+@visibleForTesting
+CardResizeKind? answerTapResizeKind({
+  required bool allAnswersHidden,
+  required bool answerRevealed,
+}) {
+  if (!allAnswersHidden) return null;
+  return answerRevealed ? CardResizeKind.answerHide : CardResizeKind.answerReveal;
+}
 
 /// 접기/보이기로 [tappedIndex] 카드 높이가 바뀔 때 target을 누른 카드로 옮겨 붙잡아야 하는가.
 ///
@@ -196,15 +241,23 @@ double? reanchorAlignmentBeforeResize({
 /// 접기/보이기로 [index] 칸 높이가 바뀌기 직전에, 목록을 어느 칸을 어디에 두고 다시 마운트해야
 /// 눌린 카드가 손가락 밑에 남는지. 다시 마운트할 필요가 없으면 null.
 ///
-/// 1) target 위쪽 칸(역방향 sliver, [laidOutAboveListTarget]): 아래쪽 가장자리가 고정이고 위쪽이 움직인다.
-///    위쪽 가장자리가 화면 안이면 그 칸을 지금 자리 그대로 target으로 삼는다. 위로 잘렸으면(아래쪽은
-///    화면 안) 아래쪽 가장자리가 이미 고정이라 그대로 둔다.
-/// 2) target 이상 칸(정방향 sliver): 위쪽 가장자리가 고정이고 아래쪽이 움직인다. 위쪽이 화면 안이면
-///    그대로 둔다. **위로 잘린 칸**(위쪽 < 0, 아래쪽은 화면 안)은 줄어들면 위쪽이 화면 밖에 고정된 채
-///    통째로 위로 사라지고 다음 카드가 손가락 밑으로 미끄러진다 → 다음 칸([index] + 1)을 이 카드의
-///    **현재 아래쪽 가장자리**에 맞춰 target으로 삼는다. 그러면 이 카드가 target 위쪽 칸(역방향)이 되어
-///    아래쪽 가장자리가 고정된다. 마지막 칸이면 다음 칸이 없어서 하지 않는다 — 목록 끝이라 스크롤
-///    범위 제한이 카드를 화면에 남긴다(테스트로 확인).
+/// 붙잡는 방식은 호출자가 넘기는 [kind](의도)로 정한다 — 잘림 같은 기하로 짐작하지 않는다.
+/// ⚠️ 위로 잘린 카드의 **질문 탭**은 손가락이 보이는 질문 줄 위에 있다. 이걸 "줄어드는 카드"로 보고
+/// 아래쪽 가장자리를 고정하면 접을 때 카드가 아래로 밀려 손가락 밑이 윗 카드가 되고, 펼 때는 질문 줄이
+/// 화면 위로 밀려 나간다(실카드 검증으로 확인). 질문 탭·답 보이기는 항상 위쪽 가장자리 고정이다.
+///
+/// 위쪽 가장자리 고정([CardResizeKind.questionToggle]·[CardResizeKind.answerReveal],
+/// [CardResizeKind.answerHide]의 기본):
+/// - target 이상 칸(정방향 sliver): 위쪽이 원래 고정이라 잘렸든 아니든 그대로 둔다 (null).
+/// - target 위쪽 칸(역방향 sliver, [laidOutAboveListTarget]): 아래쪽이 고정이고 위쪽이 움직이므로, 그 칸을
+///   지금 위쪽 위치 그대로([topPinAlignmentFor], 위로 잘렸으면 음수) target으로 삼아 다시 마운트한다.
+///
+/// 아래쪽 가장자리 고정 ([CardResizeKind.answerHide]이면서 **위로 잘리고**(위쪽 < 0) 아래쪽이 화면
+/// 안(0 < 아래쪽 <= 1)일 때만): 위쪽을 화면 밖에 고정하면 줄어든 카드가 통째로 위로 사라진다.
+/// - target 위쪽 칸: 아래쪽이 원래 고정이라 그대로 둔다 (null).
+/// - target 이상 칸: 다음 칸([index] + 1)을 이 카드의 **현재 아래쪽 가장자리**에 맞춰 target으로 삼는다.
+///   그러면 이 카드가 target 위쪽 칸(역방향)이 되어 아래쪽이 고정된다. 마지막 칸이면 다음 칸이 없어서
+///   하지 않는다 — 목록 끝이라 스크롤 범위 제한이 카드를 화면에 남긴다(테스트로 확인).
 ///
 /// [targetIndex]는 값싼 사전 검사([tappedCardNeedsPin])에만 쓰고 최종 판단은 렌더 트리가 한다.
 @visibleForTesting
@@ -214,6 +267,7 @@ double? reanchorAlignmentBeforeResize({
   required int index,
   required int targetIndex,
   required int itemCount,
+  required CardResizeKind kind,
 }) {
   if (itemCount <= 0 || index < 0 || index >= itemCount) return null;
   final edges =
@@ -225,17 +279,21 @@ double? reanchorAlignmentBeforeResize({
         itemCount: itemCount,
       ) &&
       laidOutAboveListTarget(itemContext);
-  if (above) {
-    final a = pinAlignmentFor(edges.leading);
-    return a == null ? null : (index: index, alignment: a);
-  }
-  if (edges.leading < 0 &&
+  final bottomAnchor = kind == CardResizeKind.answerHide &&
+      edges.leading < 0 &&
       edges.trailing > 0 &&
-      edges.trailing <= 1 &&
-      index + 1 < itemCount) {
-    return (index: index + 1, alignment: edges.trailing);
+      edges.trailing <= 1;
+  if (bottomAnchor) {
+    if (above) return null; // 역방향 sliver는 원래 아래쪽 가장자리가 고정이다
+    if (index + 1 < itemCount) {
+      return (index: index + 1, alignment: edges.trailing);
+    }
+    return null;
   }
-  return null;
+  // 위쪽 가장자리 고정: target 이상 칸은 원래 고정이라 건드리지 않는다.
+  if (!above) return null;
+  final a = topPinAlignmentFor(edges.leading, edges.trailing);
+  return a == null ? null : (index: index, alignment: a);
 }
 
 // ─── 대량 목록(ScrollablePositionedList) 점프 = 다시 마운트 ───
@@ -372,9 +430,10 @@ class SplRemountController {
 
 /// 접기/보이기로 [index] 칸 높이가 바뀌기 직전에, 눌린 카드가 손가락 밑에 남도록 필요할 때만 목록을
 /// 다시 마운트한다([resizePinFor]가 어느 칸을 어디에 둘지 정한다). 다시 마운트했으면 true.
+/// [kind]는 무슨 탭인지(질문/답 보이기/답 숨기기) — 호출자가 명시한다([CardResizeKind]).
 ///
-/// target 이상이면서 위쪽이 화면 안인 칸은 건드리지 않는다 — 건드리면 보이는 칸이 전부 다시 만들어져
-/// 물결·접근성 포커스가 끊긴다. 호출자가 바로 뒤에서 setState로 높이를 바꾸므로, 여기서 건 setState와
+/// target 이상 칸은 위쪽 가장자리가 원래 고정이라 (답 숨기기로 위로 잘린 칸의 아래쪽 고정을 빼고는)
+/// 건드리지 않는다 — 건드리면 보이는 칸이 전부 다시 만들어져 물결·접근성 포커스가 끊긴다. 호출자가 바로 뒤에서 setState로 높이를 바꾸므로, 여기서 건 setState와
 /// 같은 프레임에 합쳐져 처음 레이아웃부터 새 높이로 그려진다.
 @visibleForTesting
 bool reanchorTappedCard({
@@ -382,6 +441,7 @@ bool reanchorTappedCard({
   required BuildContext itemContext,
   required int index,
   required int itemCount,
+  required CardResizeKind kind,
   required void Function(VoidCallback fn) setState,
 }) {
   if (!spl.itemScrollController.isAttached) return false;
@@ -391,6 +451,7 @@ bool reanchorTappedCard({
     index: index,
     targetIndex: spl.targetIndex,
     itemCount: itemCount,
+    kind: kind,
   );
   if (pin == null) return false;
   spl.jumpTo(pin.index, alignment: pin.alignment, setState: setState);
@@ -1813,14 +1874,14 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   /// 위로 쌓여서, 그런 카드의 높이가 바뀌면 위쪽으로 밀려 올라가 손가락 밑에 다른 카드가 미끄러져
   /// 온다(예: 검색 결과가 전체 목록 target을 물려받은 경우). 그래서 setState 전에 누른 카드를 "지금
   /// 화면 위치 그대로" target으로 삼아 목록을 다시 마운트한다(SPL jumpTo는 쓰지 않는다 — _jumpSplTo 문서).
-  /// target 이상 칸은 위쪽 가장자리가 어차피 안 움직이므로 위쪽이 화면 안이면 건드리지 않는다 — 다시
-  /// 마운트하면 보이는 칸이 전부 새로 만들어져 물결·접근성 포커스가 끊긴다(reanchorTappedCard).
-  /// 단 target 이상 칸이 **위로 잘려 있고 아래쪽이 화면 안**이면, 줄어들 때 위쪽이 화면 밖에 고정된 채
-  /// 카드가 통째로 사라지므로 다음 칸을 이 카드의 아래쪽 가장자리에 맞춰 target으로 삼아 아래쪽을 고정한다
-  /// (resizePinFor). target 위쪽 칸이 위로 잘린 경우는 아래쪽이 원래 고정이라 건드리지 않는다.
+  /// 규칙은 [kind](의도)로 정한다 — 질문 탭·답 보이기는 **위쪽 가장자리 고정**(위로 잘려 있어도),
+  /// 답 숨기기만 위로 잘리고 아래쪽이 화면 안일 때 아래쪽 고정(resizePinFor). target 이상 칸은 위쪽이
+  /// 원래 고정이라 건드리지 않는다 — 다시 마운트하면 보이는 칸이 전부 새로 만들어져 물결·접근성 포커스가
+  /// 끊긴다(reanchorTappedCard).
   /// 소량 목록(ListView)은 픽셀 오프셋 기준이라 해당 없음. 화면 밖이거나 아래로 벗어난 카드는 건드리지 않는다.
   /// [itemContext]는 눌린 칸 안쪽(_buildCardItem의 Builder)의 컨텍스트 — 렌더 트리로 위치를 읽는다.
-  void _keepTappedCardInPlace(int cardId, BuildContext itemContext) {
+  void _keepTappedCardInPlace(
+      int cardId, BuildContext itemContext, CardResizeKind kind) {
     if (_useSimpleList) return;
     final index = _cards.indexWhere((c) => c.id == cardId);
     if (index < 0) return;
@@ -1829,6 +1890,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       itemContext: itemContext,
       index: index,
       itemCount: _cards.length,
+      kind: kind,
       setState: setState,
     );
   }
@@ -1836,7 +1898,8 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   void _toggleQuestionFold(CardModel card, BuildContext itemContext) {
     final cardId = card.id;
     if (cardId == null) return;
-    _keepTappedCardInPlace(cardId, itemContext);
+    // 질문 탭은 늘어나든 줄어들든 항상 위쪽 가장자리 고정 (손가락은 질문 줄 위에 있다).
+    _keepTappedCardInPlace(cardId, itemContext, CardResizeKind.questionToggle);
     setState(() {
       if (_foldedCards.contains(cardId)) {
         _foldedCards.remove(cardId);
@@ -1849,7 +1912,13 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   void _toggleAnswerReveal(CardModel card, BuildContext itemContext) {
     final cardId = card.id;
     if (cardId == null) return;
-    _keepTappedCardInPlace(cardId, itemContext);
+    // ⚠️ 숨김 모드가 아니면 높이가 안 바뀌어 kind가 null이다 → 붙잡지 않는다 (answerTapResizeKind 문서).
+    // 보이는 중이던 답을 가리면 줄어듦(answerHide), 가려진 답을 펼치면 커짐(answerReveal).
+    final kind = answerTapResizeKind(
+      allAnswersHidden: _allAnswersHidden,
+      answerRevealed: _revealedCards.contains(cardId),
+    );
+    if (kind != null) _keepTappedCardInPlace(cardId, itemContext, kind);
     setState(() {
       if (_revealedCards.contains(cardId)) {
         _revealedCards.remove(cardId);

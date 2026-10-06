@@ -42,6 +42,7 @@ void _pinReal(_Rig rig, BuildContext c, int i) {
     itemContext: c,
     index: i,
     itemCount: rig.heights.length,
+    kind: CardResizeKind.questionToggle, // 이 호스트는 질문 탭 모양 (위쪽 가장자리 고정)
     setState: rig.setOuter,
   );
 }
@@ -391,6 +392,7 @@ void main() {
         itemContext: tester.element(find.byType(Scaffold)),
         index: 5,
         itemCount: 50,
+        kind: CardResizeKind.questionToggle,
         setState: rig.setOuter,
       );
       expect(pinned, isFalse);
@@ -766,14 +768,34 @@ void main() {
       expect(re.hasMatch(b), isTrue, reason: what);
     }
 
-    test('접기/보이기는 붙잡기(_keepTappedCardInPlace)를 setState 전에 칸 컨텍스트(itemContext)로 부른다', () {
-      for (final fn in ['_toggleAnswerReveal', '_toggleQuestionFold']) {
-        final b = body('void $fn');
-        final pin = RegExp(r'_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*\)').firstMatch(b);
-        final set = b.indexOf('setState(');
-        expect(pin, isNotNull, reason: '$fn 가 _keepTappedCardInPlace(cardId, itemContext)를 부르지 않는다');
-        expect(set, greaterThan(pin!.start), reason: '$fn: 붙잡기는 높이를 바꾸는 setState보다 먼저여야 한다');
-      }
+    test('접기/보이기는 붙잡기(_keepTappedCardInPlace)를 setState 전에 칸 컨텍스트(itemContext)와 의도(kind)로 부른다', () {
+      // 질문 탭: 늘어나든 줄어들든 위쪽 가장자리 고정 → 항상 questionToggle.
+      final q = body('void _toggleQuestionFold');
+      final qPin = RegExp(
+              r'_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*,\s*CardResizeKind\.questionToggle\s*\)')
+          .firstMatch(q);
+      expect(qPin, isNotNull,
+          reason: '_toggleQuestionFold가 _keepTappedCardInPlace(cardId, itemContext, CardResizeKind.questionToggle)를 부르지 않는다');
+      expect(q.indexOf('setState('), greaterThan(qPin!.start),
+          reason: '_toggleQuestionFold: 붙잡기는 높이를 바꾸는 setState보다 먼저여야 한다');
+      expect(q.contains('answerHide') || q.contains('answerReveal'), isFalse,
+          reason: '질문 탭이 답 숨기기(아래쪽 고정) 의도를 쓰면 잘린 카드의 손가락 밑 카드가 바뀐다');
+
+      // 답 탭: 숨김 모드일 때만(answerTapResizeKind가 null이면 건너뜀), 지금 보이는 상태에서 의도를 정한다.
+      final a = body('void _toggleAnswerReveal');
+      final kindRe = RegExp(
+          r'final\s+kind\s*=\s*answerTapResizeKind\(\s*allAnswersHidden:\s*_allAnswersHidden\s*,\s*answerRevealed:\s*_revealedCards\.contains\(\s*cardId\s*\)\s*,?\s*\)\s*;');
+      final kindM = kindRe.firstMatch(a);
+      expect(kindM, isNotNull,
+          reason: '_toggleAnswerReveal이 answerTapResizeKind(allAnswersHidden: _allAnswersHidden, answerRevealed: _revealedCards.contains(cardId))로 의도를 정하지 않는다');
+      final aPin = RegExp(
+              r'if\s*\(\s*kind\s*!=\s*null\s*\)\s*_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*,\s*kind\s*\)\s*;')
+          .firstMatch(a);
+      expect(aPin, isNotNull,
+          reason: '_toggleAnswerReveal이 kind != null일 때만 _keepTappedCardInPlace(cardId, itemContext, kind)를 부르지 않는다 (숨김 모드가 아니면 붙잡기 금지)');
+      expect(aPin!.start, greaterThan(kindM!.end));
+      expect(a.indexOf('setState('), greaterThan(aPin.start),
+          reason: '_toggleAnswerReveal: 붙잡기는 높이를 바꾸는 setState보다 먼저여야 한다');
     });
 
     test('_keepTappedCardInPlace는 reanchorTappedCard에 컨트롤러·칸 컨텍스트·setState를 넘긴다', () {
@@ -783,6 +805,7 @@ void main() {
       expectIn(b, RegExp(r'itemContext:\s*itemContext\b'), 'itemContext: itemContext');
       expectIn(b, RegExp(r'index:\s*index\b'), 'index: index');
       expectIn(b, RegExp(r'itemCount:\s*_cards\.length\b'), 'itemCount: _cards.length');
+      expectIn(b, RegExp(r'kind:\s*kind\b'), 'kind: kind (호출자가 말한 의도를 그대로 넘긴다)');
       expectIn(b, RegExp(r'setState:\s*setState\b'), 'setState: setState');
     });
 
