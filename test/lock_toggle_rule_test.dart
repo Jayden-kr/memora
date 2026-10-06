@@ -93,7 +93,142 @@ String _body(String code, String signature) {
 
 const _lowered = '_scheduleEnabled=LockToggleRule.scheduleEnabledAfterToggle;';
 
+/// `_enabled`에 값을 쓰는 모든 대입(주석을 걷어낸 소스에서). `_enabled = x;`, 화살표
+/// `setState(() => _enabled = false)`, `_enabled = !_enabled;`, `this._enabled = …`,
+/// 복합 대입(`||=` `&&=` `??=` `^=` …)을 다 잡는다. `_enabled ==`·`_scheduleEnabled =`·
+/// `widget._enabled =`는 잡지 않는다.
+final RegExp _enabledAssign = RegExp(
+    r'(?:(?<![\w$.])|(?<=\bthis\.))_enabled\s*(?:\|\||&&|\?\?|[|&^])?=(?!=)');
+
+/// 대입이 아닌 두 자리: 필드 선언(`bool _enabled = false;`)과 저장된 설정 로드
+/// (`_enabled = settings['enabled'] …`). 이 둘만 제외한다.
+bool _isDeclarationOrLoad(String code, RegExpMatch m) {
+  final before = code.substring(0, m.start);
+  if (RegExp(r'\b(?:bool\??|var)\s+$').hasMatch(before)) return true;
+  return RegExp(r"^\s*settings\['enabled'\]").hasMatch(code.substring(m.end));
+}
+
+/// `from`부터 이 대입 문장이 끝나는 자리(`;` 또는 `,`)의 위치. 화살표 함수 본문(
+/// `setState(() => _enabled = false);`)이면 바깥 `)`를 닫고 그 호출 문장의 `;`까지 간다.
+int _statementEnd(String code, int from) {
+  var depth = 0;
+  var quote = '';
+  for (var i = from; i < code.length; i++) {
+    final c = code[i];
+    if (quote.isNotEmpty) {
+      if (c == '\\') {
+        i++;
+      } else if (c == quote) {
+        quote = '';
+      }
+      continue;
+    }
+    if (c == '"' || c == "'") {
+      quote = c;
+    } else if (c == '(' || c == '[' || c == '{') {
+      depth++;
+    } else if (c == ')' || c == ']' || c == '}') {
+      depth--;
+      if (depth < 0) {
+        if (c == '}') return i; // 세미콜론 없이 블록이 닫힘 — 다음 문장이 규칙이 아니라 실패한다
+        depth = 0; // 화살표 본문이 든 호출의 `)` — 호출 문장 끝(`;`)까지 계속
+      }
+    } else if ((c == ';' || c == ',') && depth == 0) {
+      return i;
+    }
+  }
+  return code.length - 1;
+}
+
+/// `_enabled` 대입 자리 수와, 그 바로 다음 문장이 시간대 전환을 규칙 상수로 내리지 않는
+/// 자리 목록. "같은 문장 안 또는 바로 다음 문장"이 규칙이다 — 대입 문장이 끝난 직후가
+/// `_scheduleEnabled = LockToggleRule.scheduleEnabledAfterToggle;`여야 한다.
+({int sites, List<String> offenders}) scanEnabledAssignments(String code) {
+  var sites = 0;
+  final offenders = <String>[];
+  for (final m in _enabledAssign.allMatches(code)) {
+    if (_isDeclarationOrLoad(code, m)) continue;
+    sites++;
+    final end = _statementEnd(code, m.end);
+    final tail = _compact(code.substring(end + 1, (end + 1 + 200).clamp(0, code.length)));
+    if (!tail.startsWith(_lowered)) {
+      final line = '\n'.allMatches(code.substring(0, m.start)).length + 1;
+      offenders.add('줄 $line: ${_compact(code.substring(m.start, end + 1))}');
+    }
+  }
+  return (sites: sites, offenders: offenders);
+}
+
 void main() {
+  group('탐지기 자체 점검: _enabled 대입', () {
+    const lowered = '_scheduleEnabled = LockToggleRule.scheduleEnabledAfterToggle;';
+    ({int sites, List<String> offenders}) scan(String src) =>
+        scanEnabledAssignments(_stripComments(src));
+
+    test('대입 뒤 바로 규칙 상수로 내리면 통과한다(블록·화살표·this·복합 대입)', () {
+      for (final src in [
+        'setState(() {\n  _enabled = value;\n  $lowered\n});',
+        'setState(() => _enabled = false);\n$lowered',
+        'setState(() => _enabled = !_enabled); $lowered',
+        'this._enabled = false; $lowered',
+        '_enabled = a && b;\n$lowered',
+        '_enabled ||= true; $lowered',
+        '_enabled ??= true; $lowered',
+        'setState(() { _enabled = false; $lowered });',
+      ]) {
+        final r = scan(src);
+        expect(r.sites, 1, reason: src);
+        expect(r.offenders, isEmpty, reason: src);
+      }
+    });
+
+    test('내리지 않은 대입은 어떤 모양이어도 잡는다(화살표·부정·비단어 우변·복합 대입)', () {
+      for (final src in [
+        'setState(() => _enabled = false);', // 화살표
+        'setState(() => _enabled = false);\nfoo();\n$lowered', // 바로 다음 문장이 아님
+        '_enabled = !_enabled;',
+        '_enabled = a && b;',
+        '_enabled = (x);',
+        '_enabled = list[0];',
+        '_enabled = cond ? a : b;',
+        '_enabled ||= true;',
+        'this._enabled = false;',
+        // 검증자의 변이: didChangeAppLifecycleState에 끼워 넣은 대입
+        'void f() {\n  if (mounted && !v && _enabled) setState(() => _enabled = false);\n}\n'
+            'if (_enabled && !_checkingOverlay) { go(); }',
+        '_enabled = false; _scheduleEnabled = true;', // 잘못된 값으로 내림
+        '_enabled = false; _scheduleEnabled = _scheduleEnabled;',
+        'setState(() { _enabled = false; });',
+        'onChanged: (v) => _enabled = v,',
+      ]) {
+        final r = scan(src);
+        expect(r.sites, greaterThanOrEqualTo(1), reason: src);
+        expect(r.offenders, isNotEmpty, reason: src);
+      }
+    });
+
+    test('대입이 아닌 자리는 세지 않는다: 선언·설정 로드·비교·다른 이름·주석 속 대입', () {
+      for (final src in [
+        'bool _enabled = false;',
+        'late bool _enabled = true;',
+        "_enabled = settings['enabled'] as bool? ?? false;",
+        'if (_enabled == true) {}',
+        'if (_enabled != x && _enabled >= y) {}',
+        '_scheduleEnabled = false;',
+        'widget._enabled = false;',
+        'my_enabled = false;',
+        '// _enabled = false;\n/* _enabled = true; */',
+      ]) {
+        final r = scan(src);
+        expect(r.sites, 0, reason: src);
+        expect(r.offenders, isEmpty, reason: src);
+      }
+      // 설정 로드 제외는 정확히 settings['enabled']만 — 다른 우변은 대입으로 센다.
+      expect(scan("_enabled = settings['other'];").sites, 1);
+      expect(scan('_enabled = settingsX;').sites, 1);
+    });
+  });
+
   group('LockToggleRule 순수 판정', () {
     test('토글 뒤 저장되는 시간대 전환 값은 false다', () {
       expect(LockToggleRule.scheduleEnabledAfterToggle, isFalse);
@@ -146,17 +281,13 @@ void main() {
   group('구조적 트립와이어: lock_screen_settings.dart', () {
     final code = _read('lib/screens/lock_screen_settings.dart');
 
-    test('_enabled를 바꾸는 모든 대입이 같은 setState 안에서 시간대 전환을 내린다', () {
-      // 필드 선언(`bool _enabled = false;`)과 로드(`_enabled = settings[...]`)는 제외한다.
-      final assign = RegExp(r'(?<!bool\s)_enabled\s*=\s*(?!settings\[)(\w+)\s*;');
-      final matches = assign.allMatches(code).toList();
+    test('_enabled에 값을 쓰는 모든 대입(화살표·부정·복합 대입 포함) 바로 다음 문장이 시간대 전환을 내린다', () {
+      // 필드 선언(`bool _enabled = false;`)과 로드(`_enabled = settings['enabled']`)만 제외한다.
+      final r = scanEnabledAssignments(code);
+      expect(r.offenders, isEmpty,
+          reason: '대입 바로 뒤에 $_lowered 가 없다 — 잠금화면을 토글하면 시간대 전환도 꺼야 한다: ${r.offenders}');
       // 사용자 토글(_onEnabledChanged)과 오버레이 권한 거부(_checkOverlayAndStartImpl).
-      expect(matches.length, 2, reason: '_enabled를 바꾸는 자리 수가 바뀌었다 — 새 자리에도 규칙을 적용하고 이 숫자를 고칠 것');
-      for (final m in matches) {
-        final tail = _compact(code.substring(m.end, (m.end + 160).clamp(0, code.length)));
-        expect(tail.startsWith(_lowered), isTrue,
-            reason: '${m.group(0)} 바로 뒤에서 $_lowered 가 없다 — 잠금화면을 토글하면 시간대 전환도 꺼야 한다');
-      }
+      expect(r.sites, 2, reason: '_enabled를 바꾸는 자리 수가 바뀌었다 — 새 자리에도 규칙이 적용됐는지 보고 이 숫자를 고칠 것');
     });
 
     test('_onEnabledChanged는 LockToggleRule.decideEnable로 판정하고 옛 hasValidSlots 가드를 안 쓴다', () {

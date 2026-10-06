@@ -907,13 +907,16 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
       appBar: AppBar(title: Text(t.lockTitle)),
       body: ListView(
         children: [
-          // 잠금화면 ON/OFF
-          ListTile(
-            title: Text(t.lockEnable),
-            subtitle: Text(t.lockEnableSubtitle),
-            trailing: Transform.scale(
-              scale: 0.8,
-              child: Switch(value: _enabled, onChanged: _onEnabledChanged),
+          // 잠금화면 ON/OFF. MergeSemantics: 제목·스위치를 한 접근성 노드로 묶는다(TalkBack이
+          // 이름 없는 "꺼짐, 스위치"만 읽지 않게 — SwitchListTile이 하던 일; 테스트: switch_size_test).
+          MergeSemantics(
+            child: ListTile(
+              title: Text(t.lockEnable),
+              subtitle: Text(t.lockEnableSubtitle),
+              trailing: Transform.scale(
+                scale: 0.8,
+                child: Switch(value: _enabled, onChanged: _onEnabledChanged),
+              ),
             ),
           ),
           // 권한이 회수된 상태를 화면에서 드러낸다(푸시 설정의 정확한 알림 안내 카드와 같은 역할).
@@ -1018,16 +1021,19 @@ class _LockScreenSettingsScreenState extends State<LockScreenSettingsScreen>
           // 시간대별 폴더 자동 전환. 앱의 다른 스위치와 같은 모양(ListTile + 0.8배 Switch)이다 —
           // SwitchListTile은 쓰지 말 것(전체 크기 스위치; 테스트: switch_size_test). 행을 눌러도
           // 토글되고(onTap), 잠금화면이 꺼져 있으면 행 전체가 비활성(회색)이다.
-          ListTile(
-            enabled: _enabled,
-            title: Text(t.lockScheduleEnable),
-            subtitle: Text(t.lockScheduleEnableSubtitle),
-            onTap: _enabled ? () => _onScheduleToggled(!_scheduleShown) : null,
-            trailing: Transform.scale(
-              scale: 0.8,
-              child: Switch(
-                value: _scheduleShown,
-                onChanged: _enabled ? _onScheduleToggled : null,
+          // MergeSemantics: 제목·스위치를 한 접근성 노드로 묶는다(위 잠금화면 행과 같은 이유).
+          MergeSemantics(
+            child: ListTile(
+              enabled: _enabled,
+              title: Text(t.lockScheduleEnable),
+              subtitle: Text(t.lockScheduleEnableSubtitle),
+              onTap: _enabled ? () => _onScheduleToggled(!_scheduleShown) : null,
+              trailing: Transform.scale(
+                scale: 0.8,
+                child: Switch(
+                  value: _scheduleShown,
+                  onChanged: _enabled ? _onScheduleToggled : null,
+                ),
               ),
             ),
           ),

@@ -425,98 +425,102 @@ class _PushNotificationSettingsScreenState
                   _buildNotificationPermissionPrompt(t),
                 if (!_exactAlarmPermitted) _buildExactAlarmPrompt(t),
 
-                ListTile(
-                  title: Text(t.pushAlarm),
-                  trailing: Transform.scale(
-                    scale: 0.8,
-                    child: Switch(
-                      value: _enabled,
-                      onChanged: (v) async {
-                        final messenger = ScaffoldMessenger.of(context);
-                        try {
-                          if (v) {
-                            final granted =
-                                await NotificationService.requestPermission();
-                            if (!granted) {
-                              if (!mounted) return;
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text(t.pushNeedPermission),
-                                  action: SnackBarAction(
-                                    label: t.pushOpenSettings,
-                                    onPressed: () => openAppSettings(),
-                                  ),
-                                ),
-                              );
-                              return;
-                            }
-                          }
-                          if (!mounted) return;
-                          final previousEnabled = _enabled;
-                          // 불변식: notification_enabled==true인 동안 규칙은
-                          // 항상 1개 이상 — 스위치를 켜는데 규칙이 0개면 여기서
-                          // 기본 규칙을 만들어준다(fresh-install trap 방지).
-                          final needsDefaultRule = v && _rules.isEmpty;
-                          setState(() {
-                            _enabled = v;
-                            if (needsDefaultRule) {
-                              _rules = [
-                                const PushRule(
-                                  start: 540,
-                                  end: 1320,
-                                  folderId: PushSchedule.allFolders,
-                                  intervalMin: PushSchedule.defaultIntervalMin,
-                                )
-                              ];
-                            }
-                          });
+                // MergeSemantics: 제목·스위치를 한 접근성 노드로 묶는다(TalkBack이 이름 없는 "꺼짐, 스위치"만
+                // 읽지 않게 — SwitchListTile이 하던 일; 테스트: switch_size_test).
+                MergeSemantics(
+                  child: ListTile(
+                    title: Text(t.pushAlarm),
+                    trailing: Transform.scale(
+                      scale: 0.8,
+                      child: Switch(
+                        value: _enabled,
+                        onChanged: (v) async {
+                          final messenger = ScaffoldMessenger.of(context);
                           try {
-                            await DatabaseHelper.instance.upsertSetting(
-                                _settingNotificationEnabled, v.toString());
-                            if (needsDefaultRule) {
-                              await DatabaseHelper.instance.upsertSetting(
-                                  PushSchedule.settingRulesKey,
-                                  PushSchedule.encode(_rules));
+                            if (v) {
+                              final granted =
+                                  await NotificationService.requestPermission();
+                              if (!granted) {
+                                if (!mounted) return;
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(t.pushNeedPermission),
+                                    action: SnackBarAction(
+                                      label: t.pushOpenSettings,
+                                      onPressed: () => openAppSettings(),
+                                    ),
+                                  ),
+                                );
+                                return;
+                              }
                             }
-                            // 재스케줄(=서비스 STOP/START)은 화면 생존과 무관하다 — mounted
-                            // 검사 뒤에 두면 OFF 직후 화면을 벗어났을 때 DB는 false인데
-                            // 서비스는 계속 알림을 보낸다(과거 #3 "끈 뒤에도 알림" 재발 경로).
-                            await NotificationService.rescheduleAll();
                             if (!mounted) return;
-                            if (needsDefaultRule) {
+                            final previousEnabled = _enabled;
+                            // 불변식: notification_enabled==true인 동안 규칙은
+                            // 항상 1개 이상 — 스위치를 켜는데 규칙이 0개면 여기서
+                            // 기본 규칙을 만들어준다(fresh-install trap 방지).
+                            final needsDefaultRule = v && _rules.isEmpty;
+                            setState(() {
+                              _enabled = v;
+                              if (needsDefaultRule) {
+                                _rules = [
+                                  const PushRule(
+                                    start: 540,
+                                    end: 1320,
+                                    folderId: PushSchedule.allFolders,
+                                    intervalMin: PushSchedule.defaultIntervalMin,
+                                  )
+                                ];
+                              }
+                            });
+                            try {
+                              await DatabaseHelper.instance.upsertSetting(
+                                  _settingNotificationEnabled, v.toString());
+                              if (needsDefaultRule) {
+                                await DatabaseHelper.instance.upsertSetting(
+                                    PushSchedule.settingRulesKey,
+                                    PushSchedule.encode(_rules));
+                              }
+                              // 재스케줄(=서비스 STOP/START)은 화면 생존과 무관하다 — mounted
+                              // 검사 뒤에 두면 OFF 직후 화면을 벗어났을 때 DB는 false인데
+                              // 서비스는 계속 알림을 보낸다(과거 #3 "끈 뒤에도 알림" 재발 경로).
+                              await NotificationService.rescheduleAll();
+                              if (!mounted) return;
+                              if (needsDefaultRule) {
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                      content:
+                                          Text(t.pushRulesDefaultCreated)),
+                                );
+                              }
+                            } catch (e) {
+                              debugPrint('[PUSH_SETTINGS] toggle failed: $e');
+                              // DB엔 이미 새 값이 들어갔을 수 있다 — UI만 되돌리면 화면은 OFF인데
+                              // 저장값은 ON(규칙 0개)인 모순이 남아 알림이 계속 오거나 영영 안 온다
+                              // (감사 D6-09). 저장값도 되돌리고 서비스 상태를 다시 맞춘다.
+                              try {
+                                await DatabaseHelper.instance.upsertSetting(
+                                    _settingNotificationEnabled,
+                                    previousEnabled.toString());
+                                await NotificationService.rescheduleAll();
+                              } catch (e2) {
+                                debugPrint('[PUSH_SETTINGS] rollback failed: $e2');
+                              }
+                              if (!mounted) return;
+                              setState(() => _enabled = previousEnabled);
                               messenger.showSnackBar(
-                                SnackBar(
-                                    content:
-                                        Text(t.pushRulesDefaultCreated)),
+                                SnackBar(content: Text(t.pushToggleFail)),
                               );
                             }
                           } catch (e) {
-                            debugPrint('[PUSH_SETTINGS] toggle failed: $e');
-                            // DB엔 이미 새 값이 들어갔을 수 있다 — UI만 되돌리면 화면은 OFF인데
-                            // 저장값은 ON(규칙 0개)인 모순이 남아 알림이 계속 오거나 영영 안 온다
-                            // (감사 D6-09). 저장값도 되돌리고 서비스 상태를 다시 맞춘다.
-                            try {
-                              await DatabaseHelper.instance.upsertSetting(
-                                  _settingNotificationEnabled,
-                                  previousEnabled.toString());
-                              await NotificationService.rescheduleAll();
-                            } catch (e2) {
-                              debugPrint('[PUSH_SETTINGS] rollback failed: $e2');
-                            }
+                            debugPrint('[PUSH_SETTINGS] toggle error: $e');
                             if (!mounted) return;
-                            setState(() => _enabled = previousEnabled);
                             messenger.showSnackBar(
                               SnackBar(content: Text(t.pushToggleFail)),
                             );
                           }
-                        } catch (e) {
-                          debugPrint('[PUSH_SETTINGS] toggle error: $e');
-                          if (!mounted) return;
-                          messenger.showSnackBar(
-                            SnackBar(content: Text(t.pushToggleFail)),
-                          );
-                        }
-                      },
+                        },
+                      ),
                     ),
                   ),
                 ),

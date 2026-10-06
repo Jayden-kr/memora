@@ -151,29 +151,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const Divider(),
 
-          // 카드 번호 표시
-          ListTile(
-            title: Text(t.settingsCardNumber),
-            trailing: Transform.scale(
-              scale: 0.8,
-              child: Switch(
-                value: cardNumber == 'true',
-                onChanged: (v) =>
-                    _setSetting(AppConstants.settingCardNumber, v.toString()),
+          // 카드 번호 표시. MergeSemantics: 제목·스위치를 한 접근성 노드로 묶는다(TalkBack이
+          // 이름 없는 "꺼짐, 스위치"만 읽지 않게; 테스트: switch_size_test).
+          MergeSemantics(
+            child: ListTile(
+              title: Text(t.settingsCardNumber),
+              trailing: Transform.scale(
+                scale: 0.8,
+                child: Switch(
+                  value: cardNumber == 'true',
+                  onChanged: (v) =>
+                      _setSetting(AppConstants.settingCardNumber, v.toString()),
+                ),
               ),
             ),
           ),
           const Divider(),
 
-          // 카드 목록 스크롤바
-          ListTile(
-            title: Text(t.settingsCardScroll),
-            trailing: Transform.scale(
-              scale: 0.8,
-              child: Switch(
-                value: cardScroll == 'true',
-                onChanged: (v) =>
-                    _setSetting(AppConstants.settingCardScroll, v.toString()),
+          // 카드 목록 스크롤바(MergeSemantics 이유는 위와 같다)
+          MergeSemantics(
+            child: ListTile(
+              title: Text(t.settingsCardScroll),
+              trailing: Transform.scale(
+                scale: 0.8,
+                child: Switch(
+                  value: cardScroll == 'true',
+                  onChanged: (v) =>
+                      _setSetting(AppConstants.settingCardScroll, v.toString()),
+                ),
               ),
             ),
           ),
