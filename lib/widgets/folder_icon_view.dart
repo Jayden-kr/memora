@@ -33,10 +33,12 @@ class FolderIconView extends StatelessWidget {
   /// null이면 주변 IconTheme 크기(보통 24).
   final double? size;
 
-  // 글자는 칸(box)의 이 비율로 시작해 FittedBox가 넘치면 줄인다. 눈대중 시작값 — 글자
-  // 모양마다 1px 안팎 차이가 나므로 기기에서 보고 조정할 수 있다. 테스트는 "칸 안에
-  // 들어감"만 보고 이 값 자체는 고정하지 않는다.
-  static const double _glyphScale = 0.8;
+  /// 글자 한 개가 칸(box)에서 차지하는 비율(글자 크기 = box × 이 값). 글자 한 개는
+  /// 줄 높이 1.0(아래 style)이라 문단 높이가 정확히 이 비율이고, 칸을 넘치는 2글자·긴
+  /// 이모지만 FittedBox가 줄인다. 눈대중 값 — 글자 모양마다 1px 안팎 차이가 나니 기기에서
+  /// 보고 조정할 수 있다. 테스트(folder_icon_view_test)가 이 상수를 읽어 "주변 글자
+  /// 스타일과 무관하게 이 비율로 그려지는가"를 보므로 값을 바꿔도 테스트는 그대로다.
+  static const double glyphScale = 0.8;
 
   @override
   Widget build(BuildContext context) {
@@ -58,9 +60,23 @@ class FolderIconView extends StatelessWidget {
       maxLines: 1,
       softWrap: false,
       textScaler: TextScaler.noScaling, // 아이콘처럼 글자 크기 설정과 무관(칸 고정)
+      // ⚠️ 줄 높이·글자 간격을 주변 스타일에 맡기지 않는다. 폴더 행(ListTile leading은
+      // labelSmall: 높이 1.45·간격 0.5)이나 다이얼로그(bodyMedium)에서 상속받으면 줄 상자가
+      // 글자보다 28% 크거나 글자가 벌어져 FittedBox가 늘 줄이므로, 한 글자가 칸의 69%밖에
+      // 못 채운다(기기에서 확인). 높이 1.0 + 위아래 균등 배분이면 줄 상자 = 글자 크기고,
+      // 폰트 ascent+descent가 더 큰 이모지·히브리어는 위아래로 고르게 삐져나올 뿐 잘리지
+      // 않는다(FittedBox는 자르지 않는다).
+      textHeightBehavior: const TextHeightBehavior(
+        applyHeightToFirstAscent: true,
+        applyHeightToLastDescent: true,
+        leadingDistribution: TextLeadingDistribution.even,
+      ),
       style: TextStyle(
-        fontSize: box * _glyphScale,
+        fontSize: box * glyphScale,
         fontWeight: FontWeight.w700,
+        height: 1.0,
+        letterSpacing: 0,
+        leadingDistribution: TextLeadingDistribution.even,
         // ⚠️ 비활성일 땐 불투명으로 그리고 아래 필터가 38%를 한 번만 입힌다(이중 감쇠 금지).
         color: enabled ? folderIconColor(iconColor, scheme) : scheme.onSurface,
       ),

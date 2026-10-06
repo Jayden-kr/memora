@@ -409,6 +409,69 @@ void main() {
       });
     });
 
+    // ── 안 보이는 글자 표(lib/models/folder.dart isInvisibleIconRune)의 모든 항목 ──
+    // 항목(범위는 양 끝·가운데)마다 그 글자만 있는 값이 거부돼야 한다 — 항목 하나를 표에서
+    // 지우면 그 줄이 빨개진다. ⚠️ folder.dart 표를 고치면 아래 표도 같이 고칠 것.
+    final invisibleTable = <String, (int, int)>{
+      'U+00AD 소프트 하이픈': (0x00AD, 0x00AD),
+      'U+034F 결합 그래핌 접합자': (0x034F, 0x034F),
+      'U+061C 아랍 글자 표시': (0x061C, 0x061C),
+      'U+115F 한글 초성 채움': (0x115F, 0x115F),
+      'U+1160 한글 중성 채움': (0x1160, 0x1160),
+      'U+17B4 크메르 내재 모음 AQ': (0x17B4, 0x17B4),
+      'U+17B5 크메르 내재 모음 AA': (0x17B5, 0x17B5),
+      'U+180B–180F 몽골 변이 선택자·모음 구분자': (0x180B, 0x180F),
+      'U+1BCA0–1BCA3 속기 서식 문자': (0x1BCA0, 0x1BCA3),
+      'U+200B–200F 폭 없는 공백·연결자·방향 표시': (0x200B, 0x200F),
+      'U+202A–202E 방향 포함·재정의': (0x202A, 0x202E),
+      'U+2060–206F 단어 접합자·보이지 않는 연산자·폐기 서식': (0x2060, 0x206F),
+      'U+2800 점자 빈칸': (0x2800, 0x2800),
+      'U+3164 한글 채움': (0x3164, 0x3164),
+      'U+FE00–FE0F 변이 선택자': (0xFE00, 0xFE0F),
+      'U+FEFF BOM(폭 없는 공백)': (0xFEFF, 0xFEFF),
+      'U+FFA0 반각 한글 채움': (0xFFA0, 0xFFA0),
+      'U+1D173–1D17A 음악 서식 문자': (0x1D173, 0x1D17A),
+      'U+E0000–E0FFF 태그·변이 선택자 보충': (0xE0000, 0xE0FFF),
+    };
+    bool inTable(int cp) =>
+        invisibleTable.values.any((r) => cp >= r.$1 && cp <= r.$2);
+
+    invisibleTable.forEach((label, range) {
+      final (lo, hi) = range;
+      // 양 끝과 가운데(범위가 아니면 같은 값 하나).
+      final probes = {lo, hi, (lo + hi) ~/ 2};
+      test('안 보이는 글자만 있는 값은 거부: $label', () {
+        for (final cp in probes) {
+          final glyph = String.fromCharCode(cp);
+          final hex = 'U+${cp.toRadixString(16).toUpperCase()}';
+          expect(Folder.isInvisibleIconRune(cp), isTrue, reason: '$hex 가 표에서 빠졌다');
+          expect(Folder.normalizeIconText(glyph), isNull, reason: '$hex 만 있는 값이 통과했다');
+          late Folder folder;
+          expect(() => folder = parseIcon('t:$glyph'), returnsNormally);
+          expect(folder.icon, isNull, reason: '$hex 만 있는 "t:" 값이 통과했다');
+          expect(Folder.iconTextOf('t:$glyph'), isNull);
+        }
+      });
+
+      test('표는 범위 전체를 덮고 바로 바깥(이웃)은 덮지 않는다: $label', () {
+        for (var cp = lo; cp <= hi; cp++) {
+          expect(Folder.isInvisibleIconRune(cp), isTrue,
+              reason: 'U+${cp.toRadixString(16).toUpperCase()} 가 표에서 빠졌다');
+        }
+        for (final neighbor in [lo - 1, hi + 1]) {
+          if (inTable(neighbor)) continue; // 이웃 항목(예: U+115F|U+1160)이 덮는 칸
+          expect(Folder.isInvisibleIconRune(neighbor), isFalse,
+              reason: 'U+${neighbor.toRadixString(16).toUpperCase()} 까지 표가 넓어졌다');
+        }
+      });
+    });
+
+    test('보이는 글자와 안 보이는 글자가 섞이면 허용(이모지의 변이 선택자·접합자는 보이는 글자에 붙는다)', () {
+      expect(Folder.normalizeIconText('A\u2800'), 'A\u2800');
+      expect(Folder.normalizeIconText('\u2800A'), '\u2800A');
+      expect(Folder.normalizeIconText('\u2721\uFE0F'), '\u2721\uFE0F');
+    });
+
     test('키와 글자 모양은 겹치지 않는다: 접두사 없는 "en"은 모르는 키, 글자가 아니다', () {
       expect(parseIcon('en').icon, 'en');
       expect(Folder.iconTextOf('en'), isNull);

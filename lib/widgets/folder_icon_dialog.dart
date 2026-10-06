@@ -63,6 +63,69 @@ String? folderIconName(AppLocalizations t, String key) => switch (key) {
       _ => null,
     };
 
+/// 아이콘 입력칸의 값 정리 규칙. 한 곳에 두고 두 길이 같이 쓴다 — 키보드 입력(입력
+/// 포매터)과, 포매터를 안 거치는 변화(포커스를 잃거나 "완료"로 조합만 끝나는 경우:
+/// 컨트롤러가 값을 직접 바꾼다 → State의 리스너).
+///  - 공백은 전부 뺀다: 저장은 앞뒤 공백을 벗기므로("A "의 공백이 2글자 한도를 차지해
+///    다음 글자를 막거나 " EN"이 ' E'로 잘리면 안 된다) 입력칸에는 공백이 남지 않게 한다.
+///    입력칸 글자 = 저장될 글자라 maxLength 카운터도 맞는다.
+///  - 처음 [Folder.iconTextMaxGraphemes]개 그래핌만 남긴다.
+///  - 조합 중(にほん 변환 전 등)에는 건드리지 않는다 — 조합이 끝난 뒤에 자른다
+///    (`MaxLengthEnforcement.truncateAfterCompositionEnds`와 같은 약속).
+class _IconTextFormatter extends TextInputFormatter {
+  const _IconTextFormatter();
+
+  /// 조합 중인가. 빈 범위(-1,-1)나 접힌 범위는 조합이 아니다.
+  static bool isComposing(TextEditingValue value) =>
+      value.composing.isValid && !value.composing.isCollapsed;
+
+  static bool _isSpace(int codeUnit) =>
+      String.fromCharCode(codeUnit).trim().isEmpty;
+
+  /// 정리한 값. 바꿀 게 없으면 받은 값 그대로(같은 객체)를 돌려준다 — 리스너가 그걸로
+  /// "고쳤는가"를 판단한다.
+  static TextEditingValue limit(TextEditingValue value) {
+    if (isComposing(value)) return value;
+    final text = value.text;
+
+    // 공백을 빼면서 옛 오프셋 → 새 오프셋 표를 만든다(선택 위치를 따라가게).
+    final kept = StringBuffer();
+    final offsetMap = List<int>.filled(text.length + 1, 0);
+    var keptLength = 0;
+    for (var i = 0; i < text.length; i++) {
+      offsetMap[i] = keptLength;
+      final unit = text.codeUnitAt(i);
+      if (_isSpace(unit)) continue;
+      kept.writeCharCode(unit);
+      keptLength++;
+    }
+    offsetMap[text.length] = keptLength;
+
+    var result = kept.toString();
+    final head = result.characters.take(Folder.iconTextMaxGraphemes).string;
+    if (head.length != result.length) result = head;
+    if (result == text) return value;
+
+    int moved(int offset) =>
+        offset < 0 ? offset : offsetMap[offset].clamp(0, result.length);
+    final selection = value.selection;
+    return TextEditingValue(
+      text: result,
+      selection: TextSelection(
+        baseOffset: moved(selection.baseOffset),
+        extentOffset: moved(selection.extentOffset),
+        affinity: selection.affinity,
+        isDirectional: selection.isDirectional,
+      ),
+    );
+  }
+
+  @override
+  TextEditingValue formatEditUpdate(
+          TextEditingValue oldValue, TextEditingValue newValue) =>
+      limit(newValue);
+}
+
 class _FolderIconDialog extends StatefulWidget {
   const _FolderIconDialog({required this.folder});
 
@@ -89,6 +152,14 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
   // 직접 입력칸. 입력이 있으면(공백만은 없는 것으로 본다) 목록 선택보다 우선한다.
   late final TextEditingController _textController;
 
+  // 미리보기에 마지막으로 보여준 "쓸 수 있는" 값. 입력이 쓸 수 없는 동안(3글자 이상으로
+  // 조합 중·안 보이는 글자 등) 미리보기가 기본 폴더로 깜빡 바뀌지 않고 이 값을 유지한다.
+  // 오류는 입력칸의 errorText와 저장 버튼으로만 알린다.
+  late String? _lastValidResult;
+
+  // 리스너가 값을 고치는 동안 자기 자신을 다시 부르지 않게 하는 깃발.
+  bool _fixing = false;
+
   @override
   void initState() {
     super.initState();
@@ -98,6 +169,7 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
     // 경로로 받아 미리보기·저장 버튼을 갱신한다.
     _textController = TextEditingController(text: text ?? '')
       ..addListener(_onTextChanged);
+    _lastValidResult = _result;
   }
 
   @override
@@ -106,7 +178,24 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
     super.dispose();
   }
 
-  void _onTextChanged() => setState(() {});
+  void _onTextChanged() {
+    if (_fixing) return;
+    // 포매터는 키보드 입력만 거친다. 포커스를 잃거나 "완료"로 조합이 확정 없이 끝나면
+    // 컨트롤러가 조합 표시만 지우고(포매터 안 거침) 길이가 넘는 글자가 그대로 남으니
+    // 여기서 같은 규칙으로 자른다.
+    final value = _textController.value;
+    final limited = _IconTextFormatter.limit(value);
+    if (!identical(limited, value)) {
+      _fixing = true;
+      try {
+        _textController.value = limited;
+      } finally {
+        _fixing = false;
+      }
+    }
+    if (!_typedInvalid) _lastValidResult = _result;
+    setState(() {});
+  }
 
   /// 공백이 아닌 글자를 입력했는가(공백만 있으면 입력 안 한 것 — 목록 선택이 그대로다).
   bool get _hasTyped => _textController.text.trim().isNotEmpty;
@@ -123,6 +212,9 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
   String? get _result => _hasTyped
       ? (_typed == null ? null : '${Folder.iconTextPrefix}$_typed')
       : _icon;
+
+  /// 미리보기에 그릴 값: 쓸 수 없는 입력 중이면 마지막으로 쓸 수 있던 값을 그대로 둔다.
+  String? get _previewIcon => _typedInvalid ? _lastValidResult : _result;
 
   Future<void> _pickColor() async {
     final scheme = Theme.of(context).colorScheme;
@@ -191,7 +283,10 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
                       // 아래 setState 바깥에서) — 목록 선택이 곧 저장될 값이 된다.
                       _textController.clear();
                       FocusScope.of(context).unfocus();
-                      setState(() => _icon = entry.key);
+                      setState(() {
+                        _icon = entry.key;
+                        _lastValidResult = _result; // 입력이 비었으니 곧 방금 고른 키
+                      });
                     },
                   ),
               ],
@@ -207,7 +302,7 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
                   padding: const EdgeInsets.only(top: 8),
                   child: FolderIconView(
                     key: const ValueKey('folderIconPreview'),
-                    icon: _result,
+                    icon: _previewIcon,
                     iconColor: _color,
                     isBundle: widget.folder.isBundle,
                     size: 32,
@@ -223,12 +318,15 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
                     maxLength: Folder.iconTextMaxGraphemes,
                     maxLengthEnforcement:
                         MaxLengthEnforcement.truncateAfterCompositionEnds,
-                    // 줄바꿈·탭 등 제어문자는 아예 못 넣게 한다(저장 규칙과 같은 집합).
+                    // 줄바꿈·탭 등 제어문자는 아예 못 넣게 한다(저장 규칙과 같은 집합). 이어서
+                    // 공백 제거 + 2글자 자르기(_IconTextFormatter). maxLength는 카운터 표시와
+                    // 조합 중 처리를 위해 둔다 — 입력칸에 공백이 없으니 카운터가 저장될 글자 수와 맞는다.
                     // enableSuggestions는 끄지 않는다 — 끄면 이모지 패널·CJK 조합이 막힌다.
                     inputFormatters: [
                       FilteringTextInputFormatter.deny(
                         RegExp(r'[\u0000-\u001F\u007F-\u009F\u2028\u2029]'),
                       ),
+                      const _IconTextFormatter(),
                     ],
                     textInputAction: TextInputAction.done,
                     decoration: InputDecoration(
@@ -236,10 +334,11 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
                       hintText: t.folderIconTextHint,
                       // 조합 중(にほん처럼 확정 전)에는 오류를 띄우지 않는다 — 저장 버튼만
                       // 막고, 조합이 끝나 규칙에 맞게 잘리면 사라진다.
-                      errorText:
-                          _typedInvalid && !_textController.value.composing.isValid
-                              ? t.folderIconTextInvalid
-                              : null,
+                      errorText: _typedInvalid &&
+                              !_IconTextFormatter.isComposing(
+                                  _textController.value)
+                          ? t.folderIconTextInvalid
+                          : null,
                       errorMaxLines: 2,
                       isDense: true,
                     ),

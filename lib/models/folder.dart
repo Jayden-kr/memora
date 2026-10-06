@@ -93,7 +93,7 @@ class Folder {
     var visible = false;
     for (final r in text.runes) {
       if (_isForbiddenIconRune(r)) return null;
-      if (!_isInvisibleIconRune(r)) visible = true;
+      if (!isInvisibleIconRune(r)) visible = true;
     }
     if (!visible) return null; // 안 보이는 아이콘 금지(folder_icons.dart의 알파 0 보정과 같은 약속)
     if (text.characters.length > iconTextMaxGraphemes) return null;
@@ -117,17 +117,25 @@ class Folder {
       r == 0x2029 ||
       (r >= 0xD800 && r <= 0xDFFF);
 
-  // 그려지는 게 없는 서식·채움 문자: 이것만 있으면 안 보이는 아이콘(한글 채움 U+3164 포함)
-  static bool _isInvisibleIconRune(int r) =>
+  /// 그려지는 게 없는 서식·채움 문자: 이것만 있으면 안 보이는 아이콘(한글 채움 U+3164,
+  /// 점자 빈칸 U+2800, 크메르 내재 모음 U+17B4·U+17B5, 속기 서식 U+1BCA0–1BCA3 포함).
+  /// 표의 모든 항목(범위는 양 끝)을 folder_test가 직접 본다 — U+FEFF는 trim()이 먼저
+  /// 벗겨 normalizeIconText로는 닿지 않으니 이 함수를 공개해 직접 확인한다. 표를 고치면
+  /// 그 테스트의 표도 같이 고칠 것.
+  static bool isInvisibleIconRune(int r) =>
       r == 0x00AD ||
       r == 0x034F ||
       r == 0x061C ||
       r == 0x115F ||
       r == 0x1160 ||
+      r == 0x17B4 ||
+      r == 0x17B5 ||
       (r >= 0x180B && r <= 0x180F) ||
+      (r >= 0x1BCA0 && r <= 0x1BCA3) ||
       (r >= 0x200B && r <= 0x200F) ||
       (r >= 0x202A && r <= 0x202E) ||
       (r >= 0x2060 && r <= 0x206F) ||
+      r == 0x2800 ||
       r == 0x3164 ||
       (r >= 0xFE00 && r <= 0xFE0F) ||
       r == 0xFEFF ||

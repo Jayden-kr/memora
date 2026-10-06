@@ -596,6 +596,245 @@ void main() {
       expect(box.value, (icon: 't:\u65E5\u672C', iconColor: null));
     });
 
+    // ── L2: 조합이 확정 없이 끝나는 길(포커스를 잃음·"완료")도 2글자로 자른다 ──
+    // 이 길은 입력 포매터를 안 거치고 컨트롤러가 조합 표시만 지운다 → State 리스너가 자른다.
+    const nihon = '\u306B\u307B\u3093'; // にほん
+    const niho = '\u306B\u307B'; // にほ
+
+    Future<void> composeRaw(WidgetTester tester, String text) async {
+      await tester.showKeyboard(_textField);
+      tester.testTextInput.updateEditingValue(TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+        composing: TextRange(start: 0, end: text.length),
+      ));
+      await tester.pump();
+    }
+
+    testWidgets('조합 중 3글자(にほん)가 확정 없이 포커스를 잃으면 앞 2글자(にほ)로 잘린다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await composeRaw(tester, nihon);
+      expect(_fieldText(tester), nihon);
+      expect(_saveEnabled(tester), isFalse);
+
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+
+      expect(_fieldText(tester), niho);
+      expect(_saveEnabled(tester), isTrue);
+      expect(find.text(_invalidText), findsNothing);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(box.value, (icon: 't:$niho', iconColor: null));
+    });
+
+    testWidgets('조합 표시만 지워져도(clearComposing) 같은 규칙으로 잘린다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await composeRaw(tester, nihon);
+      // 포커스 상실·완료가 하는 일 그대로: 값은 두고 조합 범위만 비운다.
+      tester.widget<TextField>(_textField).controller!.clearComposing();
+      await tester.pump();
+
+      expect(_fieldText(tester), niho);
+      expect(_saveEnabled(tester), isTrue);
+    });
+
+    testWidgets('영어 키보드가 "ENG"를 조합 중에 "완료"를 누르면 "EN"으로 잘려 저장된다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await composeRaw(tester, 'ENG');
+      expect(_fieldText(tester), 'ENG');
+      expect(_saveEnabled(tester), isFalse);
+
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+
+      expect(_fieldText(tester), 'EN');
+      expect(_saveEnabled(tester), isTrue);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(box.value, (icon: 't:EN', iconColor: null));
+    });
+
+    // ── L3: 쓸 수 없는 입력 중에도 미리보기는 기본 폴더로 깜빡이지 않는다 ──
+    testWidgets('글자 "א"를 넣은 뒤 너무 긴 값을 조합하면 미리보기는 "א" 그대로(오류는 저장 버튼뿐)',
+        (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A', iconColor: blue));
+
+      await tester.enterText(_textField, aleph);
+      await tester.pump();
+      expect(find.descendant(of: _preview, matching: find.text(aleph)),
+          findsOneWidget);
+
+      await composeRaw(tester, nihon);
+
+      expect(_saveEnabled(tester), isFalse); // 조합 중 초과: 저장은 막힌다
+      expect(find.text(_invalidText), findsNothing); // 조합 중이라 오류 문구는 없다
+      expect(find.descendant(of: _preview, matching: find.text(aleph)),
+          findsOneWidget,
+          reason: '미리보기가 마지막으로 쓸 수 있던 값(א)을 유지해야 한다');
+      expect(find.descendant(of: _preview, matching: find.byType(Icon)),
+          findsNothing);
+
+      // 쓸 수 있는 값으로 확정되면 미리보기가 따라간다.
+      tester.testTextInput.updateEditingValue(const TextEditingValue(
+        text: '\u65E5\u672C',
+        selection: TextSelection.collapsed(offset: 2),
+      ));
+      await tester.pump();
+      expect(find.descendant(of: _preview, matching: find.text('\u65E5\u672C')),
+          findsOneWidget);
+    });
+
+    testWidgets('쓸 수 없는 입력(결합문자 도배·한글 채움)이어도 미리보기는 직전 값을 유지한다',
+        (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A', icon: 'heart', iconColor: blue));
+      Icon previewIcon() => tester.widget<Icon>(
+          find.descendant(of: _preview, matching: find.byType(Icon)));
+      expect(previewIcon().icon, Icons.favorite);
+
+      // 목록에서 고른 값(하트)이 마지막으로 쓸 수 있던 값이다.
+      await tester.enterText(_textField, '\u3164');
+      await tester.pump();
+      expect(find.text(_invalidText), findsOneWidget);
+      expect(previewIcon().icon, Icons.favorite);
+
+      // 글자로 한 번 확정하면 그 글자가 마지막 값이 된다.
+      await tester.enterText(_textField, aleph);
+      await tester.pump();
+      await tester.enterText(_textField, 'a${'\u0301' * 40}');
+      await tester.pump();
+      expect(find.text(_invalidText), findsOneWidget);
+      expect(find.descendant(of: _preview, matching: find.text(aleph)),
+          findsOneWidget);
+      expect(find.descendant(of: _preview, matching: find.byType(Icon)),
+          findsNothing);
+    });
+
+    // ── L4: 입력칸에는 공백이 남지 않는다(저장은 앞뒤 공백을 벗기므로) ──
+    testWidgets('" EN"을 붙여넣으면 "EN"이 되어 "t:EN"으로 저장된다(앞 공백이 한도를 먹지 않는다)',
+        (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await tester.enterText(_textField, ' EN');
+      await tester.pump();
+
+      expect(_fieldText(tester), 'EN');
+      expect(find.text('2/2'), findsOneWidget); // 카운터 = 저장될 글자 수
+      expect(tester.widget<TextField>(_textField).controller!.selection.baseOffset, 2);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(box.value, (icon: 't:EN', iconColor: null));
+    });
+
+    testWidgets('"A " 뒤에 "B"를 치면 "AB" — 뒤 공백이 2번째 글자를 막지 않는다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await tester.enterText(_textField, 'A ');
+      await tester.pump();
+      expect(_fieldText(tester), 'A');
+      expect(find.text('1/2'), findsOneWidget);
+
+      // 키보드 입력: 칸에 있는 글자 뒤에 B가 붙는다.
+      await tester.enterText(_textField, '${_fieldText(tester)}B');
+      await tester.pump();
+      expect(_fieldText(tester), 'AB');
+      expect(find.text('2/2'), findsOneWidget);
+
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(box.value, (icon: 't:AB', iconColor: null));
+    });
+
+    testWidgets('전각 공백·가운데 공백·여러 공백도 입력칸에서 빠진다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await tester.enterText(_textField, '\u3000A \u00A0B  ');
+      await tester.pump();
+      expect(_fieldText(tester), 'AB');
+    });
+
+    testWidgets('공백이 끼어 3글자를 넘는 붙여넣기("A B C")는 공백을 뺀 뒤 앞 2글자("AB")', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+
+      await tester.enterText(_textField, 'A B C');
+      await tester.pump();
+      expect(_fieldText(tester), 'AB');
+    });
+
+    testWidgets('글자 아이콘이 저장된 폴더도 열릴 때 입력칸 글자는 그대로다(포매터가 건드리지 않는다)',
+        (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A', icon: 't:EN'));
+      expect(_fieldText(tester), 'EN');
+      expect(find.text('2/2'), findsOneWidget);
+    });
+
+    // ── L6: 미리보기는 고른 목록 아이콘과 묶음 기본 아이콘도 보여준다 ──
+    Icon previewIconOf(WidgetTester tester) => tester.widget<Icon>(
+        find.descendant(of: _preview, matching: find.byType(Icon)));
+
+    testWidgets('하트를 고르면 미리보기가 고른 색의 favorite 아이콘이다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A', iconColor: blue));
+
+      await tester.tap(_option('heart'));
+      await tester.pump();
+
+      expect(previewIconOf(tester).icon, Icons.favorite);
+      expect(previewIconOf(tester).color, const Color(blue));
+      expect(_previewGlyph, findsNothing);
+    });
+
+    testWidgets('아이콘이 없는 묶음 폴더의 미리보기는 folder_special', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'B', isBundle: true));
+      expect(previewIconOf(tester).icon, Icons.folder_special);
+    });
+
+    testWidgets('아이콘이 없는 일반 폴더의 미리보기는 folder', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A'));
+      expect(previewIconOf(tester).icon, Icons.folder);
+    });
+
+    testWidgets('묶음 폴더에서 하트를 고르면 favorite(기본 아이콘이 아니라 고른 값)', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'B', isBundle: true, iconColor: blue));
+
+      await tester.tap(_option('heart'));
+      await tester.pump();
+      expect(previewIconOf(tester).icon, Icons.favorite);
+
+      await tester.enterText(_textField, aleph);
+      await tester.pump();
+      expect(_previewGlyph, findsOneWidget);
+      expect(find.descendant(of: _preview, matching: find.byType(Icon)), findsNothing);
+    });
+
+    testWidgets('글자를 넣은 뒤 지우면 미리보기가 원래 고르던 목록 아이콘으로 돌아온다', (tester) async {
+      final box = _ResultBox();
+      await _open(tester, box, Folder(name: 'A', icon: 'star', iconColor: blue));
+
+      await tester.enterText(_textField, aleph);
+      await tester.pump();
+      await tester.enterText(_textField, '');
+      await tester.pump();
+
+      expect(previewIconOf(tester).icon, Icons.star);
+    });
+
     testWidgets('글자를 넣고 저장해 닫아도 퇴장 애니메이션 중 예외가 없다(컨트롤러 dispose 타이밍)',
         (tester) async {
       final box = _ResultBox();
