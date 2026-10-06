@@ -1,8 +1,8 @@
-// 폴더 아이콘 표(lib/utils/folder_icons.dart) 검증.
+// 폴더 아이콘 규칙(lib/utils/folder_icons.dart) 검증.
 //
-// 1. 키 목록·순서·키→아이콘 매핑 고정: 키는 DB/.mra에 저장되는 약속이라 이름을 바꾸거나
-//    지우면 이미 저장된 폴더가 기본 아이콘으로 돌아간다(추가만 허용). 순서는 선택
-//    창에 보이는 순서.
+// 1. 24개 키→아이콘 표(`folderIcons`)는 없앴다(사용자 요청 2026-10-06). 예전에 저장된 키는
+//    DB/.mra에 그대로 남지만 그릴 때는 전부 기본 아이콘이다 — 24개 옛 키를 이 파일에 못박아
+//    "표가 되살아나 키가 다시 다른 그림으로 그려지는" 일을 막는다.
 // 2. 폴백: null/빈 문자열/모르는 키 → 폴더·묶음 폴더 기본 아이콘. 색 null → 테마 primary.
 // 3. 구조적 트립와이어: lib 어디에도 코드포인트로 직접 만든 아이콘 객체가 없어야 한다.
 //    릴리스 빌드는 아이콘 폰트를 트리 셰이킹하는데, `const Icons.*`가 아닌 동적 아이콘이
@@ -65,61 +65,41 @@ String _stripComments(String src) {
 final RegExp _dynamicIconCtor = RegExp(r'(^|[^A-Za-z0-9_$])IconData\s*\(');
 
 void main() {
-  group('folderIcons 표', () {
-    // 키와 순서를 이 목록으로 못박는다. 바꾸고 싶으면 저장된 데이터가 깨지는지부터
-    // 따질 것 — 지우거나 이름을 바꾸지 말고 추가만.
-    const expected = <(String, IconData)>[
-      ('book', Icons.menu_book),
-      ('language', Icons.translate),
-      ('star', Icons.star),
-      ('heart', Icons.favorite),
-      ('school', Icons.school),
-      ('science', Icons.science),
-      ('music', Icons.music_note),
-      ('work', Icons.work),
-      ('idea', Icons.lightbulb),
-      ('flag', Icons.flag),
-      ('bookmark', Icons.bookmark),
-      ('math', Icons.calculate),
-      ('code', Icons.code),
-      ('globe', Icons.public),
-      ('mind', Icons.psychology),
-      ('history', Icons.history_edu),
-      ('art', Icons.palette),
-      ('sports', Icons.sports_soccer),
-      ('travel', Icons.flight),
-      ('medical', Icons.medical_services),
-      ('pets', Icons.pets),
-      ('food', Icons.restaurant),
-      ('chat', Icons.chat_bubble),
-      ('home', Icons.home),
+  group('예전 아이콘 표는 없다', () {
+    // 예전 24개 키(저장된 데이터에는 남아 있을 수 있다). 지금은 어느 것도 고유한 그림이 없다.
+    const legacyKeys = <String>[
+      'book', 'language', 'star', 'heart', 'school', 'science', 'music', 'work', //
+      'idea', 'flag', 'bookmark', 'math', 'code', 'globe', 'mind', 'history', //
+      'art', 'sports', 'travel', 'medical', 'pets', 'food', 'chat', 'home',
     ];
 
-    test('키 24개가 이 순서 그대로 있다', () {
-      expect(folderIcons.keys.toList(), [for (final e in expected) e.$1]);
-      expect(folderIcons.length, 24);
-    });
-
-    test('각 키가 가리키는 아이콘이 고정돼 있다', () {
-      for (final (key, icon) in expected) {
-        expect(folderIcons[key], icon, reason: '키 "$key"의 아이콘이 바뀌었다');
+    test('옛 키 24개 전부 기본 폴더 아이콘이다(묶음이면 folder_special)', () {
+      expect(legacyKeys.length, 24);
+      expect(legacyKeys.toSet().length, 24);
+      for (final key in legacyKeys) {
+        expect(folderIconData(key, isBundle: false), Icons.folder,
+            reason: '옛 키 "$key"가 기본 아이콘이 아니다 — 표가 되살아났는가');
+        expect(folderIconData(key, isBundle: true), Icons.folder_special,
+            reason: '옛 키 "$key"가 묶음 기본 아이콘이 아니다');
       }
     });
 
-    test('키는 소문자/밑줄만 쓴다(DB·JSON에 그대로 저장되는 식별자)', () {
-      final pattern = RegExp(r'^[a-z_]+$');
-      for (final key in folderIcons.keys) {
-        expect(pattern.hasMatch(key), isTrue, reason: '키 "$key"가 규칙에 안 맞는다');
+    test('lib 소스에 folderIcons 표나 folderIconName 도우미가 없다', () {
+      final offenders = <String>[];
+      final pattern = RegExp(r'(^|[^A-Za-z0-9_$])(folderIcons\b|folderIconName\w*)');
+      final files = Directory('lib')
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.dart'))
+          .toList();
+      expect(files.length, greaterThan(20));
+      for (final f in files) {
+        if (pattern.hasMatch(_stripComments(f.readAsStringSync()))) {
+          offenders.add(f.path);
+        }
       }
-    });
-
-    test('서로 다른 키가 같은 아이콘을 가리키지 않는다(선택 창에서 구별이 안 된다)', () {
-      expect(folderIcons.values.toSet().length, folderIcons.length);
-    });
-
-    test('기본 폴더/묶음 폴더 아이콘은 표에 없다(표는 "고르는" 아이콘만)', () {
-      expect(folderIcons.values, isNot(contains(Icons.folder)));
-      expect(folderIcons.values, isNot(contains(Icons.folder_special)));
+      expect(offenders, isEmpty,
+          reason: '24개 아이콘 표·이름 도우미가 되살아났다: $offenders');
     });
   });
 
@@ -136,13 +116,9 @@ void main() {
       expect(folderIconData('no_such', isBundle: true), Icons.folder_special);
     });
 
-    test('아는 키는 묶음 여부와 무관하게 그 아이콘', () {
-      expect(folderIconData('star', isBundle: false), Icons.star);
-      expect(folderIconData('star', isBundle: true), Icons.star);
-    });
-
-    test('키 대소문자는 구분한다("Star"는 모르는 키)', () {
-      expect(folderIconData('Star', isBundle: false), Icons.folder);
+    test('예전 표의 키("star")도 묶음 여부에 맞는 기본 아이콘', () {
+      expect(folderIconData('star', isBundle: false), Icons.folder);
+      expect(folderIconData('star', isBundle: true), Icons.folder_special);
     });
 
     test('글자 아이콘("t:…")은 키가 아니므로 기본 아이콘 — 글자는 FolderIconView가 그린다', () {

@@ -9,13 +9,17 @@ import 'folder_icon_view.dart';
 
 /// 폴더 아이콘 선택 결과. `(icon: null, iconColor: null)`은 "기본값으로 되돌리기"다 —
 /// 취소(다이얼로그가 `null`을 돌려줌)와는 다른 값이니 호출부가 둘을 섞지 말 것.
-/// `icon`은 null(기본) / 표의 키 / 't:' + 직접 넣은 글자([Folder.iconTextPrefix]) 중 하나다.
+/// `icon`은 null(기본 폴더 아이콘) / 't:' + 직접 넣은 글자([Folder.iconTextPrefix]) 중 하나다.
 typedef FolderIconChoice = ({String? icon, int? iconColor});
 
 /// 폴더 아이콘·색 선택 다이얼로그. "저장"하면 고른 값을, "기본으로"를 누르면
 /// `(icon: null, iconColor: null)`을, "취소"하거나 바깥을 탭하면 `null`을 반환한다.
-/// 아이콘은 표(24개)에서 고르거나, 입력칸에 이모지·글자 1~2개를 직접 넣을 수 있다
-/// (입력이 있으면 입력이 우선이고 't:'가 붙어 반환된다). 색은 둘 다 같이 쓴다.
+/// 아이콘은 입력칸에 이모지·글자 1~2개를 직접 넣는다(입력이 있으면 't:'가 붙어 반환되고,
+/// 비어 있으면 null = 기본 폴더 아이콘). 색은 둘 다 같이 쓴다.
+///
+/// 예전의 "기본 아이콘 24개 표"는 없앴다(사용자 요청 2026-10-06). 표의 키('star' 등)가
+/// 저장돼 있던 폴더는 이제 기본 아이콘으로 그려지고, 이 다이얼로그는 그 폴더를 입력칸 비어 있는
+/// 채로 열며 입력 없이 "저장"하면 `icon: null`을 돌려준다(= 키 정리; 그려지는 모양은 같다).
 ///
 /// 홈 화면(일반/묶음 폴더)과 묶음 안 폴더 목록이 같이 쓴다. DB에 쓰는 일은 하지
 /// 않는다 — 호출부가 `DatabaseHelper.updateFolderIcon`으로 저장한다.
@@ -28,40 +32,6 @@ Future<FolderIconChoice?> showFolderIconDialog({
     builder: (_) => _FolderIconDialog(folder: folder),
   );
 }
-
-/// 아이콘 키 → 사용자에게 읽어줄 이름(툴팁·접근성 라벨). 표에 없는 키(다른 버전이 만든
-/// 값)는 `null`이라 라벨이 붙지 않는다.
-///
-/// ⚠️ [folderIcons]에 아이콘을 추가하면 여기와 두 arb(app_ko/app_en)의 `folderIconName*`
-/// 키도 같이 추가할 것 — 이름이 없는 아이콘 버튼은 스크린리더가 "버튼"으로만 읽는다
-/// (테스트: folder_icon_dialog_test의 "모든 키에 이름이 있다").
-String? folderIconName(AppLocalizations t, String key) => switch (key) {
-      'book' => t.folderIconNameBook,
-      'language' => t.folderIconNameLanguage,
-      'star' => t.folderIconNameStar,
-      'heart' => t.folderIconNameHeart,
-      'school' => t.folderIconNameSchool,
-      'science' => t.folderIconNameScience,
-      'music' => t.folderIconNameMusic,
-      'work' => t.folderIconNameWork,
-      'idea' => t.folderIconNameIdea,
-      'flag' => t.folderIconNameFlag,
-      'bookmark' => t.folderIconNameBookmark,
-      'math' => t.folderIconNameMath,
-      'code' => t.folderIconNameCode,
-      'globe' => t.folderIconNameGlobe,
-      'mind' => t.folderIconNameMind,
-      'history' => t.folderIconNameHistory,
-      'art' => t.folderIconNameArt,
-      'sports' => t.folderIconNameSports,
-      'travel' => t.folderIconNameTravel,
-      'medical' => t.folderIconNameMedical,
-      'pets' => t.folderIconNamePets,
-      'food' => t.folderIconNameFood,
-      'chat' => t.folderIconNameChat,
-      'home' => t.folderIconNameHome,
-      _ => null,
-    };
 
 /// 아이콘 입력칸의 값 정리 규칙. 한 곳에 두고 두 길이 같이 쓴다 — 키보드 입력(입력
 /// 포매터)과, 포매터를 안 거치는 변화(포커스를 잃거나 "완료"로 조합만 끝나는 경우:
@@ -172,16 +142,13 @@ class _FolderIconDialog extends StatefulWidget {
 /// 퇴장 애니메이션이 끝나기 전에 Future가 먼저 complete돼 화면에 남은 TextField가 이미
 /// dispose된 컨트롤러를 참조한다(color_picker_dialog.dart의 같은 주석 참고).
 class _FolderIconDialogState extends State<_FolderIconDialog> {
-  // 저장돼 있던 값에서 출발한다. 이 앱 버전이 모르는 키(다른 버전이 만든 값)가 들어
-  // 있어도 사용자가 다른 아이콘을 고르기 전까지는 그대로 돌려준다 — 색만 바꾸고
-  // 저장했는데 아이콘 키가 조용히 지워지면 안 된다. 규칙을 어긴 't:…' 값도 같은
-  // 모르는 값으로 보존한다(입력칸은 비어 있고, 아무것도 안 건드리면 그대로 돌려준다).
-  // 정상 글자 아이콘('t:…')이면 `_icon`은 비우고 글자를 입력칸에 채운다 — 목록에는
-  // 선택된 칸이 없다.
-  late String? _icon;
+  // 저장돼 있던 값에서 출발한다. 정상 글자 아이콘('t:…')이면 글자를 입력칸에 채운다. 그 밖의
+  // 저장값(예전 표의 키 'star' 등, 다른 버전이 만든 모르는 키, 규칙을 어긴 't:…')은 입력칸을
+  // 비운 채 열고 미리보기는 기본 폴더 아이콘이다 — 그렇게 그려지는 값이 곧 화면에 보이는 값이라서다.
+  // 입력 없이 "저장"하면 `icon: null`이 돌아온다(키 정리, 그려지는 모양은 같다).
   late int? _color = widget.folder.iconColor;
 
-  // 직접 입력칸. 입력이 있으면(공백만은 없는 것으로 본다) 목록 선택보다 우선한다.
+  // 직접 입력칸. 비어 있으면(공백만은 없는 것으로 본다) 기본 폴더 아이콘(null)이다.
   late final TextEditingController _textController;
 
   // 미리보기에 마지막으로 보여준 "쓸 수 있는" 값. 입력이 쓸 수 없는 동안(3글자 이상으로
@@ -196,7 +163,6 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
   void initState() {
     super.initState();
     final text = Folder.iconTextOf(widget.folder.icon);
-    _icon = text == null ? widget.folder.icon : null;
     // onChanged가 아니라 리스너: 한글·일본어 조합(IME)이 끝나는 변화와 글자 삭제까지 같은
     // 경로로 받아 미리보기·저장 버튼을 갱신한다.
     _textController = TextEditingController(text: text ?? '')
@@ -229,7 +195,7 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
     setState(() {});
   }
 
-  /// 공백이 아닌 글자를 입력했는가(공백만 있으면 입력 안 한 것 — 목록 선택이 그대로다).
+  /// 공백이 아닌 글자를 입력했는가(공백만 있으면 입력 안 한 것 — 기본 아이콘이다).
   bool get _hasTyped => _textController.text.trim().isNotEmpty;
 
   /// 입력을 저장 형태(앞뒤 공백 제거)로 다듬은 글자. 입력이 없거나 쓸 수 없으면 null.
@@ -239,11 +205,11 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
   /// 입력은 했는데 쓸 수 없다(3글자 이상·안 보이는 글자 등) → 저장 불가.
   bool get _typedInvalid => _hasTyped && _typed == null;
 
-  /// 저장·미리보기에 쓸 아이콘 값 = 하이라이트된 것. 입력이 있으면 't:' + 글자(쓸 수
-  /// 없으면 null), 없으면 목록에서 고른 값.
-  String? get _result => _hasTyped
-      ? (_typed == null ? null : '${Folder.iconTextPrefix}$_typed')
-      : _icon;
+  /// 저장·미리보기에 쓸 아이콘 값. 입력이 있으면 't:' + 글자(쓸 수 없으면 null), 비어
+  /// 있으면 null(기본 폴더 아이콘).
+  String? get _result => _hasTyped && _typed != null
+      ? '${Folder.iconTextPrefix}$_typed'
+      : null;
 
   /// 미리보기에 그릴 값: 쓸 수 없는 입력 중이면 마지막으로 쓸 수 있던 값을 그대로 둔다.
   String? get _previewIcon => _typedInvalid ? _lastValidResult : _result;
@@ -266,15 +232,11 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
     final t = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final shownColor = folderIconColor(_color, scheme);
-    // 입력이 있으면 목록에는 선택된 칸이 없다(하이라이트 = 저장될 값). 입력을 지우면 원래
-    // 고르던 목록 선택이 다시 나타난다.
-    final listSelection = _hasTyped ? null : _icon;
 
     // 폭은 화면에 맞춘다: AlertDialog의 insetPadding 40×2 + contentPadding 24×2 =
-    // 128dp를 뺀 값. 아이콘은 GridView/LayoutBuilder가 아니라 Wrap으로 깐다 —
-    // AlertDialog는 content를 IntrinsicWidth로 감싸 크기를 재는데 둘 다 intrinsic
-    // 치수 계산을 지원하지 않아 예외가 난다(color_picker_dialog.dart와 같은 이유).
-    // 폭이 한 줄 아이콘 수를 정하고 넘치면 줄바꿈이라 좁은 화면·가로 모드에서도 잘리지 않는다.
+    // 128dp를 뺀 값. AlertDialog는 content를 IntrinsicWidth로 감싸 크기를 재는데
+    // GridView/LayoutBuilder는 intrinsic 치수 계산을 지원하지 않아 예외가 난다
+    // (color_picker_dialog.dart와 같은 이유) — 고정 폭 SizedBox 안에서 Row/Expanded만 쓴다.
     final width = (MediaQuery.sizeOf(context).width - 128).clamp(120.0, 288.0);
 
     return AlertDialog(
@@ -290,42 +252,8 @@ class _FolderIconDialogState extends State<_FolderIconDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Wrap(
-              children: [
-                for (final entry in folderIcons.entries)
-                  IconButton(
-                    key: ValueKey('folderIconOption_${entry.key}'),
-                    // 아이콘만 있는 버튼이라 이름을 안 붙이면 스크린리더가 "버튼"으로만
-                    // 읽는다(길게 누르면 이름이 뜨기도 한다).
-                    tooltip: folderIconName(t, entry.key),
-                    isSelected: entry.key == listSelection,
-                    // 고른 아이콘만 고른 색(없으면 테마색)으로 미리 보여주고 테두리로
-                    // 표시한다. 나머지는 기본 아이콘색이라 선택된 것이 한눈에 보인다.
-                    icon: Icon(
-                      entry.value,
-                      color: entry.key == listSelection ? shownColor : null,
-                    ),
-                    style: entry.key == listSelection
-                        ? IconButton.styleFrom(
-                            side: BorderSide(color: scheme.primary, width: 2),
-                          )
-                        : null,
-                    onPressed: () {
-                      // 목록에서 고르면 입력은 비운다(clear가 리스너로 setState를 부르니
-                      // 아래 setState 바깥에서) — 목록 선택이 곧 저장될 값이 된다.
-                      _textController.clear();
-                      FocusScope.of(context).unfocus();
-                      setState(() {
-                        _icon = entry.key;
-                        _lastValidResult = _result; // 입력이 비었으니 곧 방금 고른 키
-                      });
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: 16),
             // 직접 입력: 미리보기(저장될 모양 그대로) + 입력칸. 이 Row가 intrinsic 치수를
-            // 안 물어도 되는 건 바깥 SizedBox가 고정 폭을 주기 때문이다. 새 Wrap/GridView/
+            // 안 물어도 되는 건 바깥 SizedBox가 고정 폭을 주기 때문이다. 새 GridView/
             // LayoutBuilder를 여기 넣지 말 것(위 폭 규칙).
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,

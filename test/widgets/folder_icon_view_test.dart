@@ -1,7 +1,8 @@
 // FolderIconView(lib/widgets/folder_icon_view.dart) 검증 — 순수 UI라 sqlite 없이 위젯만
 // 올린다.
 //
-// 1. 키(또는 null)면 머티리얼 아이콘 + 고른 색/기본색, 묶음 여부에 맞는 기본 아이콘.
+// 1. 키(또는 null)면 기본 머티리얼 아이콘(예전 표의 키 'star' 등도 이제 기본 아이콘) +
+//    고른 색/기본색, 묶음 여부에 맞는 기본 아이콘.
 // 2. 't:' + 글자면 그 글자를 고른 색으로 그리고 Icon은 없다.
 // 3. 글자가 어떤 모양이든(길이·문자 체계·이모지) 아이콘 칸(24×24) 안에 들어온다.
 // 4. 규칙을 어긴 글자 값은 기본 아이콘 — 던지지 않는다.
@@ -65,14 +66,19 @@ RenderParagraph _paragraph(WidgetTester tester) => tester.renderObject<RenderPar
     find.descendant(of: _glyph, matching: find.byType(RichText)));
 
 void main() {
-  group('키 아이콘(예전과 같은 그림)', () {
-    testWidgets('고른 키와 색이 그대로 그려지고 글자는 없다', (tester) async {
+  group('키 아이콘(기본 아이콘으로 그려진다)', () {
+    testWidgets('예전 표의 키("star")는 기본 폴더 아이콘으로 그려지고 색·글자 없음은 그대로', (tester) async {
+      // 24개 아이콘 표를 없앴다(2026-10-06). 이미 저장된 키는 지우지 않고(Folder 모델·DB·.mra는
+      // 그대로) 그릴 때만 기본 아이콘으로 떨어진다.
       await _pump(tester, icon: 'star', iconColor: _blue);
 
       final icon = tester.widget<Icon>(find.byType(Icon));
-      expect(icon.icon, Icons.star);
+      expect(icon.icon, Icons.folder);
       expect(icon.color, const Color(_blue));
       expect(_glyph, findsNothing);
+
+      await _pump(tester, icon: 'heart', isBundle: true);
+      expect(tester.widget<Icon>(find.byType(Icon)).icon, Icons.folder_special);
     });
 
     testWidgets('null은 기본 folder + 테마 primary, 묶음이면 folder_special', (tester) async {
@@ -92,7 +98,7 @@ void main() {
     });
 
     testWidgets('size를 주면 Icon 크기가 된다', (tester) async {
-      await _pump(tester, icon: 'star', size: 32);
+      await _pump(tester, icon: null, size: 32);
       expect(tester.widget<Icon>(find.byType(Icon)).size, 32);
     });
   });
@@ -269,7 +275,7 @@ void main() {
 
   group('비활성(enabled: false) — 아이콘과 같은 onSurface 38%', () {
     testWidgets('키 아이콘: Icon 색이 onSurface 38%, 필터는 없다', (tester) async {
-      await _pump(tester, icon: 'star', iconColor: _blue, enabled: false);
+      await _pump(tester, icon: null, iconColor: _blue, enabled: false);
 
       final onSurface38 = _scheme(tester).onSurface.withValues(alpha: 0.38);
       expect(tester.widget<Icon>(find.byType(Icon)).color, onSurface38);
