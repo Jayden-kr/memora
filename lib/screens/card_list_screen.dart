@@ -6,9 +6,14 @@ import 'package:flutter/material.dart';
 // material.dart는 RenderSliverMultiBoxAdaptor를 내보내지 않는다 — 소량 목록(ListView)의
 // 보이는 칸 위치를 렌더 트리에서 직접 읽어야 해서 필요하다 (card_edit_screen.dart와 같은 이유).
 // 대량 목록의 "target보다 위쪽 칸인가"(역방향 sliver)를 렌더 트리에서 읽는 데도 쓴다
-// (GrowthDirection·RenderSliver, laidOutAboveListTarget).
+// (GrowthDirection·RenderSliver, laidOutAboveListTarget). 누른 칸의 위치를 목록 뷰포트 기준으로
+// 렌더 트리에서 직접 읽는 데도 쓴다(RenderAbstractViewport, tappedItemEdges).
 import 'package:flutter/rendering.dart'
-    show GrowthDirection, RenderSliver, RenderSliverMultiBoxAdaptor;
+    show
+        GrowthDirection,
+        RenderAbstractViewport,
+        RenderSliver,
+        RenderSliverMultiBoxAdaptor;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
@@ -92,10 +97,12 @@ int? keepAnchorForNewResults({
 ///
 /// ScrollablePositionedList는 target 카드의 위쪽 가장자리를 이 정렬 위치에 두고 배치한다.
 /// 이 목록의 뷰포트는 0~1 밖의 값도 받아들이므로 범위 제한 때문에 막는 것은 아니다.
-/// 위로 잘린 카드(음수)를 붙잡지 않는 이유: 접혀서 줄어들 때 카드의 아래쪽이 위로 끌려 올라오는데,
-/// 위쪽 가장자리를 화면 밖에 붙잡아 두면 손가락 밑이 다음 카드가 된다. 붙잡지 않으면 아래쪽
-/// 가장자리가 유지돼 카드가 계속 손가락 밑에 남는다. 화면 아래로 벗어난 카드(1 초과)는 눌릴 수
-/// 없다. NaN도 null이어야 한다.
+/// 위로 잘린 카드(음수)는 위쪽 가장자리로 붙잡지 않는다 — 위쪽 가장자리를 화면 밖에 붙잡아 두면
+/// 접혀서 줄어들 때 카드가 통째로 화면 위로 사라지고 손가락 밑이 다음 카드가 된다. 위로 잘린 카드는
+/// **아래쪽 가장자리**를 고정해야 하는데, target 위쪽 칸(역방향 sliver)은 원래 아래쪽 가장자리가
+/// 고정이라 그대로 두면 되고, target 이상 칸(정방향 sliver)은 위쪽이 고정이라 [resizePinFor]가
+/// 다음 칸을 이 카드의 아래쪽 가장자리에 맞춰 target으로 삼는다(그러면 이 카드가 역방향이 된다).
+/// 화면 아래로 벗어난 카드(1 초과)는 눌릴 수 없다. NaN도 null이어야 한다.
 @visibleForTesting
 double? pinAlignmentFor(double itemLeadingEdge) =>
     (itemLeadingEdge >= 0 && itemLeadingEdge <= 1) ? itemLeadingEdge : null;
@@ -136,11 +143,44 @@ bool laidOutAboveListTarget(BuildContext itemContext) {
       node.constraints.growthDirection == GrowthDirection.reverse;
 }
 
+/// 누른 칸([itemContext])의 위/아래 가장자리를 목록 뷰포트 높이 대비 비율로 돌려준다.
+///
+/// ⚠️ 위치는 **렌더 트리에서 지금 값**을 읽는다. [positions](ItemPositionsListener)는 스크롤이나
+/// 새 레이아웃 때만 갱신돼서, 스크롤 없이 칸 높이만 바뀌면(예: 이미지 디코딩이 끝나 카드가 커짐) 낡은
+/// 값이 남는다 — 그 값으로 붙잡으면 카드가 그만큼 튄다. 렌더 트리를 못 읽을 때(안 붙음·크기 없음·
+/// 뷰포트 없음)만 [positions]의 [index] 칸으로 대신하고, 거기에도 없으면 null.
+@visibleForTesting
+({double leading, double trailing})? tappedItemEdges({
+  required BuildContext itemContext,
+  required Iterable<ItemPosition> positions,
+  required int index,
+}) {
+  if (itemContext.mounted) {
+    final box = itemContext.findRenderObject();
+    if (box is RenderBox && box.attached && box.hasSize) {
+      // RenderAbstractViewport는 인터페이스라 RenderBox로 승격이 안 된다 — RenderObject로 받는다.
+      final RenderObject? viewport = RenderAbstractViewport.maybeOf(box);
+      if (viewport is RenderBox && viewport.hasSize && viewport.size.height > 0) {
+        final top = box.localToGlobal(Offset.zero, ancestor: viewport).dy;
+        final h = viewport.size.height;
+        return (leading: top / h, trailing: (top + box.size.height) / h);
+      }
+    }
+  }
+  for (final p in positions) {
+    if (p.index == index) {
+      return (leading: p.itemLeadingEdge, trailing: p.itemTrailingEdge);
+    }
+  }
+  return null;
+}
+
 /// 접기/보이기로 [index] 칸 높이가 바뀌기 전에, 그 칸을 화면 그 자리에 붙잡을 정렬값. 붙잡을 필요가
 /// 없거나(target 이상 칸) 붙잡을 수 없으면(화면 밖·위로 잘림, pinAlignmentFor가 null) null.
 ///
 /// target 이상 칸은 어차피 위쪽 가장자리가 안 움직이므로 건드리지 않는다 — 건드리면 보이는 칸이
 /// 전부 다시 만들어져 물결·접근성 포커스가 끊긴다([tappedCardNeedsPin]).
+/// 위치는 [tappedItemEdges](렌더 트리 우선)로 읽는다.
 @visibleForTesting
 double? reanchorAlignmentBeforeResize({
   required BuildContext itemContext,
@@ -148,8 +188,52 @@ double? reanchorAlignmentBeforeResize({
   required int index,
 }) {
   if (!laidOutAboveListTarget(itemContext)) return null;
-  for (final p in positions) {
-    if (p.index == index) return pinAlignmentFor(p.itemLeadingEdge);
+  final edges =
+      tappedItemEdges(itemContext: itemContext, positions: positions, index: index);
+  return edges == null ? null : pinAlignmentFor(edges.leading);
+}
+
+/// 접기/보이기로 [index] 칸 높이가 바뀌기 직전에, 목록을 어느 칸을 어디에 두고 다시 마운트해야
+/// 눌린 카드가 손가락 밑에 남는지. 다시 마운트할 필요가 없으면 null.
+///
+/// 1) target 위쪽 칸(역방향 sliver, [laidOutAboveListTarget]): 아래쪽 가장자리가 고정이고 위쪽이 움직인다.
+///    위쪽 가장자리가 화면 안이면 그 칸을 지금 자리 그대로 target으로 삼는다. 위로 잘렸으면(아래쪽은
+///    화면 안) 아래쪽 가장자리가 이미 고정이라 그대로 둔다.
+/// 2) target 이상 칸(정방향 sliver): 위쪽 가장자리가 고정이고 아래쪽이 움직인다. 위쪽이 화면 안이면
+///    그대로 둔다. **위로 잘린 칸**(위쪽 < 0, 아래쪽은 화면 안)은 줄어들면 위쪽이 화면 밖에 고정된 채
+///    통째로 위로 사라지고 다음 카드가 손가락 밑으로 미끄러진다 → 다음 칸([index] + 1)을 이 카드의
+///    **현재 아래쪽 가장자리**에 맞춰 target으로 삼는다. 그러면 이 카드가 target 위쪽 칸(역방향)이 되어
+///    아래쪽 가장자리가 고정된다. 마지막 칸이면 다음 칸이 없어서 하지 않는다 — 목록 끝이라 스크롤
+///    범위 제한이 카드를 화면에 남긴다(테스트로 확인).
+///
+/// [targetIndex]는 값싼 사전 검사([tappedCardNeedsPin])에만 쓰고 최종 판단은 렌더 트리가 한다.
+@visibleForTesting
+({int index, double alignment})? resizePinFor({
+  required BuildContext itemContext,
+  required Iterable<ItemPosition> positions,
+  required int index,
+  required int targetIndex,
+  required int itemCount,
+}) {
+  if (itemCount <= 0 || index < 0 || index >= itemCount) return null;
+  final edges =
+      tappedItemEdges(itemContext: itemContext, positions: positions, index: index);
+  if (edges == null) return null;
+  final above = tappedCardNeedsPin(
+        tappedIndex: index,
+        targetIndex: targetIndex,
+        itemCount: itemCount,
+      ) &&
+      laidOutAboveListTarget(itemContext);
+  if (above) {
+    final a = pinAlignmentFor(edges.leading);
+    return a == null ? null : (index: index, alignment: a);
+  }
+  if (edges.leading < 0 &&
+      edges.trailing > 0 &&
+      edges.trailing <= 1 &&
+      index + 1 < itemCount) {
+    return (index: index + 1, alignment: edges.trailing);
   }
   return null;
 }
@@ -174,6 +258,12 @@ double? reanchorAlignmentBeforeResize({
 /// 키가 바뀌면 새 자식을 먼저 만든 뒤 옛 자식을 치워서, ItemScrollController에 옛 SPL이 아직 붙어
 /// 있는 채로 새 SPL이 붙으려다 assert가 나고 그 뒤 isAttached가 false가 된다. 단일 자식 부모
 /// 아래에서는 옛 자식을 먼저 치우므로 안전하다.
+///
+/// ⚠️ [build]는 SPL을 자기만의 `PageStorage`(빈 PageStorageBucket) 안에 둔다. 위쪽에 PageStorageKey가
+/// 있는 화면(탭·라우트 구성이 바뀌는 경우)에서도 새로 마운트된 SPL의 ScrollPosition이 PageStorage에서
+/// 옛 스크롤 위치를 복원해 `initialScrollIndex`를 이겨 버리는 것을 막는다(검증: PageStorageKey 조상이
+/// 있으면 30번을 요청해도 0번에서 열렸다). 버킷은 [build]마다 새로 만들어 — 점프든 점프 아닌 새
+/// 마운트든 — 새 SPL이 읽을 옛 값이 없게 한다. 이 PageStorage를 지우면 안 된다.
 @visibleForTesting
 class SplRemountController {
   SplRemountController({
@@ -188,6 +278,10 @@ class SplRemountController {
   int _initialIndex = 0;
   double _initialAlignment = 0;
   int _targetIndex = 0;
+
+  // 스크롤바 썸 드래그 중 마지막으로 실제로 점프한 칸·그때의 epoch ([thumbDragJumpTo]).
+  int _lastDragJumpIndex = -1;
+  int _lastDragJumpEpoch = -1;
 
   /// 목록 키. 바뀔 때마다 SPL이 새로 마운트된다.
   int get epoch => _epoch;
@@ -223,33 +317,65 @@ class SplRemountController {
     });
   }
 
-  /// 키·시작 위치가 붙은 SPL. 부모가 Stack이어도 안전하도록 `SizedBox.expand`로 감싼다(위 ⚠️).
+  /// 스크롤바 썸 드래그가 시작될 때마다 부른다 — 첫 점프는 항상 실제로 한다.
+  void beginThumbDrag() {
+    _lastDragJumpIndex = -1;
+    _lastDragJumpEpoch = -1;
+  }
+
+  /// 썸 드래그 중의 점프. 같은 드래그에서 **같은 칸**으로 또 점프하고 그 사이에 다른 점프가 없었으면
+  /// (epoch가 마지막 드래그 점프 때 그대로) 건너뛴다 — 이미 그 칸에 가 있다. 다시 마운트는 보이는 칸을
+  /// 전부 새로 만들어서(프레임당 약 1800 요소, 디버그 60~85ms) 칸이 안 바뀌는 작은 드래그에서도 매
+  /// 프레임 치르면 낭비다. 실제로 점프했으면 true.
+  ///
+  /// ⚠️ 다시 마운트는 그대로 쓴다(SPL의 raw jumpTo로 되돌리지 말 것 — [jumpTo] 문서). 건너뛰는 것은
+  /// "같은 칸 + 같은 epoch"일 때뿐이라, 그 사이에 접기/새 결과/검색 닫기 같은 다른 점프가 있었으면
+  /// (epoch가 바뀐다) 반드시 새로 점프한다.
+  bool thumbDragJumpTo(
+    int index, {
+    double alignment = 0,
+    required void Function(VoidCallback fn) setState,
+  }) {
+    if (index == _lastDragJumpIndex && _epoch == _lastDragJumpEpoch) {
+      return false;
+    }
+    jumpTo(index, alignment: alignment, setState: setState);
+    _lastDragJumpIndex = index;
+    _lastDragJumpEpoch = _epoch;
+    return true;
+  }
+
+  /// 키·시작 위치가 붙은 SPL. 부모가 Stack이어도 안전하도록 `SizedBox.expand`로, 위쪽 PageStorage
+  /// 복원을 막도록 자기만의 `PageStorage`로 감싼다(위 ⚠️ 둘).
   Widget build({
     required int itemCount,
     required IndexedWidgetBuilder itemBuilder,
     ScrollPhysics? physics,
   }) {
     return SizedBox.expand(
-      child: ScrollablePositionedList.builder(
-        key: ValueKey(_epoch),
-        initialScrollIndex: _initialIndex,
-        initialAlignment: _initialAlignment,
-        itemCount: itemCount,
-        itemBuilder: itemBuilder,
-        itemScrollController: itemScrollController,
-        itemPositionsListener: itemPositionsListener,
-        physics: physics,
+      child: PageStorage(
+        bucket: PageStorageBucket(),
+        child: ScrollablePositionedList.builder(
+          key: ValueKey(_epoch),
+          initialScrollIndex: _initialIndex,
+          initialAlignment: _initialAlignment,
+          itemCount: itemCount,
+          itemBuilder: itemBuilder,
+          itemScrollController: itemScrollController,
+          itemPositionsListener: itemPositionsListener,
+          physics: physics,
+        ),
       ),
     );
   }
 }
 
-/// 접기/보이기로 [index] 칸 높이가 바뀌기 직전에, 그 칸이 target보다 위쪽(역방향 sliver)이면
-/// 그 칸을 지금 화면 위치 그대로 target으로 삼아 다시 마운트한다. 다시 마운트했으면 true.
+/// 접기/보이기로 [index] 칸 높이가 바뀌기 직전에, 눌린 카드가 손가락 밑에 남도록 필요할 때만 목록을
+/// 다시 마운트한다([resizePinFor]가 어느 칸을 어디에 둘지 정한다). 다시 마운트했으면 true.
 ///
-/// 사전 검사([tappedCardNeedsPin], 값싼 인덱스 비교)를 통과한 칸만 렌더 트리로 최종 확인한다.
-/// target 이상 칸·화면 밖/위로 잘린 칸은 건드리지 않는다. 호출자가 바로 뒤에서 setState로 높이를
-/// 바꾸므로, 여기서 건 setState와 같은 프레임에 합쳐져 처음 레이아웃부터 새 높이로 그려진다.
+/// target 이상이면서 위쪽이 화면 안인 칸은 건드리지 않는다 — 건드리면 보이는 칸이 전부 다시 만들어져
+/// 물결·접근성 포커스가 끊긴다. 호출자가 바로 뒤에서 setState로 높이를 바꾸므로, 여기서 건 setState와
+/// 같은 프레임에 합쳐져 처음 레이아웃부터 새 높이로 그려진다.
 @visibleForTesting
 bool reanchorTappedCard({
   required SplRemountController spl,
@@ -259,20 +385,15 @@ bool reanchorTappedCard({
   required void Function(VoidCallback fn) setState,
 }) {
   if (!spl.itemScrollController.isAttached) return false;
-  if (!tappedCardNeedsPin(
-    tappedIndex: index,
-    targetIndex: spl.targetIndex,
-    itemCount: itemCount,
-  )) {
-    return false;
-  }
-  final alignment = reanchorAlignmentBeforeResize(
+  final pin = resizePinFor(
     itemContext: itemContext,
     positions: spl.itemPositionsListener.itemPositions.value,
     index: index,
+    targetIndex: spl.targetIndex,
+    itemCount: itemCount,
   );
-  if (alignment == null) return false;
-  spl.jumpTo(index, alignment: alignment, setState: setState);
+  if (pin == null) return false;
+  spl.jumpTo(pin.index, alignment: pin.alignment, setState: setState);
   return true;
 }
 
@@ -613,7 +734,8 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
-  // 대량 목록의 점프는 전부 이 컨트롤러(= 목록 다시 마운트)로만 한다 — _jumpSplTo가 유일한 입구.
+  // 대량 목록의 점프는 전부 이 컨트롤러(= 목록 다시 마운트)로만 한다 — 입구는 _jumpSplTo와
+  // (스크롤바 썸 드래그의) _spl.thumbDragJumpTo뿐이다.
   // ⚠️ _itemScrollController.jumpTo/scrollTo를 직접 부르지 말 것: SPL 0.3.8의 jumpTo는 먼 칸으로
   // 점프할 때 페이지 전체를 민다(SplRemountController 문서). target 인덱스(_spl.targetIndex)도
   // 이 컨트롤러가 점프와 같이 기록한다.
@@ -782,7 +904,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   /// 대량 목록(SPL)을 [index] 칸이 [alignment] 위치에 오도록 **다시 마운트**하고 target 인덱스를
   /// 기록한다. 호출 전에 isAttached를 확인할 것(목록이 떠 있을 때만 의미가 있다). mounted일 때만 부를 것.
   ///
-  /// SPL 점프는 이 화면 안에서 반드시 이 함수로만 한다 — SPL의 jumpTo는 먼 칸으로 점프하면 페이지
+  /// SPL 점프는 이 화면 안에서 반드시 이 함수(또는 같은 컨트롤러의 thumbDragJumpTo)로만 한다 — SPL의 jumpTo는 먼 칸으로 점프하면 페이지
   /// 전체를 밀기 때문에(접기/보이기 붙잡기·새 검색 결과 맨 위·검색 닫기 앵커·위치 복원이 모두
   /// 어긋났다) 쓰지 않는다. 기록이 빠지면 접기/보이기의 "붙잡아야 하나" 판단도 틀어진다(_spl.targetIndex).
   /// 같은 프레임에 여러 번 불리면 마지막 호출만 남는다.
@@ -1686,17 +1808,18 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   // ─── Answer fold/hide ───
 
-  /// 대량 목록(ScrollablePositionedList)에서 접기/보이기로 카드 높이가 바뀔 때, 누른 카드의
-  /// 위쪽 가장자리가 화면에서 움직이지 않게 한다. 이 목록은 target 카드를 기준으로 배치하는데
-  /// target보다 위쪽 칸은 target에서 위로 쌓여서, 그런 카드의 높이가 바뀌면 위쪽으로 밀려
-  /// 올라가 손가락 밑에 다른 카드가 미끄러져 온다(예: 검색 결과가 전체 목록 target을 물려받은
-  /// 경우). 그래서 setState 전에 누른 카드를 "지금 화면 위치 그대로" target으로 삼아 목록을
-  /// 다시 마운트한다(SPL jumpTo는 쓰지 않는다 — _jumpSplTo 문서).
-  /// target 이상 칸(역방향 sliver가 아닌 칸)은 어차피 안 움직이므로 건드리지 않는다 — 다시
+  /// 대량 목록(ScrollablePositionedList)에서 접기/보이기로 카드 높이가 바뀔 때, 누른 카드가 손가락
+  /// 밑에 남게 한다. 이 목록은 target 카드를 기준으로 배치하는데 target보다 위쪽 칸은 target에서
+  /// 위로 쌓여서, 그런 카드의 높이가 바뀌면 위쪽으로 밀려 올라가 손가락 밑에 다른 카드가 미끄러져
+  /// 온다(예: 검색 결과가 전체 목록 target을 물려받은 경우). 그래서 setState 전에 누른 카드를 "지금
+  /// 화면 위치 그대로" target으로 삼아 목록을 다시 마운트한다(SPL jumpTo는 쓰지 않는다 — _jumpSplTo 문서).
+  /// target 이상 칸은 위쪽 가장자리가 어차피 안 움직이므로 위쪽이 화면 안이면 건드리지 않는다 — 다시
   /// 마운트하면 보이는 칸이 전부 새로 만들어져 물결·접근성 포커스가 끊긴다(reanchorTappedCard).
-  /// 소량 목록(ListView)은 픽셀 오프셋 기준이라 해당 없음. 카드가 위로 잘려 있거나 화면 밖이면
-  /// (pinAlignmentFor가 null) 건드리지 않는다.
-  /// [itemContext]는 눌린 칸 안쪽(_buildCardItem의 Builder)의 컨텍스트 — 렌더 트리로 위치를 판별한다.
+  /// 단 target 이상 칸이 **위로 잘려 있고 아래쪽이 화면 안**이면, 줄어들 때 위쪽이 화면 밖에 고정된 채
+  /// 카드가 통째로 사라지므로 다음 칸을 이 카드의 아래쪽 가장자리에 맞춰 target으로 삼아 아래쪽을 고정한다
+  /// (resizePinFor). target 위쪽 칸이 위로 잘린 경우는 아래쪽이 원래 고정이라 건드리지 않는다.
+  /// 소량 목록(ListView)은 픽셀 오프셋 기준이라 해당 없음. 화면 밖이거나 아래로 벗어난 카드는 건드리지 않는다.
+  /// [itemContext]는 눌린 칸 안쪽(_buildCardItem의 Builder)의 컨텍스트 — 렌더 트리로 위치를 읽는다.
   void _keepTappedCardInPlace(int cardId, BuildContext itemContext) {
     if (_useSimpleList) return;
     final index = _cards.indexWhere((c) => c.id == cardId);
@@ -1958,6 +2081,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           onVerticalDragStart: (details) {
             _isDraggingThumb.value = true;
             _scrollLabelTimer?.cancel();
+            _spl.beginThumbDrag(); // 이 드래그의 첫 점프는 항상 실제로 한다
             _jumpToFraction(
                 details.localPosition.dy, trackHeight, indicatorHeight);
           },
@@ -2061,7 +2185,8 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _jumpScheduled = false;
         if (!mounted || !_itemScrollController.isAttached) return;
-        _jumpSplTo(_pendingJumpIndex);
+        // 같은 드래그에서 같은 칸이면 건너뛴다(다시 마운트는 비싸다) — thumbDragJumpTo 문서.
+        _spl.thumbDragJumpTo(_pendingJumpIndex, setState: setState);
       });
     }
   }

@@ -751,5 +751,172 @@ void main() {
     test('ScrollablePositionedList는 SplRemountController.build 한 곳에서만 만든다', () {
       expect(RegExp(r'ScrollablePositionedList\.builder\(').allMatches(source).length, 1);
     });
+
+    // ── 배선 가드 (C2b-3): 도우미가 아무리 맞아도 화면이 그 도우미를 부르지 않거나 엉뚱한 인자를 주면
+    //    기기에서만 깨진다(화면은 sqlite 때문에 위젯 테스트로 못 띄운다). 호출 자리와 인자를 소스에서 확인한다.
+
+    String body(String signature) {
+      final b = functionBody(source, signature);
+      expect(b, isNotNull, reason: '함수 $signature 를 소스에서 못 찾았다 (이름이 바뀌었으면 가드를 옮길 것)');
+      expect(b!.length, greaterThan(20), reason: '$signature 본문이 비었다');
+      return b;
+    }
+
+    void expectIn(String b, RegExp re, String what) {
+      expect(re.hasMatch(b), isTrue, reason: what);
+    }
+
+    test('접기/보이기는 붙잡기(_keepTappedCardInPlace)를 setState 전에 칸 컨텍스트(itemContext)로 부른다', () {
+      for (final fn in ['_toggleAnswerReveal', '_toggleQuestionFold']) {
+        final b = body('void $fn');
+        final pin = RegExp(r'_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*\)').firstMatch(b);
+        final set = b.indexOf('setState(');
+        expect(pin, isNotNull, reason: '$fn 가 _keepTappedCardInPlace(cardId, itemContext)를 부르지 않는다');
+        expect(set, greaterThan(pin!.start), reason: '$fn: 붙잡기는 높이를 바꾸는 setState보다 먼저여야 한다');
+      }
+    });
+
+    test('_keepTappedCardInPlace는 reanchorTappedCard에 컨트롤러·칸 컨텍스트·setState를 넘긴다', () {
+      final b = body('void _keepTappedCardInPlace');
+      expectIn(b, RegExp(r'reanchorTappedCard\('), 'reanchorTappedCard 호출');
+      expectIn(b, RegExp(r'spl:\s*_spl\b'), 'spl: _spl');
+      expectIn(b, RegExp(r'itemContext:\s*itemContext\b'), 'itemContext: itemContext');
+      expectIn(b, RegExp(r'index:\s*index\b'), 'index: index');
+      expectIn(b, RegExp(r'itemCount:\s*_cards\.length\b'), 'itemCount: _cards.length');
+      expectIn(b, RegExp(r'setState:\s*setState\b'), 'setState: setState');
+    });
+
+    test('칸 빌더는 접기/보이기에 목록 context가 아니라 칸 안쪽 itemContext(Builder)를 넘긴다', () {
+      final b = body('Widget _buildCardItem');
+      expectIn(b, RegExp(r'Builder\(\s*builder:\s*\(\s*itemContext\s*\)'), 'Builder(builder: (itemContext)');
+      expectIn(
+          b,
+          RegExp(r'onQuestionTap:[^;]*?_toggleQuestionFold\(\s*card\s*,\s*itemContext\s*\)'),
+          'onQuestionTap → _toggleQuestionFold(card, itemContext)');
+      expectIn(
+          b,
+          RegExp(r'onAnswerTap:[^;]*?_toggleAnswerReveal\(\s*card\s*,\s*itemContext\s*\)'),
+          'onAnswerTap → _toggleAnswerReveal(card, itemContext)');
+      expect(RegExp(r'_toggle(QuestionFold|AnswerReveal)\(\s*card\s*,\s*context\s*\)').hasMatch(b), isFalse,
+          reason: '목록 context를 넘기면 칸의 렌더 객체가 아니라 목록 전체를 보게 된다');
+    });
+
+    test('스크롤바 썸 드래그: 시작에서 beginThumbDrag, 점프는 thumbDragJumpTo(_pendingJumpIndex)', () {
+      final start = functionBodyAfter(source, 'onVerticalDragStart: (details)');
+      expect(start, isNotNull);
+      expectIn(start!, RegExp(r'_spl\.beginThumbDrag\(\s*\)'), 'onVerticalDragStart에서 _spl.beginThumbDrag()');
+      expectIn(start, RegExp(r'_jumpToFraction\('), 'onVerticalDragStart에서 _jumpToFraction');
+      final b = body('void _jumpToFraction');
+      expectIn(b, RegExp(r'_spl\.thumbDragJumpTo\(\s*_pendingJumpIndex\s*,\s*setState:\s*setState\s*\)'),
+          '_jumpToFraction의 post-frame에서 _spl.thumbDragJumpTo(_pendingJumpIndex, setState: setState)');
+    });
+
+    test('새 검색 결과 묶음은 맨 위로 점프한다 (_performSearch)', () {
+      final b = body('Future<void> _performSearch');
+      expectIn(
+          b,
+          RegExp(r'if\s*\(\s*isNewResultSet\s*\)\s*\{[^}]*_jumpSplTo\(\s*0\s*\)'),
+          'if (isNewResultSet) { ... _jumpSplTo(0) }');
+    });
+
+    test('검색을 닫으면 앵커 칸(없으면 맨 위)으로 점프한다 (_settleAfterSearchExit)', () {
+      final b = body('void _settleAfterSearchExit');
+      expectIn(b, RegExp(r'_jumpSplTo\(\s*idx\s*>=\s*0\s*\?\s*idx\s*:\s*0\s*\)'),
+          '_jumpSplTo(idx >= 0 ? idx : 0)');
+      expectIn(b, RegExp(r'_finishSearchExitSettle\(\s*\)'), 'finally에서 _finishSearchExitSettle');
+    });
+
+    test('알림 진입 점프와 위치 복원 점프도 _jumpSplTo로 한다', () {
+      expectIn(body('Future<void> _initLoad'), RegExp(r'_jumpSplTo\(\s*targetIndex\s*\)'),
+          '_initLoad: _jumpSplTo(targetIndex)');
+      expectIn(body('Future<void> _loadCards'), RegExp(r'_jumpSplTo\(\s*idx\s*\)'),
+          '_loadCards 위치 복원: _jumpSplTo(idx)');
+    });
+
+    test('_jumpSplTo는 컨트롤러 jumpTo로만 간다', () {
+      expectIn(body('void _jumpSplTo'),
+          RegExp(r'_spl\.jumpTo\(\s*index\s*,\s*alignment:\s*alignment\s*,\s*setState:\s*setState\s*\)'),
+          '_spl.jumpTo(index, alignment: alignment, setState: setState)');
+    });
+
+    // 가드 도구 자체의 대조군: 정규식·본문 추출이 "좋은 소스"는 통과시키고 "깨진 소스"는 잡는지.
+    test('가드 대조군: 좋은 소스는 통과, 깨뜨린 소스(호출 삭제·context 전달·본문 밖)는 실패', () {
+      const good = '''
+class S {
+  void _toggleAnswerReveal(CardModel card, BuildContext itemContext) {
+    final cardId = card.id;
+    _keepTappedCardInPlace(cardId, itemContext);
+    setState(() { _revealed.add(cardId); });
+  }
+  void other({int a = 0}) {
+    final cardId = 1;
+    _keepTappedCardInPlace(cardId, itemContext);
+  }
+}''';
+      final pinRe = RegExp(r'_keepTappedCardInPlace\(\s*cardId\s*,\s*itemContext\s*\)');
+      final g = functionBody(good, 'void _toggleAnswerReveal')!;
+      expect(pinRe.hasMatch(g), isTrue);
+      // 호출 삭제
+      final removed = good.replaceFirst('_keepTappedCardInPlace(cardId, itemContext);', '');
+      expect(pinRe.hasMatch(functionBody(removed, 'void _toggleAnswerReveal')!), isFalse);
+      // 목록 context 전달
+      final wrongCtx = good.replaceFirst('(cardId, itemContext)', '(cardId, context)');
+      expect(pinRe.hasMatch(functionBody(wrongCtx, 'void _toggleAnswerReveal')!), isFalse);
+      // 다른 함수 본문에 같은 호출이 있어도 이 함수 본문이 아니면 잡는다 (본문 범위 검사)
+      final moved = good.replaceFirst('_keepTappedCardInPlace(cardId, itemContext);\n    setState', 'setState');
+      expect(moved, isNot(good), reason: '대조군 치환이 실제로 일어나야 한다');
+      expect(pinRe.hasMatch(moved), isTrue, reason: '소스 전체에는 같은 호출이 남아 있다(다른 함수)');
+      expect(pinRe.hasMatch(functionBody(moved, 'void _toggleAnswerReveal')!), isFalse);
+      expect(pinRe.hasMatch(functionBody(good, 'void other')!), isTrue,
+          reason: '이름 있는 매개변수({}) 뒤의 본문도 찾는다');
+      expect(functionBody(good, 'void noSuchFunction'), isNull);
+      // 닫는 중괄호를 지나쳐 다음 함수까지 먹지 않는다
+      expect(functionBody(good, 'void _toggleAnswerReveal')!.contains('void other'), isFalse);
+    });
   });
+}
+
+/// [signature]( 로 시작하는 함수 선언의 본문(`{ ... }` 안쪽). 소스에 없으면 null.
+/// 매개변수 목록의 괄호를 짝 맞춰 건너뛴 뒤(이름 있는 매개변수의 `{}` 때문에 단순히 첫 `{`를 찾으면
+/// 안 된다) 본문 중괄호를 짝 맞춰 찾는다.
+String? functionBody(String source, String signature) {
+  final at = source.indexOf('$signature(');
+  if (at < 0) return null;
+  var i = source.indexOf('(', at);
+  var depth = 0;
+  for (; i < source.length; i++) {
+    final c = source[i];
+    if (c == '(') depth++;
+    if (c == ')') {
+      depth--;
+      if (depth == 0) break;
+    }
+  }
+  return _braced(source, i + 1);
+}
+
+/// [marker] 바로 뒤(공백 제외)에 오는 `{ ... }` 블록의 안쪽 (예: 클로저 `onVerticalDragStart: (details) {`).
+String? functionBodyAfter(String source, String marker) {
+  final at = source.indexOf(marker);
+  if (at < 0) return null;
+  return _braced(source, at + marker.length);
+}
+
+String? _braced(String source, int from) {
+  var i = source.indexOf('{', from);
+  if (i < 0) return null;
+  // `) async {` 처럼 `{` 앞에 `;`가 먼저 나오면 본문이 아니라 선언만 있는 것이다.
+  final semi = source.indexOf(';', from);
+  if (semi >= 0 && semi < i) return null;
+  final start = i + 1;
+  var depth = 0;
+  for (; i < source.length; i++) {
+    final c = source[i];
+    if (c == '{') depth++;
+    if (c == '}') {
+      depth--;
+      if (depth == 0) return source.substring(start, i);
+    }
+  }
+  return null;
 }
