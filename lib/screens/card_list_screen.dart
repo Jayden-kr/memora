@@ -1,7 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart' show kTouchSlop;
 import 'package:flutter/material.dart';
+// material.dart는 RenderSliverMultiBoxAdaptor를 내보내지 않는다 — 소량 목록(ListView)의
+// 보이는 칸 위치를 렌더 트리에서 직접 읽어야 해서 필요하다 (card_edit_screen.dart와 같은 이유).
+import 'package:flutter/rendering.dart' show RenderSliverMultiBoxAdaptor;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
@@ -16,6 +20,49 @@ import '../widgets/card_tile.dart';
 import '../widgets/confirm_delete_dialog.dart';
 import '../widgets/folder_name_dialog.dart';
 import 'card_edit_screen.dart';
+
+/// 화면에 보이는 칸 중 맨 위(인덱스가 가장 작은) 칸의 인덱스. 보이는 칸이 없으면 null.
+///
+/// [positions]는 순서가 보장되지 않으므로 첫 원소가 아니라 최솟값을 고른다.
+/// 뒤쪽 가장자리가 0 이하인 칸은 화면 위로 완전히 지나간 칸이라 제외한다
+/// (_currentVisibleIndex·_onItemPositionsChanged의 `itemTrailingEdge > 0`과 같은 기준).
+@visibleForTesting
+int? firstVisibleItemIndex(Iterable<ItemPosition> positions) {
+  int? best;
+  for (final p in positions) {
+    if (p.itemTrailingEdge <= 0) continue; // 화면 위로 완전히 지나간 칸 제외
+    if (best == null || p.index < best) best = p.index;
+  }
+  return best;
+}
+
+/// 검색을 닫을 때 전체 목록에서 맨 위에 둘 카드의 id를 고른다.
+///
+/// 우선순위: 마지막으로 누른 카드(아직 검색 결과에 있을 때) > 화면 맨 위에 보이던 결과 > 없음(null).
+/// null이면 호출자가 목록 맨 위로 보낸다. [resultIds]는 닫기 직전에 화면에 있던 결과의
+/// id 순서이고, [firstVisibleIndex]는 그 결과 목록 기준 인덱스라 범위를 벗어나면 무시한다.
+@visibleForTesting
+int? pickSearchExitAnchor({
+  required int? tappedCardId,
+  required List<int?> resultIds,
+  required int? firstVisibleIndex,
+}) {
+  if (tappedCardId != null && resultIds.contains(tappedCardId)) {
+    return tappedCardId;
+  }
+  final i = firstVisibleIndex;
+  if (i != null && i >= 0 && i < resultIds.length) return resultIds[i];
+  return null;
+}
+
+/// 누른 카드를 화면에서 그 자리에 붙잡아 둘 정렬값(뷰포트 대비 위쪽 가장자리 비율).
+///
+/// ScrollablePositionedList는 target 카드의 위쪽 가장자리를 기준으로 배치하는데,
+/// RenderViewport.anchor는 0~1만 허용한다 — 카드가 위로 반쯤 잘려 있거나(음수) 화면
+/// 아래로 벗어났으면(1 초과) 붙잡을 수 없으니 null. NaN도 null이어야 한다.
+@visibleForTesting
+double? pinAlignmentFor(double itemLeadingEdge) =>
+    (itemLeadingEdge >= 0 && itemLeadingEdge <= 1) ? itemLeadingEdge : null;
 
 class CardListScreen extends StatefulWidget {
   final Folder folder;
@@ -63,6 +110,18 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   Timer? _debounceTimer;
   String _searchQuery = '';
   int _searchGeneration = 0;
+  // 지금 _cards에 들어 있는 검색 결과의 검색어 (null = 전체 목록). _searchQuery는
+  // 입력/닫기 즉시 바뀌지만 이 값은 결과가 실제로 화면에 올라온 시점에만 바뀐다 —
+  // "새 결과 묶음인가"(맨 위로 시작)와 "검색을 닫는 중인가"(누른 카드 유지)를 가르는 기준.
+  // _cards를 통째로 바꾸는 곳 4군데(_initLoad·_loadCards 알림 분기·_loadCards 일반 분기=null,
+  // _performSearch=검색어)가 전부 이 값을 같이 갱신해야 한다.
+  String? _resultsQuery;
+  // 검색 결과에서 마지막으로 누른 카드 (검색을 닫을 때 전체 목록에서 그 카드를 맨 위에 둔다).
+  // 결과가 화면에 떠 있는 동안에만 non-null — 새 결과 묶음/전체 목록이 올라오면 비운다.
+  int? _searchAnchorCardId;
+  // 카드 위 포인터 추적 — 누름(탭)과 스크롤 드래그를 구분해 _searchAnchorCardId를 기록한다.
+  int? _pressPointer;
+  Offset? _pressPosition;
 
   // 잠금화면 편집 후 pop 감지용 (one-shot)
   bool _autoEditRefreshPending = false;
@@ -168,6 +227,8 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           ..addAll(cards);
         _totalCount = cards.length;
         _loading = false;
+        _resultsQuery = null;
+        _searchAnchorCardId = null;
       });
 
       if (targetIndex >= 0 && targetIndex < cards.length) {
@@ -322,6 +383,11 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     // (검색 중 X버튼으로 검색을 닫으면 이 리로드가 늦게 도착한 검색 결과에
     // 덮어써지는 것을 방지)
     final gen = ++_searchGeneration;
+    // 검색 결과가 떠 있다가 이 로드로 전체 목록으로 돌아가는 중인가. 첫 await 전에 — 결과
+    // 목록이 아직 화면에 그대로 있을 때 — 전체 목록에서 맨 위에 둘 카드를 정해 둔다
+    // (누른 카드 > 화면 맨 위 결과 > 없음). 알림 모드/일반 모드 양쪽 분기가 같은 값을 쓴다.
+    final leavingSearch = _resultsQuery != null && _searchQuery.isEmpty;
+    final exitAnchorId = leavingSearch ? _pickExitAnchorOnScreen() : null;
     // 알림 모드에서 검색 아닌 리로드는 전체 리로드
     if (_isNotificationMode && _searchQuery.isEmpty) {
       // 카운트도 세대 검사 뒤에 대입한다 — 취소된(stale) 리로드가 앱바 숫자를 오염시키던 구멍.
@@ -343,15 +409,21 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
           ..clear()
           ..addAll(cards);
         _loading = false;
+        _resultsQuery = null;
+        _searchAnchorCardId = null;
         _pruneSelection();
       });
       _precacheCardImages();
+      if (leavingSearch) _settleAfterSearchExit(exitAnchorId, gen);
       return;
     }
 
     // 스크롤 위치 저장 (리로드 후 복원용)
+    // 검색을 닫는 중이면 저장하지 않는다 — 이 시점의 위치는 "결과 목록" 기준인데
+    // (_searchQuery는 이미 ''), 전체 목록에 그대로 적용되면 엉뚱한 카드로 튄다.
+    // 그 경우엔 아래 _settleAfterSearchExit가 누른 카드 기준으로 위치를 잡는다.
     int? savedIndex;
-    if (_cards.isNotEmpty && _searchQuery.isEmpty) {
+    if (!leavingSearch && _cards.isNotEmpty && _searchQuery.isEmpty) {
       final positions = _itemPositionsListener.itemPositions.value;
       if (positions.isNotEmpty) {
         final visible = positions.where((p) => p.itemTrailingEdge > 0);
@@ -393,9 +465,16 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         ..clear()
         ..addAll(cards);
       _loading = false;
+      _resultsQuery = null;
+      _searchAnchorCardId = null;
       _pruneSelection();
     });
     _precacheCardImages();
+    // 검색을 닫고 돌아온 경우: 누른 카드(없으면 맨 위 결과)를 맨 위에 두고 끝낸다.
+    if (leavingSearch) {
+      _settleAfterSearchExit(exitAnchorId, gen);
+      return;
+    }
     // 스크롤 위치 복원
     if (savedIndex != null && savedIndex > 0 && _cards.isNotEmpty) {
       final idx = savedIndex.clamp(0, _cards.length - 1);
@@ -405,6 +484,120 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         }
       });
     }
+  }
+
+  // ─── 검색을 닫을 때 위치 유지 ───
+
+  /// 소량 목록(ListView)에서 화면에 걸친 칸들을 ScrollablePositionedList의 ItemPosition과
+  /// 같은 단위(뷰포트 대비 비율)로 만든다. ListView에는 _itemPositionsListener가 갱신되지
+  /// 않아(대량 목록에서 남은 낡은 값이 들어 있다) 렌더 트리에서 직접 읽는다.
+  /// 렌더 객체를 못 찾거나 아직 레이아웃 전이면 빈 목록 (호출자가 "없음"으로 처리).
+  List<ItemPosition> _simpleListItemPositions() {
+    if (!_simpleScrollController.hasClients) return const [];
+    final position = _simpleScrollController.position;
+    final viewport = position.viewportDimension;
+    if (viewport <= 0) return const [];
+    final root = position.context.storageContext.findRenderObject();
+    if (root == null) return const [];
+    RenderSliverMultiBoxAdaptor? found;
+    void visit(RenderObject node) {
+      if (found != null) return;
+      if (node is RenderSliverMultiBoxAdaptor) {
+        found = node;
+        return;
+      }
+      node.visitChildren(visit);
+    }
+
+    visit(root);
+    final sliver = found; // 클로저에서 대입된 변수라 승격이 안 되므로 지역 변수로 복사
+    if (sliver == null) return const [];
+    final positions = <ItemPosition>[];
+    for (RenderBox? child = sliver.firstChild;
+        child != null;
+        child = sliver.childAfter(child)) {
+      if (!child.hasSize) continue;
+      final top = sliver.constraints.precedingScrollExtent +
+          (sliver.childScrollOffset(child) ?? 0) -
+          position.pixels;
+      positions.add(ItemPosition(
+        index: sliver.indexOf(child),
+        itemLeadingEdge: top / viewport,
+        itemTrailingEdge: (top + child.size.height) / viewport,
+      ));
+    }
+    return positions;
+  }
+
+  /// 지금 화면에 떠 있는 검색 결과 기준으로 "전체 목록에서 맨 위에 둘 카드"의 id를 고른다.
+  /// 반드시 _cards가 아직 결과 목록일 때(_loadCards의 첫 await 전에) 불러야 한다.
+  int? _pickExitAnchorOnScreen() {
+    return pickSearchExitAnchor(
+      tappedCardId: _searchAnchorCardId,
+      resultIds: [for (final c in _cards) c.id],
+      firstVisibleIndex: _useSimpleList
+          ? firstVisibleItemIndex(_simpleListItemPositions())
+          : firstVisibleItemIndex(_itemPositionsListener.itemPositions.value),
+    );
+  }
+
+  /// 검색을 닫고 전체 목록이 올라온 직후: [anchorId] 카드를 맨 위에 두고 5초 하이라이트
+  /// (알림으로 들어왔을 때와 같은 표시). 앵커가 없거나 전체 목록에 없으면 맨 위로 보낸다.
+  /// [gen]은 _loadCards가 발급한 세대 토큰 — 그 사이 더 새로운 로드/검색이 시작됐으면 손대지 않는다.
+  void _settleAfterSearchExit(int? anchorId, int gen) {
+    final found = anchorId != null && _cards.any((c) => c.id == anchorId);
+    if (found) {
+      setState(() => _highlightCardId = anchorId);
+      _highlightTimer?.cancel();
+      _highlightTimer = Timer(const Duration(seconds: 5), () {
+        if (mounted) setState(() => _highlightCardId = null);
+      });
+      if (_useSimpleList) {
+        _seekSimpleListToCard(anchorId, gen);
+        return;
+      }
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || gen != _searchGeneration) return;
+      if (_useSimpleList) {
+        if (_simpleScrollController.hasClients) {
+          _simpleScrollController.jumpTo(0);
+        }
+        return;
+      }
+      if (!_itemScrollController.isAttached) return;
+      // 스크롤 목표는 프레임 시점의 실제 목록 기준으로 다시 찾는다 (_initLoad의 ⚠️와 같은 이유).
+      final idx = found ? _cards.indexWhere((c) => c.id == anchorId) : -1;
+      _itemScrollController.jumpTo(index: idx >= 0 ? idx : 0);
+    });
+  }
+
+  /// 소량 목록(ListView)에서 [cardId] 카드를 맨 위로 올린다. ListView.builder는 화면 밖 칸을
+  /// 만들지 않아 칸 위치를 모르면 정확한 오프셋을 알 수 없다 — 칸이 레이아웃돼 있으면 그 위치로
+  /// 정확히 이동하고, 아니면 "전체 길이 중 인덱스 비율"로 어림 이동한 뒤 다음 프레임에 다시 시도한다.
+  void _seekSimpleListToCard(int cardId, int gen, [int attempt = 0]) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || gen != _searchGeneration) return;
+      if (!_useSimpleList || !_simpleScrollController.hasClients) return;
+      final index = _cards.indexWhere((c) => c.id == cardId);
+      if (index < 0) return;
+      final position = _simpleScrollController.position;
+      for (final p in _simpleListItemPositions()) {
+        if (p.index != index) continue;
+        position.jumpTo(
+          (position.pixels + p.itemLeadingEdge * position.viewportDimension)
+              .clamp(position.minScrollExtent, position.maxScrollExtent),
+        );
+        return;
+      }
+      if (attempt >= 3) return;
+      position.jumpTo(_cards.length <= 1
+          ? 0
+          : position.maxScrollExtent * index / (_cards.length - 1));
+      // jumpTo만으로는 프레임이 안 잡힐 수 있어 직접 깨운다 (card_edit_screen과 같은 이유).
+      WidgetsBinding.instance.ensureVisualUpdate();
+      _seekSimpleListToCard(cardId, gen, attempt + 1);
+    });
   }
 
   /// 카드 1장만 DB에서 다시 가져와 _cards 같은 인덱스에 in-place 교체.
@@ -489,23 +682,38 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   /// 서로의 stale 여부를 못 걸러낸다 (검색 도중 검색을 닫아도 늦게 끝난
   /// 검색 결과가 리로드 결과를 덮어쓰는 문제).
   Future<void> _performSearch(int generation) async {
+    // 이 호출이 찾는 검색어를 먼저 고정한다 — 아래 _resultsQuery와 DB 조회가 같은 값을 보게.
+    final query = _searchQuery;
     List<CardModel> results;
     if (widget.allCards) {
-      results =
-          await DatabaseHelper.instance.searchAllCards(_searchQuery);
+      results = await DatabaseHelper.instance.searchAllCards(query);
     } else {
       results = await DatabaseHelper.instance
-          .searchCards(widget.folder.id!, _searchQuery);
+          .searchCards(widget.folder.id!, query);
     }
     // stale 결과 무시 (더 새로운 검색이 시작된 경우)
     if (!mounted || generation != _searchGeneration) return;
+    // 검색어가 바뀐 "새 결과 묶음"이면 맨 위에서 시작한다. 같은 검색어의 재조회(삭제·이동·
+    // 편집 뒤 갱신)는 보던 자리를 그대로 둔다. 전체 목록(_resultsQuery == null)에서 처음
+    // 검색할 때도 새 묶음이다 — 안 그러면 결과가 전체 목록의 스크롤 상태를 물려받아
+    // 중간부터 열린다.
+    final isNewResultSet = _resultsQuery != query;
     setState(() {
       _cards.clear();
       _cards.addAll(results);
       _totalCount = results.length;
       _loading = false;
+      _resultsQuery = query;
+      // 앵커는 "지금 떠 있는 결과 묶음에서 누른 카드"만 의미가 있다.
+      if (isNewResultSet) _searchAnchorCardId = null;
       _pruneSelection();
     });
+    if (isNewResultSet) {
+      if (_simpleScrollController.hasClients) _simpleScrollController.jumpTo(0);
+      if (_itemScrollController.isAttached) {
+        _itemScrollController.jumpTo(index: 0);
+      }
+    }
   }
 
   void _onSearchChanged(String query) {
@@ -1023,9 +1231,31 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
 
   // ─── Answer fold/hide ───
 
+  /// 대량 목록(ScrollablePositionedList)에서 접기/보이기로 카드 높이가 바뀔 때, 누른 카드의
+  /// 위쪽 가장자리가 화면에서 움직이지 않게 한다. 이 목록은 target 카드를 기준으로 배치하는데
+  /// target이 누른 카드가 아니면(예: 검색 결과가 전체 목록 target을 물려받은 경우) 누른 카드
+  /// 위쪽 칸의 높이 변화가 위쪽으로 밀려 올라가 손가락 밑에 다른 카드가 미끄러져 온다.
+  /// 그래서 setState 전에 target을 "누른 카드, 지금 화면 위치 그대로"로 옮겨 둔다.
+  /// 소량 목록(ListView)은 픽셀 오프셋 기준이라 해당 없음. 카드가 위로 잘려 있거나 화면 밖이면
+  /// (pinAlignmentFor가 null) 건드리지 않는다.
+  void _keepTappedCardInPlace(int cardId) {
+    if (_useSimpleList || !_itemScrollController.isAttached) return;
+    final index = _cards.indexWhere((c) => c.id == cardId);
+    if (index < 0) return;
+    for (final p in _itemPositionsListener.itemPositions.value) {
+      if (p.index != index) continue;
+      final alignment = pinAlignmentFor(p.itemLeadingEdge);
+      if (alignment != null) {
+        _itemScrollController.jumpTo(index: index, alignment: alignment);
+      }
+      return;
+    }
+  }
+
   void _toggleQuestionFold(CardModel card) {
     final cardId = card.id;
     if (cardId == null) return;
+    _keepTappedCardInPlace(cardId);
     setState(() {
       if (_foldedCards.contains(cardId)) {
         _foldedCards.remove(cardId);
@@ -1038,6 +1268,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   void _toggleAnswerReveal(CardModel card) {
     final cardId = card.id;
     if (cardId == null) return;
+    _keepTappedCardInPlace(cardId);
     setState(() {
       if (_revealedCards.contains(cardId)) {
         _revealedCards.remove(cardId);
@@ -1066,28 +1297,47 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   Widget _buildCardItem(BuildContext context, int index) {
     final card = _cards[index];
     final isHighlighted = _highlightCardId == card.id;
-    return CardTile(
-      card: card,
-      isFolded: _isCardFolded(card),
-      isHidden: _allAnswersHidden,
-      isRevealed: _isCardRevealed(card),
-      isSelectionMode: _isSelectionMode,
-      isSelected: _selectedCardIds.contains(card.id),
-      isHighlighted: isHighlighted,
-      cardNumber: _showCardNumber ? index + 1 : null,
-      searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
-      // 선택모드에선 접기/보이기 제스처를 끊는다 — 안쪽 GestureDetector(opaque)가 제스처
-      // 아레나에서 이겨 카드 본문 탭이 선택을 토글하지 못하고 왼쪽 동그라미만 반응했다
-      // (실기기 확인). 콜백이 null이면 인식기가 만들어지지 않아 InkWell.onTap이 받는다.
-      onQuestionTap: _isSelectionMode ? null : () => _toggleQuestionFold(card),
-      onAnswerTap: _isSelectionMode ? null : () => _toggleAnswerReveal(card),
-      onTap: _isSelectionMode
-          ? () => _toggleCardSelection(card)
-          : () => _editCard(card),
-      onLongPress: _isSelectionMode
-          ? null
-          : () => _enterSelectionMode(card),
-      onMenuAction: (action) => _handleCardMenu(card, action),
+    // Listener는 제스처 아레나에 끼지 않는 순수 포인터 관찰자라 아래 CardTile의 탭/롱프레스
+    // 처리(특히 ⚠️ 선택모드 규칙)에 영향이 없다. 검색 결과에서 "마지막으로 누른 카드"를
+    // 기록해 두었다가, 검색을 닫을 때 전체 목록에서 그 카드를 맨 위에 둔다.
+    return Listener(
+      onPointerDown: (e) {
+        _pressPointer = e.pointer;
+        _pressPosition = e.position;
+      },
+      onPointerUp: (e) {
+        final down = _pressPosition;
+        if (e.pointer != _pressPointer || down == null) return;
+        _pressPointer = null;
+        _pressPosition = null;
+        if (_resultsQuery == null) return; // 검색 결과가 떠 있을 때만
+        if ((e.position - down).distance > kTouchSlop) return; // 스크롤 드래그는 누름이 아님
+        _searchAnchorCardId = card.id; // setState 불필요(화면에 안 그림)
+      },
+      child: CardTile(
+        card: card,
+        isFolded: _isCardFolded(card),
+        isHidden: _allAnswersHidden,
+        isRevealed: _isCardRevealed(card),
+        isSelectionMode: _isSelectionMode,
+        isSelected: _selectedCardIds.contains(card.id),
+        isHighlighted: isHighlighted,
+        cardNumber: _showCardNumber ? index + 1 : null,
+        searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
+        // 선택모드에선 접기/보이기 제스처를 끊는다 — 안쪽 GestureDetector(opaque)가 제스처
+        // 아레나에서 이겨 카드 본문 탭이 선택을 토글하지 못하고 왼쪽 동그라미만 반응했다
+        // (실기기 확인). 콜백이 null이면 인식기가 만들어지지 않아 InkWell.onTap이 받는다.
+        onQuestionTap:
+            _isSelectionMode ? null : () => _toggleQuestionFold(card),
+        onAnswerTap: _isSelectionMode ? null : () => _toggleAnswerReveal(card),
+        onTap: _isSelectionMode
+            ? () => _toggleCardSelection(card)
+            : () => _editCard(card),
+        onLongPress: _isSelectionMode
+            ? null
+            : () => _enterSelectionMode(card),
+        onMenuAction: (action) => _handleCardMenu(card, action),
+      ),
     );
   }
 
