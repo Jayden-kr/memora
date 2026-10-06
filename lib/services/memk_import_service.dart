@@ -305,7 +305,9 @@ class MemkImportService {
       // 폴더 아이콘: 새로 만드는 폴더만 아카이브의 icon/iconColor를 받는다. 병합 3곳
       // (folderMapping, 아래 mergeTarget, UNIQUE 재시도)은 일부러 로컬 폴더의 아이콘을
       // 그대로 둔다 — 사용자가 이 기기에서 고른 아이콘을 가져오기가 덮어쓰지 않게.
-      // ⚠️ 이 세 분기 어디서도 updateFolderIcon을 부르지 말 것(테스트: folder_icon_backup_test).
+      // ⚠️ 이 세 분기 어디서도 updateFolderIcon을 부르지 말 것. folder_icon_backup_test가
+      // 분기마다 하나씩 지킨다: (2)=mergeTarget, (3)=folderMapping, (4)=UNIQUE 재시도
+      // ((4)는 경합을 DB 트리거로 흉내내 그 분기를 결정적으로 탄다).
       if (mergeTarget != null) {
         // 기존 폴더에 병합
         folderIdMap[memkFolderId] = mergeTarget.id!;

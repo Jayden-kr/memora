@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memora/models/folder.dart';
 
@@ -241,6 +243,98 @@ void main() {
       final dbl = Map<String, dynamic>.from(sampleJson)
         ..['iconColor'] = 4280391411.0;
       expect(Folder.fromJson(dbl).iconColor, 4280391411);
+    });
+
+    // ── iconColor 경계(검증 L1): 던지지 않고, 0..0xFFFFFFFF 정수값만 받고, 나머지는 null ──
+    // Folder.fromJson은 import의 try 바깥에서 돈다 — 한 폴더의 이상한 색이 던지면 가져오기
+    // 전체가 죽는다. 그래서 모든 케이스가 returnsNormally + 기대값을 같이 본다.
+    Folder parseColor(Object? v) =>
+        Folder.fromJson(Map<String, dynamic>.from(sampleJson)..['iconColor'] = v);
+
+    test('iconColor: JSON `1e400`(jsonDecode가 Infinity로 읽음)도 던지지 않고 null', () {
+      final decoded = jsonDecode('{"name": "x", "id": 1, "iconColor": 1e400}')
+          as Map<String, dynamic>;
+      // 전제: 이 입력이 실제로 Infinity가 돼야 이 테스트가 L1을 재현한다.
+      expect(decoded['iconColor'], double.infinity);
+
+      late Folder folder;
+      expect(() => folder = Folder.fromJson(decoded), returnsNormally);
+      expect(folder.iconColor, isNull);
+      expect(folder.name, 'x'); // 색만 버리고 나머지 필드는 정상 파싱
+    });
+
+    final rejectedColors = <String, Object?>{
+      'NaN': double.nan,
+      '+Infinity': double.infinity,
+      '-Infinity': double.negativeInfinity,
+      '음수 정수 -1': -1,
+      '음수 실수 -4280391411.0': -4280391411.0,
+      '32비트 초과 정수 0x100000000': 0x100000000,
+      '32비트 초과 실수 4294967296.0': 4294967296.0,
+      '유한하지만 거대한 실수 1e300': 1e300,
+      '소수 1.5': 1.5,
+      '소수 0.5': 0.5,
+      '소수 4280391411.5': 4280391411.5,
+    };
+    rejectedColors.forEach((label, value) {
+      test('iconColor 거부 → null, 던지지 않음: $label', () {
+        late Folder folder;
+        expect(() => folder = parseColor(value), returnsNormally);
+        expect(folder.iconColor, isNull);
+      });
+    });
+
+    final acceptedColors = <String, (Object?, int)>{
+      '하한 0': (0, 0),
+      '하한 0.0': (0.0, 0),
+      '음의 0(-0.0)': (-0.0, 0),
+      '상한 0xFFFFFFFF': (0xFFFFFFFF, 0xFFFFFFFF),
+      '상한 실수 4294967295.0': (4294967295.0, 0xFFFFFFFF),
+      '불투명 파랑 0xFF2196F3': (0xFF2196F3, 0xFF2196F3),
+    };
+    acceptedColors.forEach((label, c) {
+      test('iconColor 허용: $label', () {
+        expect(parseColor(c.$1).iconColor, c.$2);
+      });
+    });
+
+    // ── icon 키 모양(검증 L3): ^[a-z_]{1,32}$ 만 받는다 ──
+    Folder parseIcon(Object? v) =>
+        Folder.fromJson(Map<String, dynamic>.from(sampleJson)..['icon'] = v);
+
+    final acceptedKeys = <String, String>{
+      "표에 있는 키 'star'": 'star',
+      "표에 없는 모양-맞는 미래 키 'new_key'": 'new_key',
+      '밑줄만 "_"': '_',
+      '1자 "a"': 'a',
+      '정확히 32자': 'a' * 32,
+    };
+    acceptedKeys.forEach((label, key) {
+      test('icon 키 허용·그대로 보존: $label', () {
+        expect(parseIcon(key).icon, key);
+      });
+    });
+
+    final rejectedKeys = <String, String>{
+      '대문자 시작 "Star"': 'Star',
+      '전부 대문자 "STAR"': 'STAR',
+      '33자(한 글자 초과)': 'a' * 33,
+      '수 MB짜리 문자열(CursorWindow 방어)': 'a' * (2 * 1024 * 1024),
+      '공백 포함 "my star"': 'my star',
+      '앞 공백 " star"': ' star',
+      '뒤 공백 "star "': 'star ',
+      // Dart의 $는 (멀티라인 아님) 입력 맨 끝에만 걸린다 — 끝 개행이 슬쩍 통과하면 안 된다.
+      '뒤 개행 "star\\n"': 'star\n',
+      '숫자 포함 "star2"': 'star2',
+      '하이픈 "new-key"': 'new-key',
+      '비ASCII "별"': '별',
+    };
+    rejectedKeys.forEach((label, key) {
+      test('icon 키 거부 → null, 던지지 않음: $label', () {
+        late Folder folder;
+        expect(() => folder = parseIcon(key), returnsNormally);
+        expect(folder.icon, isNull);
+      });
     });
 
     test('copyWith(icon: null, iconColor: null)은 지우고, 다른 필드 변경은 유지한다', () {

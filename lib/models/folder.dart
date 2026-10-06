@@ -59,13 +59,31 @@ class Folder {
     );
   }
 
+  /// 아이콘 키로 받아들이는 모양: 소문자·밑줄 1~32자. folder_icons.dart의 키는 전부 이
+  /// 모양이고, 표에 아직 없는 '모양은 맞는' 키(다른 앱 버전이 만든 것)는 그대로 보존한다.
+  /// 모양이 틀린 값은 버린다 — 조작된 .mra가 수 MB짜리 문자열을 넣으면 그 행이 Android
+  /// CursorWindow의 "row too big"을 일으켜 폴더 조회가 매번 실패한다(검증 L3).
+  /// ⚠️ 키 길이/문자 집합을 넓힐 때는 folder_test의 icon 경계 테스트를 함께 볼 것.
+  static final RegExp _iconKeyPattern = RegExp(r'^[a-z_]{1,32}$');
+
   /// JSON value → 아이콘 키. 폴더 파싱은 import의 try 바깥에서 도니(Folder.fromJson이
   /// 던지면 가져오기 전체가 죽는다) 이 두 필드는 타입이 틀려도 던지지 않고 null로 본다.
   static String? _parseIconKey(dynamic value) =>
-      value is String && value.isNotEmpty ? value : null;
+      value is String && _iconKeyPattern.hasMatch(value) ? value : null;
 
-  static int? _parseIconColor(dynamic value) =>
-      value is num ? value.toInt() : null;
+  /// JSON value → ARGB 색. 0..0xFFFFFFFF 범위의 **정수값**만 받는다. 그 밖은 전부
+  /// null(테마 기본색): NaN/±Infinity(JSON `1e400`은 Infinity로 읽히고, 이 값의 toInt()는
+  /// UnsupportedError를 던져 가져오기 전체를 죽인다 — 검증 L1), 음수, 32비트 초과,
+  /// 소수(1.5처럼 ARGB가 될 수 없는 값. 버림하면 0x00000001 같은 투명색이 돼 아이콘이
+  /// 안 보이므로 기본색으로 되돌리는 쪽이 낫다). 4280391411.0처럼 정수값인 실수는 받는다.
+  /// 범위 비교를 toInt() 앞에서 하는 이유: 유한하지만 아주 큰 실수(1e300)의 toInt()는
+  /// 플랫폼마다 동작이 다르다.
+  static int? _parseIconColor(dynamic value) {
+    if (value is! num || !value.isFinite) return null;
+    if (value < 0 || value > 0xFFFFFFFF) return null;
+    if (value % 1 != 0) return null;
+    return value.toInt();
+  }
 
   /// JSON value → bool (handles bool, int 0/1, String "true"/"1", null)
   static bool _parseBool(dynamic value) {
