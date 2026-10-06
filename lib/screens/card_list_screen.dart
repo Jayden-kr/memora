@@ -5,7 +5,10 @@ import 'package:flutter/gestures.dart' show kTouchSlop;
 import 'package:flutter/material.dart';
 // material.dart는 RenderSliverMultiBoxAdaptor를 내보내지 않는다 — 소량 목록(ListView)의
 // 보이는 칸 위치를 렌더 트리에서 직접 읽어야 해서 필요하다 (card_edit_screen.dart와 같은 이유).
-import 'package:flutter/rendering.dart' show RenderSliverMultiBoxAdaptor;
+// 대량 목록의 "target보다 위쪽 칸인가"(역방향 sliver)를 렌더 트리에서 읽는 데도 쓴다
+// (GrowthDirection·RenderSliver, laidOutAboveListTarget).
+import 'package:flutter/rendering.dart'
+    show GrowthDirection, RenderSliver, RenderSliverMultiBoxAdaptor;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../database/database_helper.dart';
@@ -117,6 +120,160 @@ bool tappedCardNeedsPin({
     return false;
   }
   return tappedIndex < targetIndex.clamp(0, itemCount - 1);
+}
+
+/// [itemContext]의 칸이 ScrollablePositionedList의 target보다 위쪽(역방향으로 자라는 sliver)에
+/// 놓여 있는가. target 위쪽 칸만 높이가 바뀔 때 아래쪽 가장자리가 고정되고(위쪽 가장자리가 움직임),
+/// target 이상 칸은 위쪽 가장자리가 고정된다 — 붙잡아야 하는 칸을 렌더 트리에서 직접 판별한다.
+/// [itemContext]는 칸 안쪽(Builder)의 BuildContext여야 하고, 레이아웃이 끝난 칸이어야 한다.
+@visibleForTesting
+bool laidOutAboveListTarget(BuildContext itemContext) {
+  RenderObject? node = itemContext.findRenderObject()?.parent;
+  while (node != null && node is! RenderSliver) {
+    node = node.parent;
+  }
+  return node is RenderSliver &&
+      node.constraints.growthDirection == GrowthDirection.reverse;
+}
+
+/// 접기/보이기로 [index] 칸 높이가 바뀌기 전에, 그 칸을 화면 그 자리에 붙잡을 정렬값. 붙잡을 필요가
+/// 없거나(target 이상 칸) 붙잡을 수 없으면(화면 밖·위로 잘림, pinAlignmentFor가 null) null.
+///
+/// target 이상 칸은 어차피 위쪽 가장자리가 안 움직이므로 건드리지 않는다 — 건드리면 보이는 칸이
+/// 전부 다시 만들어져 물결·접근성 포커스가 끊긴다([tappedCardNeedsPin]).
+@visibleForTesting
+double? reanchorAlignmentBeforeResize({
+  required BuildContext itemContext,
+  required Iterable<ItemPosition> positions,
+  required int index,
+}) {
+  if (!laidOutAboveListTarget(itemContext)) return null;
+  for (final p in positions) {
+    if (p.index == index) return pinAlignmentFor(p.itemLeadingEdge);
+  }
+  return null;
+}
+
+// ─── 대량 목록(ScrollablePositionedList) 점프 = 다시 마운트 ───
+
+/// ScrollablePositionedList를 [jumpTo]마다 **새로 마운트**해서 원하는 칸을 원하는 위치에 놓는다.
+///
+/// ⚠️ SPL(0.3.8)의 `ItemScrollController.jumpTo(index)`는 목록을 새로 만들지 않고 target만 바꾼다.
+/// 그런데 지금 target에서 뷰포트 캐시 범위(뷰포트의 2배)보다 먼 칸으로 점프하면, 재활용된 SliverList
+/// 칸이 옛 칸의 레이아웃 오프셋을 물려받아(그 칸에 다른 카드가 들어온다) 레이아웃이 스크롤 오프셋을
+/// 보정하면서 **페이지 전체가 밀린다** (실기기·하니스에서 확인: 새 검색 결과가 맨 위가 아닌 곳에서 열림,
+/// 검색을 닫은 뒤 앵커가 화면 위로 벗어남, 접기/보이기 때 누른 카드가 튐). 그래서 이 화면은 SPL
+/// jumpTo를 쓰지 않고 이 컨트롤러로만 점프한다 — `ValueKey(epoch)`를 바꿔 목록을 새로 만들고
+/// `initialScrollIndex`/`initialAlignment`로 시작 위치를 준다(처음 레이아웃부터 정확히 그 자리).
+///
+/// ⚠️ 시작 위치는 새로 만든 SPL이 읽은 뒤 바로 0으로 되돌린다([jumpTo]의 post-frame). 안 그러면
+/// 스피너→목록, 소량 목록(ListView)→대량 목록 같은 "점프가 아닌" 새 마운트가 옛 시작 위치로 열린다.
+/// 되돌리기는 그 사이 더 새로운 [jumpTo]가 있었으면 하지 않는다(그 점프의 시작 위치를 지우면 안 된다).
+///
+/// ⚠️ [build]는 SPL을 `SizedBox.expand` 안에 둔다. Stack처럼 자식 목록을 가진 부모의 "직계 자식"이
+/// 키가 바뀌면 새 자식을 먼저 만든 뒤 옛 자식을 치워서, ItemScrollController에 옛 SPL이 아직 붙어
+/// 있는 채로 새 SPL이 붙으려다 assert가 나고 그 뒤 isAttached가 false가 된다. 단일 자식 부모
+/// 아래에서는 옛 자식을 먼저 치우므로 안전하다.
+@visibleForTesting
+class SplRemountController {
+  SplRemountController({
+    required this.itemScrollController,
+    required this.itemPositionsListener,
+  });
+
+  final ItemScrollController itemScrollController;
+  final ItemPositionsListener itemPositionsListener;
+
+  int _epoch = 0;
+  int _initialIndex = 0;
+  double _initialAlignment = 0;
+  int _targetIndex = 0;
+
+  /// 목록 키. 바뀔 때마다 SPL이 새로 마운트된다.
+  int get epoch => _epoch;
+
+  /// 다음에 마운트되는 SPL의 시작 칸/정렬 (점프 직후에만 0이 아니다).
+  int get initialIndex => _initialIndex;
+  double get initialAlignment => _initialAlignment;
+
+  /// SPL의 target(배치 기준 칸) 인덱스 — [jumpTo]로 마지막에 지정한 값. SPL은 target을 읽는 API가
+  /// 없다. 접기/보이기 때 "누른 카드가 target 위쪽인가"(= 붙잡아야 하나)를 가르는 사전 검사에 쓴다
+  /// ([tappedCardNeedsPin]). 점프가 아닌 새 마운트는 target이 0인데 이 값은 그대로라 실제보다 클
+  /// 수 있는데, 그때는 붙잡을 필요 없는 카드를 사전 검사가 통과시킬 뿐이고 최종 판단은 렌더 트리
+  /// ([laidOutAboveListTarget])가 한다. 실제보다 작아지는 경우는 없다(target은 [jumpTo]로만 커진다).
+  int get targetIndex => _targetIndex;
+
+  /// [index] 칸을 뷰포트 위쪽에서 [alignment](0~1) 비율 위치에 두도록 목록을 새로 마운트한다.
+  /// [setState]는 이 컨트롤러를 쓰는 State의 setState (목록을 다시 빌드시킨다).
+  /// 같은 프레임에 여러 번 불려도 마지막 호출만 남는다.
+  void jumpTo(
+    int index, {
+    double alignment = 0,
+    required void Function(VoidCallback fn) setState,
+  }) {
+    _targetIndex = index;
+    final epochAtJump = ++_epoch;
+    _initialIndex = index;
+    _initialAlignment = alignment;
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_epoch != epochAtJump) return; // 더 새로운 점프가 자기 시작 위치를 들고 있다
+      _initialIndex = 0;
+      _initialAlignment = 0;
+    });
+  }
+
+  /// 키·시작 위치가 붙은 SPL. 부모가 Stack이어도 안전하도록 `SizedBox.expand`로 감싼다(위 ⚠️).
+  Widget build({
+    required int itemCount,
+    required IndexedWidgetBuilder itemBuilder,
+    ScrollPhysics? physics,
+  }) {
+    return SizedBox.expand(
+      child: ScrollablePositionedList.builder(
+        key: ValueKey(_epoch),
+        initialScrollIndex: _initialIndex,
+        initialAlignment: _initialAlignment,
+        itemCount: itemCount,
+        itemBuilder: itemBuilder,
+        itemScrollController: itemScrollController,
+        itemPositionsListener: itemPositionsListener,
+        physics: physics,
+      ),
+    );
+  }
+}
+
+/// 접기/보이기로 [index] 칸 높이가 바뀌기 직전에, 그 칸이 target보다 위쪽(역방향 sliver)이면
+/// 그 칸을 지금 화면 위치 그대로 target으로 삼아 다시 마운트한다. 다시 마운트했으면 true.
+///
+/// 사전 검사([tappedCardNeedsPin], 값싼 인덱스 비교)를 통과한 칸만 렌더 트리로 최종 확인한다.
+/// target 이상 칸·화면 밖/위로 잘린 칸은 건드리지 않는다. 호출자가 바로 뒤에서 setState로 높이를
+/// 바꾸므로, 여기서 건 setState와 같은 프레임에 합쳐져 처음 레이아웃부터 새 높이로 그려진다.
+@visibleForTesting
+bool reanchorTappedCard({
+  required SplRemountController spl,
+  required BuildContext itemContext,
+  required int index,
+  required int itemCount,
+  required void Function(VoidCallback fn) setState,
+}) {
+  if (!spl.itemScrollController.isAttached) return false;
+  if (!tappedCardNeedsPin(
+    tappedIndex: index,
+    targetIndex: spl.targetIndex,
+    itemCount: itemCount,
+  )) {
+    return false;
+  }
+  final alignment = reanchorAlignmentBeforeResize(
+    itemContext: itemContext,
+    positions: spl.itemPositionsListener.itemPositions.value,
+    index: index,
+  );
+  if (alignment == null) return false;
+  spl.jumpTo(index, alignment: alignment, setState: setState);
+  return true;
 }
 
 // ─── 소량 목록(ListView) 위치 읽기 · 탐색 ───
@@ -456,12 +613,14 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   final ItemScrollController _itemScrollController = ItemScrollController();
   final ItemPositionsListener _itemPositionsListener =
       ItemPositionsListener.create();
-  // SPL의 target(배치 기준 칸) 인덱스 — 이 화면이 _jumpSplTo로 마지막에 지정한 값. SPL은
-  // target을 읽는 API가 없다. 접기/보이기 때 "누른 카드가 target 위쪽인가"(= 붙잡아야 하나)를
-  // 가르는 데 쓴다. SPL이 목록 축소 때 스스로 줄이거나 ListView→SPL로 새로 붙으면 실제 target이
-  // 이 값보다 작아질 수 있는데, 그때는 붙잡을 필요 없는 카드를 붙잡을 뿐이라 안전한 쪽이다
-  // (실제보다 작게 어긋나는 경우는 없다 — target은 이 화면의 jumpTo로만 커진다).
-  int _splTargetIndex = 0;
+  // 대량 목록의 점프는 전부 이 컨트롤러(= 목록 다시 마운트)로만 한다 — _jumpSplTo가 유일한 입구.
+  // ⚠️ _itemScrollController.jumpTo/scrollTo를 직접 부르지 말 것: SPL 0.3.8의 jumpTo는 먼 칸으로
+  // 점프할 때 페이지 전체를 민다(SplRemountController 문서). target 인덱스(_spl.targetIndex)도
+  // 이 컨트롤러가 점프와 같이 기록한다.
+  late final SplRemountController _spl = SplRemountController(
+    itemScrollController: _itemScrollController,
+    itemPositionsListener: _itemPositionsListener,
+  );
 
   // 드래그 점프 스로틀링 (프레임당 최대 1회)
   bool _jumpScheduled = false;
@@ -620,12 +779,15 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     super.dispose();
   }
 
-  /// SPL을 [index] 칸으로 점프시키고 target 인덱스를 기록한다. 호출 전에 isAttached를 확인할 것.
-  /// SPL jumpTo는 이 화면 안에서 반드시 이 함수로만 부른다 — 기록이 빠지면 접기/보이기에서
-  /// "붙잡아야 하나" 판단이 틀어진다(_splTargetIndex).
+  /// 대량 목록(SPL)을 [index] 칸이 [alignment] 위치에 오도록 **다시 마운트**하고 target 인덱스를
+  /// 기록한다. 호출 전에 isAttached를 확인할 것(목록이 떠 있을 때만 의미가 있다). mounted일 때만 부를 것.
+  ///
+  /// SPL 점프는 이 화면 안에서 반드시 이 함수로만 한다 — SPL의 jumpTo는 먼 칸으로 점프하면 페이지
+  /// 전체를 밀기 때문에(접기/보이기 붙잡기·새 검색 결과 맨 위·검색 닫기 앵커·위치 복원이 모두
+  /// 어긋났다) 쓰지 않는다. 기록이 빠지면 접기/보이기의 "붙잡아야 하나" 판단도 틀어진다(_spl.targetIndex).
+  /// 같은 프레임에 여러 번 불리면 마지막 호출만 남는다.
   void _jumpSplTo(int index, {double alignment = 0}) {
-    _splTargetIndex = index;
-    _itemScrollController.jumpTo(index: index, alignment: alignment);
+    _spl.jumpTo(index, alignment: alignment, setState: setState);
   }
 
   /// ItemPositionsListener 콜백 (스크롤 위치 추적)
@@ -1528,34 +1690,30 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
   /// 위쪽 가장자리가 화면에서 움직이지 않게 한다. 이 목록은 target 카드를 기준으로 배치하는데
   /// target보다 위쪽 칸은 target에서 위로 쌓여서, 그런 카드의 높이가 바뀌면 위쪽으로 밀려
   /// 올라가 손가락 밑에 다른 카드가 미끄러져 온다(예: 검색 결과가 전체 목록 target을 물려받은
-  /// 경우). 그래서 setState 전에 target을 "누른 카드, 지금 화면 위치 그대로"로 옮겨 둔다.
-  /// target 이하 칸(인덱스 ≥ target)은 어차피 안 움직이므로 건드리지 않는다 — target을
-  /// 바꾸면 보이는 칸이 전부 다시 만들어져 물결·접근성 포커스가 끊긴다(tappedCardNeedsPin).
+  /// 경우). 그래서 setState 전에 누른 카드를 "지금 화면 위치 그대로" target으로 삼아 목록을
+  /// 다시 마운트한다(SPL jumpTo는 쓰지 않는다 — _jumpSplTo 문서).
+  /// target 이상 칸(역방향 sliver가 아닌 칸)은 어차피 안 움직이므로 건드리지 않는다 — 다시
+  /// 마운트하면 보이는 칸이 전부 새로 만들어져 물결·접근성 포커스가 끊긴다(reanchorTappedCard).
   /// 소량 목록(ListView)은 픽셀 오프셋 기준이라 해당 없음. 카드가 위로 잘려 있거나 화면 밖이면
   /// (pinAlignmentFor가 null) 건드리지 않는다.
-  void _keepTappedCardInPlace(int cardId) {
-    if (_useSimpleList || !_itemScrollController.isAttached) return;
+  /// [itemContext]는 눌린 칸 안쪽(_buildCardItem의 Builder)의 컨텍스트 — 렌더 트리로 위치를 판별한다.
+  void _keepTappedCardInPlace(int cardId, BuildContext itemContext) {
+    if (_useSimpleList) return;
     final index = _cards.indexWhere((c) => c.id == cardId);
     if (index < 0) return;
-    if (!tappedCardNeedsPin(
-      tappedIndex: index,
-      targetIndex: _splTargetIndex,
+    reanchorTappedCard(
+      spl: _spl,
+      itemContext: itemContext,
+      index: index,
       itemCount: _cards.length,
-    )) {
-      return;
-    }
-    for (final p in _itemPositionsListener.itemPositions.value) {
-      if (p.index != index) continue;
-      final alignment = pinAlignmentFor(p.itemLeadingEdge);
-      if (alignment != null) _jumpSplTo(index, alignment: alignment);
-      return;
-    }
+      setState: setState,
+    );
   }
 
-  void _toggleQuestionFold(CardModel card) {
+  void _toggleQuestionFold(CardModel card, BuildContext itemContext) {
     final cardId = card.id;
     if (cardId == null) return;
-    _keepTappedCardInPlace(cardId);
+    _keepTappedCardInPlace(cardId, itemContext);
     setState(() {
       if (_foldedCards.contains(cardId)) {
         _foldedCards.remove(cardId);
@@ -1565,10 +1723,10 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     });
   }
 
-  void _toggleAnswerReveal(CardModel card) {
+  void _toggleAnswerReveal(CardModel card, BuildContext itemContext) {
     final cardId = card.id;
     if (cardId == null) return;
-    _keepTappedCardInPlace(cardId);
+    _keepTappedCardInPlace(cardId, itemContext);
     setState(() {
       if (_revealedCards.contains(cardId)) {
         _revealedCards.remove(cardId);
@@ -1602,34 +1760,41 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
     // 카드"를 기록해 두었다가, 검색을 닫을 때 전체 목록에서 그 카드를 맨 위에 둔다.
     // CardTile의 바깥 여백(Card margin)은 CardTile 크기에 들어 있어 여백·카드 사이 틈을
     // 눌러도 기록된다(리스트 자체에는 padding이 없다).
-    return PressObserver(
-      onPress: () {
-        if (_resultsQuery == null) return; // 검색 결과가 떠 있을 때만
-        _searchAnchorCardId = card.id; // setState 불필요(화면에 안 그림)
-      },
-      child: CardTile(
-        card: card,
-        isFolded: _isCardFolded(card),
-        isHidden: _allAnswersHidden,
-        isRevealed: _isCardRevealed(card),
-        isSelectionMode: _isSelectionMode,
-        isSelected: _selectedCardIds.contains(card.id),
-        isHighlighted: isHighlighted,
-        cardNumber: _showCardNumber ? index + 1 : null,
-        searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
-        // 선택모드에선 접기/보이기 제스처를 끊는다 — 안쪽 GestureDetector(opaque)가 제스처
-        // 아레나에서 이겨 카드 본문 탭이 선택을 토글하지 못하고 왼쪽 동그라미만 반응했다
-        // (실기기 확인). 콜백이 null이면 인식기가 만들어지지 않아 InkWell.onTap이 받는다.
-        onQuestionTap:
-            _isSelectionMode ? null : () => _toggleQuestionFold(card),
-        onAnswerTap: _isSelectionMode ? null : () => _toggleAnswerReveal(card),
-        onTap: _isSelectionMode
-            ? () => _toggleCardSelection(card)
-            : () => _editCard(card),
-        onLongPress: _isSelectionMode
-            ? null
-            : () => _enterSelectionMode(card),
-        onMenuAction: (action) => _handleCardMenu(card, action),
+    // Builder: 접기/보이기가 "이 칸이 target 위쪽(역방향 sliver)인가"를 렌더 트리로 판별하려면
+    // 칸 안쪽의 BuildContext가 필요하다(laidOutAboveListTarget). 칸을 감싸는 컴포넌트일 뿐이다.
+    return Builder(
+      builder: (itemContext) => PressObserver(
+        onPress: () {
+          if (_resultsQuery == null) return; // 검색 결과가 떠 있을 때만
+          _searchAnchorCardId = card.id; // setState 불필요(화면에 안 그림)
+        },
+        child: CardTile(
+          card: card,
+          isFolded: _isCardFolded(card),
+          isHidden: _allAnswersHidden,
+          isRevealed: _isCardRevealed(card),
+          isSelectionMode: _isSelectionMode,
+          isSelected: _selectedCardIds.contains(card.id),
+          isHighlighted: isHighlighted,
+          cardNumber: _showCardNumber ? index + 1 : null,
+          searchQuery: _searchQuery.isNotEmpty ? _searchQuery : null,
+          // 선택모드에선 접기/보이기 제스처를 끊는다 — 안쪽 GestureDetector(opaque)가 제스처
+          // 아레나에서 이겨 카드 본문 탭이 선택을 토글하지 못하고 왼쪽 동그라미만 반응했다
+          // (실기기 확인). 콜백이 null이면 인식기가 만들어지지 않아 InkWell.onTap이 받는다.
+          onQuestionTap: _isSelectionMode
+              ? null
+              : () => _toggleQuestionFold(card, itemContext),
+          onAnswerTap: _isSelectionMode
+              ? null
+              : () => _toggleAnswerReveal(card, itemContext),
+          onTap: _isSelectionMode
+              ? () => _toggleCardSelection(card)
+              : () => _editCard(card),
+          onLongPress: _isSelectionMode
+              ? null
+              : () => _enterSelectionMode(card),
+          onMenuAction: (action) => _handleCardMenu(card, action),
+        ),
       ),
     );
   }
@@ -1656,11 +1821,10 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
             )
           : simple;
     } else {
-      list = ScrollablePositionedList.builder(
+      // 점프는 목록을 다시 마운트하는 방식이라(_spl) 키·시작 위치가 붙은 SPL을 컨트롤러에서 받는다.
+      list = _spl.build(
         itemCount: _cards.length,
         itemBuilder: _buildCardItem,
-        itemScrollController: _itemScrollController,
-        itemPositionsListener: _itemPositionsListener,
         physics: const ClampingScrollPhysics(),
       );
     }
