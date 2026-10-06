@@ -859,6 +859,45 @@ void main() {
           reason: '첫 문장이 if (hostContext is Element && hostContext.dirty) return false; 여야 한다 — 새 검색 결과·점프가 setState만 해 둔 사이의 탭은 낡은 렌더 트리와 새 목록 인덱스를 섞는다');
     });
 
+    /// _buildCardList의 소량 목록(ListView.builder)은 ClampOnResizeScrollPhysics를 쓴다: 붙잡기가 레이아웃 전에 픽셀을
+    /// 옮기는데, 마지막 카드가 레이아웃 전이면 끝(maxScrollExtent)이 추정치라 기본 물리는 범위 밖 첫 프레임 + 스프링 미끄러짐을 만든다.
+    bool simpleListPhysics(String src) {
+      final b = functionBody(src, 'Widget _buildCardList');
+      if (b == null) return false;
+      final at = b.indexOf('ListView.builder(');
+      if (at < 0) return false;
+      final rest = b.substring(at);
+      final end = rest.indexOf(');');
+      if (end < 0) return false;
+      return RegExp(r'physics:\s*const\s+ClampOnResizeScrollPhysics\(\s*\)').hasMatch(rest.substring(0, end));
+    }
+
+    test('소량 목록(ListView.builder)은 ClampOnResizeScrollPhysics를 쓴다 (끝 근처 숨기기의 스프링 미끄러짐 방지)', () {
+      expect(simpleListPhysics(source), isTrue,
+          reason: '_buildCardList의 ListView.builder에 physics: const ClampOnResizeScrollPhysics()가 없다 — ClampingScrollPhysics면 마지막 카드가 레이아웃 전인 끝 근처 숨기기가 범위 밖 첫 프레임 + 스프링으로 미끄러진다');
+      expect(RegExp(r'class\s+ClampOnResizeScrollPhysics\s+extends\s+ClampingScrollPhysics').hasMatch(source), isTrue,
+          reason: '기존 물리(Clamping)를 그대로 잇고 adjustPositionForNewDimensions만 바꾼다');
+      // 가드 도구 대조군: 좋은 소스는 통과, 평범한 물리·ListView 밖 physics는 실패
+      const good = '''
+class S {
+  Widget _buildCardList() {
+    if (a) {
+      final simple = ListView.builder(
+        itemCount: 3,
+        physics: const ClampOnResizeScrollPhysics(),
+        cacheExtent: foo(settling: x),
+      );
+    } else {
+      list = _spl.build(physics: const ClampingScrollPhysics());
+    }
+  }
+}''';
+      expect(simpleListPhysics(good), isTrue);
+      expect(simpleListPhysics(good.replaceFirst('const ClampOnResizeScrollPhysics()', 'const ClampingScrollPhysics()')), isFalse);
+      expect(simpleListPhysics(good.replaceFirst('        physics: const ClampOnResizeScrollPhysics(),\n', '')), isFalse,
+          reason: 'physics 줄이 없으면 실패 (SPL 쪽 physics를 ListView 것으로 착각하지 않는다)');
+    });
+
     test('손가락 뗀 위치는 _recordRelease가 저장하고 마이크로태스크로 지우며, 칸 빌더가 PressObserver.onRelease로 연결한다', () {
       expect(releaseRecorded(source), isTrue,
           reason: '_recordRelease는 _releaseGlobal = global 로 저장하고 scheduleMicrotask(...)로 지워야 한다 (접근성 탭이 옛 손가락 위치를 쓰지 않게)');

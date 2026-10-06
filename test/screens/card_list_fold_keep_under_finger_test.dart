@@ -65,6 +65,7 @@ class _Host extends StatefulWidget {
     this.simple = false,
     this.guard = true,
     this.rule = true,
+    this.clampOnResize = true,
   });
   final List<CardModel> cards;
   final bool allFolded; // 모든 카드가 접힌 상태로 시작 (탭하면 펴진다)
@@ -73,6 +74,7 @@ class _Host extends StatefulWidget {
   final bool simple; // true = 소량 목록(ListView), false = 대량 목록(SPL)
   final bool guard; // false = 다시 빌드 대기 중 가드를 끈 대조군 (hostContext: itemContext)
   final bool rule; // false = 붙잡지 않는 대조군
+  final bool clampOnResize; // false = 화면의 ClampOnResizeScrollPhysics 대신 평범한 ClampingScrollPhysics (대조군)
   @override
   State<_Host> createState() => _HostState();
 }
@@ -171,7 +173,10 @@ class _HostState extends State<_Host> {
                   controller: sc,
                   itemCount: cards.length,
                   itemBuilder: item,
-                  physics: const ClampingScrollPhysics(),
+                  // 화면(_buildCardList)의 소량 목록과 같은 물리 — 소스 가드는 card_list_spl_remount_test
+                  physics: widget.clampOnResize
+                      ? const ClampOnResizeScrollPhysics()
+                      : const ClampingScrollPhysics(),
                 )
               : spl.build(
                   itemCount: cards.length,
@@ -222,7 +227,7 @@ class _Fx {
   }
 
   /// 카드 [i]의 위쪽이 목록 뷰포트 위쪽 기준 [top]에 오도록 스크롤한다 (레이아웃된 칸이 될 때까지 이동).
-  Future<void> bring(int i, double top) async {
+  Future<void> bring(int i, double top, {bool strict = true}) async {
     for (var k = 0; k < 80 && rect(i) == null; k++) {
       var lowest = -1;
       for (var j = 0; j < n; j++) {
@@ -237,7 +242,7 @@ class _Fx {
     expect(rect(i), isNotNull, reason: '카드 $i를 레이아웃시키지 못했다');
     pos.jumpTo(pos.pixels + (rect(i)!.top - top));
     await tester.pumpAndSettle();
-    expect(rect(i)!.top, closeTo(top, 0.5));
+    if (strict) expect(rect(i)!.top, closeTo(top, 0.5));
   }
 
   Future<void> tapAtViewportY(double y) async {
@@ -259,6 +264,7 @@ Future<_Fx> _mount(
   bool simple = false,
   bool guard = true,
   bool rule = true,
+  bool clampOnResize = true,
 }) async {
   tester.view.physicalSize = const Size(1080, 2400);
   tester.view.devicePixelRatio = 2.625;
@@ -278,6 +284,7 @@ Future<_Fx> _mount(
       simple: simple,
       guard: guard,
       rule: rule,
+      clampOnResize: clampOnResize,
     ),
   ));
   await tester.pumpAndSettle();
@@ -312,6 +319,11 @@ typedef _Tap = ({
   double pixels,
   double minExtent,
   double maxExtent,
+  double firstOver, // 첫 프레임의 스크롤 위치가 [min, max] 범위를 벗어난 만큼 (소량 목록만, 아니면 0)
+  double firstBlank, // 첫 프레임에서 마지막 카드 아래의 빈 공간 dp (마지막 카드가 그려졌을 때만, 아니면 0)
+  bool lastLaidBefore, // 탭 직전에 마지막 카드가 레이아웃돼 있었나
+  double settledMax, // 정착 뒤 maxScrollExtent (탭 직전 값은 마지막 카드가 레이아웃 전이면 추정치다)
+  double settledBlank, // 정착 뒤 마지막 카드 아래 빈 공간 dp (소량 목록만)
 });
 
 /// 뷰포트 y [finger]를 눌러 첫 프레임(pump 한 번)과 정착 뒤(pumpAndSettle)를 각각 읽는다.
@@ -320,11 +332,24 @@ Future<_Tap> _tap(WidgetTester tester, _Fx fx, int idx, double finger) async {
   final ub = fx.under(finger);
   final p = fx.pos.pixels, mn = fx.pos.minScrollExtent, mx = fx.pos.maxScrollExtent;
   final e0 = fx.host.spl.epoch;
+  final lastLaidBefore = fx.rect(fx.n - 1) != null;
   fx.host.predicted = null;
   await tester.tapAt(Offset(150, fx.vpTop + finger));
   await tester.pump();
   final first = fx.rect(idx);
+  var firstOver = 0.0, firstBlank = 0.0;
+  if (fx.host.widget.simple) {
+    final pos = fx.pos;
+    firstOver = [pos.pixels - pos.maxScrollExtent, pos.minScrollExtent - pos.pixels, 0.0].reduce((a, b) => a > b ? a : b);
+    final last = fx.rect(fx.n - 1);
+    if (last != null && last.bottom < fx.vpH) firstBlank = fx.vpH - last.bottom;
+  }
   await tester.pumpAndSettle();
+  var settledBlank = 0.0;
+  if (fx.host.widget.simple) {
+    final last = fx.rect(fx.n - 1);
+    if (last != null && last.bottom < fx.vpH) settledBlank = fx.vpH - last.bottom;
+  }
   return (
     before: before,
     first: first,
@@ -337,6 +362,11 @@ Future<_Tap> _tap(WidgetTester tester, _Fx fx, int idx, double finger) async {
     pixels: p,
     minExtent: mn,
     maxExtent: mx,
+    firstOver: firstOver,
+    firstBlank: firstBlank,
+    lastLaidBefore: lastLaidBefore,
+    settledMax: fx.pos.maxScrollExtent,
+    settledBlank: settledBlank,
   );
 }
 
@@ -346,15 +376,22 @@ Future<_Tap> _tap(WidgetTester tester, _Fx fx, int idx, double finger) async {
 Future<_Tap> _tapAndCheck(WidgetTester tester, _Fx fx, int idx, double finger, String name) async {
   final r = await _tap(tester, fx, idx, finger);
   final before = r.before, first = r.first, after = r.after, pred = r.pred;
+  // 소량 목록: 탭 직전 maxScrollExtent는 마지막 카드가 레이아웃 전이면 추정치라, 범위 자르기의 기준은 정착 뒤 실제 끝이다
+  // (줄어든 만큼을 되돌려 넣는다 — keptTopAfterResize가 다시 뺀다).
+  final shrunk = pred != null && pred < before.height ? before.height - pred : 0.0;
+  final maxForRule = fx.host.widget.simple ? r.settledMax + shrunk : r.maxExtent;
   final expTop = keptTopAfterResize(
       top: before.top, height: before.height, newHeight: pred, fingerY: finger,
-      pixels: r.pixels, minScrollExtent: r.minExtent, maxScrollExtent: r.maxExtent);
+      pixels: r.pixels, minScrollExtent: r.minExtent, maxScrollExtent: maxForRule);
   final wanted = keptTopAfterResize(
       top: before.top, height: before.height, newHeight: pred, fingerY: finger,
       pixels: 0, minScrollExtent: -1e9, maxScrollExtent: 1e9);
   final feasible = (expTop - wanted).abs() < 0.5;
   final problems = <String>[];
   if (r.exception != null) problems.add('EXC ${r.exception}');
+  if (r.firstOver > 0.5) problems.add('FIRST FRAME OUT OF RANGE by ${r.firstOver.toStringAsFixed(1)}');
+  if (r.settledBlank > 0.5) problems.add('BLANK below last card ${r.settledBlank.toStringAsFixed(1)} after settle');
+  if (r.firstBlank > 0.5) problems.add('BLANK below last card ${r.firstBlank.toStringAsFixed(1)} in first frame');
   if (r.underBefore != idx) problems.add('precondition: finger not on card before (under=${r.underBefore})');
   if (first == null || after == null) {
     problems.add('card offscreen first=${_fmt(first)} after=${_fmt(after)}');
@@ -445,6 +482,25 @@ Future<_Tap> _hideCase(WidgetTester tester, _L l, int a, String at, double top,
   expect(vb - vt, greaterThan(6), reason: '눌 답 본문이 화면에 보여야 한다 ($vt..$vb)');
   final finger = at == 'top' ? vt + 3 : at == 'mid' ? (vt + vb) / 2 : vb - 3;
   final name = 'HIDE ${l.name} a=$a $at top=$top';
+  return check ? _tapAndCheck(tester, fx, idx, finger, name) : _tap(tester, fx, idx, finger);
+}
+
+/// NEAREND: 소량 목록(15칸) 끝 근처 카드의 긴 답(a줄)을 숨긴다. 숨기기 전엔 마지막 카드가 레이아웃 밖이라
+/// maxScrollExtent가 추정치다 — 점프가 레이아웃 전이라 범위가 틀리면 첫 프레임이 끝 아래 빈 공간으로 그려진다.
+Future<_Tap> _nearEndCase(WidgetTester tester, int a, int fromEnd, double top,
+    {bool clampOnResize = true, bool check = true}) async {
+  const n = 15;
+  final idx = n - fromEnd;
+  final fx = await _mount(tester,
+      cards: [for (var i = 0; i < n; i++) i == idx ? _mk(i, a: _lines('A$i', a)) : _mk(i)],
+      allHidden: true, revealed: {idx + 1}, simple: true, clampOnResize: clampOnResize);
+  await fx.bring(idx, top, strict: false);
+  final ar = fx.inCard(idx, find.textContaining('A$idx L0'));
+  final vt = ar.top < 0 ? 0.0 : ar.top;
+  final vb = ar.bottom > fx.vpH ? fx.vpH : ar.bottom;
+  expect(vb - vt, greaterThan(6), reason: '눌 답 본문이 화면에 보여야 한다 ($vt..$vb)');
+  final finger = (vt + vb) / 2;
+  final name = 'NEAREND a=$a fromEnd=$fromEnd top=$top';
   return check ? _tapAndCheck(tester, fx, idx, finger, name) : _tap(tester, fx, idx, finger);
 }
 
@@ -723,6 +779,60 @@ void main() {
       });
     }
   }
+
+  // ───────────── NEAREND: 마지막 카드가 아직 레이아웃되지 않은 소량 목록 끝 근처 (스프링 미끄러짐 회귀) ─────────────
+  // 숨기기는 레이아웃 전에 position.jumpTo로 목록을 옮긴다. 마지막 카드가 레이아웃 전이면 maxScrollExtent가
+  // 추정치라 위치가 범위 밖이 될 수 있고, 픽셀을 일부러 바꿨으니 기본 물리(RangeMaintaining)도 범위를 안 지킨다.
+  // → 첫 프레임에 끝 아래 빈 공간이 보였다가 스프링으로 미끄러진다. ClampOnResizeScrollPhysics가 같은 레이아웃에서 자른다.
+  for (final a in [35, 45, 60]) {
+    for (final fromEnd in [2, 3]) {
+      for (final top in [-100.0, 50.0, 150.0]) {
+        testWidgets('NEAREND a=$a 끝에서 $fromEnd번째 top=$top: 첫 프레임 == 정착, 끝 아래 빈 공간 없음, 손가락 밑', (tester) async {
+          await _nearEndCase(tester, a, fromEnd, top);
+        });
+      }
+    }
+  }
+
+  testWidgets('NEAREND 전제: 45줄 답, 끝에서 2번째, top=50 — 숨기기 전에 마지막 카드가 레이아웃 밖이고 숨긴 뒤 안으로 들어온다', (tester) async {
+    final r = await _nearEndCase(tester, 45, 2, 50);
+    expect(r.lastLaidBefore, isFalse, reason: '이 시나리오의 전제: 탭 전엔 마지막 카드가 레이아웃되지 않았다 (maxScrollExtent가 추정치)');
+    expect(r.after!.height, lessThan(r.before.height - 500), reason: '크게 줄어들었다');
+  });
+
+  // 음성 대조: 평범한 ClampingScrollPhysics(옛 동작)면 같은 시나리오가 범위 밖 첫 프레임 + 미끄러짐으로 실제로 깨진다.
+  testWidgets('NC-D 평범한 ClampingScrollPhysics면 NEAREND a=45 끝에서 2번째 top=50: 첫 프레임이 범위 밖(빈 공간)이고 정착과 다르다', (tester) async {
+    final r = await _nearEndCase(tester, 45, 2, 50, clampOnResize: false, check: false);
+    expect(r.lastLaidBefore, isFalse);
+    expect(r.firstOver, greaterThan(50), reason: '첫 프레임 위치가 스크롤 범위 밖 (seen over=${r.firstOver})');
+    expect(r.firstBlank, greaterThan(50), reason: '마지막 카드 아래 빈 공간이 보인다 (seen blank=${r.firstBlank})');
+    expect((r.first!.top - r.after!.top).abs(), greaterThan(50), reason: '정착까지 미끄러진다 (first=${_fmt(r.first)} settled=${_fmt(r.after)})');
+  });
+
+  // 끌고 있는 중(isScrolling)에는 기존 동작 그대로 — 물리가 드래그를 방해하지 않는다.
+  testWidgets('ClampOnResizeScrollPhysics: 평소 스크롤(드래그·관성)은 ClampingScrollPhysics와 같다', (tester) async {
+    const physics = ClampOnResizeScrollPhysics();
+    const plain = ClampingScrollPhysics();
+    final fx = await _mount(tester, cards: _cards(25), simple: true);
+    final pos = fx.pos;
+    expect(pos.physics, isA<ClampOnResizeScrollPhysics>());
+    final y0 = pos.pixels;
+    await tester.fling(find.byType(ListView), const Offset(0, -400), 2000);
+    await tester.pumpAndSettle();
+    expect(pos.pixels, greaterThan(y0 + 100), reason: '관성 스크롤이 된다');
+    expect(pos.pixels, lessThanOrEqualTo(pos.maxScrollExtent));
+    // 같은 입력이면 같은 답 (isScrolling이면 부모 결과를 그대로)
+    final m = FixedScrollMetrics(
+        minScrollExtent: 0, maxScrollExtent: 1000, pixels: 1200, viewportDimension: 800, axisDirection: AxisDirection.down, devicePixelRatio: 1);
+    for (final scrolling in [true]) {
+      expect(
+          physics.adjustPositionForNewDimensions(oldPosition: m, newPosition: m, isScrolling: scrolling, velocity: 0),
+          plain.adjustPositionForNewDimensions(oldPosition: m, newPosition: m, isScrolling: scrolling, velocity: 0));
+    }
+    expect(
+        physics.adjustPositionForNewDimensions(oldPosition: m, newPosition: m, isScrolling: false, velocity: 0),
+        1000, reason: '멈춰 있으면 새 범위로 자른다');
+  });
 
   // ───────────── 이미지(디코딩 실패 뒤 80dp 오류 상자) ─────────────
   for (final simple in [false, true]) {

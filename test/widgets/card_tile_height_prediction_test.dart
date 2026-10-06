@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memora/l10n/app_localizations.dart';
 import 'package:memora/models/card.dart';
@@ -171,18 +174,22 @@ Future<_Fx> _mount(
   Size size = const Size(1080, 2400),
   String? query,
   bool numbers = false,
+  bool bold = false,
+  String? fontFamily,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 2.625;
   addTearDown(tester.view.reset);
   final key = GlobalKey<_HostState>();
   await tester.pumpWidget(MaterialApp(
-    theme: ThemeData(colorSchemeSeed: const Color(0xFFFF6B6B), useMaterial3: true),
+    theme: ThemeData(
+        colorSchemeSeed: const Color(0xFFFF6B6B), useMaterial3: true, fontFamily: fontFamily),
     locale: locale,
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
     builder: (context, child) => MediaQuery(
-      data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
+      data: MediaQuery.of(context)
+          .copyWith(textScaler: TextScaler.linear(textScale), boldText: bold),
       child: child!,
     ),
     home: _Host(
@@ -213,7 +220,31 @@ Finder _hintText() =>
 double _mid(Rect r, double vpH) =>
     (r.top < 0 ? 0.0 : r.top) / 2 + (r.bottom > vpH ? vpH : r.bottom) / 2;
 
+/// 앱이 쓰는 진짜 Pretendard를 pubspec.yaml의 폰트 항목(fonts: - family: Pretendard)에서 읽어 올린다.
+/// 테스트 기본 글꼴은 굵게 해도 글자 폭이 같아서(Ahem) 굵은 글씨 보정이 있든 없든 예측이 맞는다 — 그러면
+/// _textHeight의 boldText 보정은 아무 테스트도 못 잡는다. 진짜 폰트는 굵으면 폭이 달라 줄바꿈이 바뀐다.
+Future<void> _loadPretendard() async {
+      final pubspec = File('pubspec.yaml').readAsStringSync();
+      final assets = RegExp(r'asset:\s*(assets/fonts/Pretendard-[A-Za-z]+\.otf)')
+          .allMatches(pubspec)
+          .map((m) => m.group(1)!)
+          .toList();
+      expect(assets.length, greaterThanOrEqualTo(4), reason: 'pubspec.yaml의 Pretendard 폰트 항목(400/500/600/700)');
+      final loader = FontLoader('Pretendard');
+      for (final a in assets) {
+        final bytes = File(a).readAsBytesSync();
+        loader.addFont(Future.value(ByteData.view(Uint8List.fromList(bytes).buffer)));
+      }
+      await loader.load();
+}
+
 void main() {
+  // testWidgets 안(가짜 시계 존)에서 불러오면 두 번째 테스트부터 영원히 안 끝난다 — 바깥에서 한 번.
+  setUpAll(() async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    await _loadPretendard();
+  });
+
   // 5가지 모양 + 긴 히브리어 문장(오른쪽에서 왼쪽 글자·다른 줄 높이).
   List<CardModel> sweepCards() => [
         for (var i = 0; i < 25; i++)
@@ -289,6 +320,51 @@ void main() {
     final r = await fx.tap(3, _mid(fx.inCard(3, _questionText(fx.host.widget.cards[3]))!, fx.vpH));
     expect(r.predicted, closeTo(100, 0.01));
     expect(r.after, closeTo(100, 0.5));
+  });
+
+  // 굵은 글씨(접근성 boldText) + 진짜 Pretendard: 답 보이기(답 글자 폭이 줄바꿈을 정한다)·숨기기(안내 문구)의 예측이
+  // 실제와 같아야 한다. 같은 카드를 굵게/보통으로 두 번 재서, 진짜 폰트에서 굵기가 실제 높이를 바꾸는지도 확인한다
+  // (안 바뀌면 이 테스트가 굵은 글씨 보정을 못 잡는 빈 검사다).
+  testWidgets('BOLD real Pretendard: reveal/hide predictions match with boldText, which really changes the layout', (tester) async {
+    final cards = [
+      for (var i = 0; i < 25; i++)
+        _mk(i, q: 'Q$i word', a: List.filled(6 + i * 2, '답변 answer text L').join(' '))
+    ];
+    var differing = 0;
+    for (final w in [1080.0, 900.0, 720.0]) {
+      final actual = {for (final bold in [false, true]) bold: <String, double>{}};
+      for (final bold in [false, true]) {
+        for (final mode in ['reveal', 'hide']) {
+          final fx = await _mount(tester,
+              cards: cards,
+              allHidden: true,
+              revealed: mode == 'hide' ? {for (final c in cards) c.id!} : const {},
+              size: Size(w, 2400),
+              bold: bold,
+              fontFamily: 'Pretendard');
+          for (var idx = 1; idx < 25; idx += 2) {
+            await fx.bring(idx, 60);
+            final c = cards[idx];
+            var target = fx.inCard(idx, mode == 'reveal' ? _hintText() : _answerText(c));
+            expect(target, isNotNull, reason: '$mode idx=$idx laid out');
+            if (target!.top > fx.vpH - 60) {
+              fx.pos.jumpTo(fx.pos.pixels + target.top - 200);
+              await tester.pumpAndSettle();
+              target = fx.inCard(idx, mode == 'reveal' ? _hintText() : _answerText(c))!;
+            }
+            final r = await fx.tap(idx, _mid(target, fx.vpH));
+            final name = 'BOLD $mode bold=$bold w=$w idx=$idx';
+            expect(r.predicted, isNotNull, reason: name);
+            expect((r.predicted! - r.after).abs(), lessThanOrEqualTo(0.5),
+                reason: '$name predicted=${r.predicted} actual=${r.after} before=${r.before}');
+            actual[bold]!['$mode$idx'] = r.after;
+          }
+        }
+      }
+      differing += actual[true]!.keys.where((k) => (actual[true]![k]! - actual[false]![k]!).abs() > 0.5).length;
+    }
+    expect(differing, greaterThan(0),
+        reason: '진짜 폰트에서 굵게 하면 적어도 한 카드의 실제 높이가 달라져야 한다(안 그러면 굵은 글씨 보정을 못 잡는 빈 검사)');
   });
 
   // 이미지는 디코딩이 실패한 뒤(80dp 오류 상자)에야 높이가 정해진다 — 실제 비동기 로드를 한 번 기다린다.

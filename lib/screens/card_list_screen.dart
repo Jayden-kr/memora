@@ -335,6 +335,43 @@ class SplRemountController {
 @visibleForTesting
 const double kFingerInsetOnCard = 12;
 
+/// 소량 목록(ListView)용 스크롤 물리 — [ClampingScrollPhysics]와 같되, 멈춰 있을 때 칸 높이가 바뀌어
+/// 스크롤 범위가 달라지면 같은 레이아웃 안에서 새 범위로 위치를 자른다.
+/// ⚠️ 왜: keepTappedCardUnderFinger는 레이아웃 전에 position.jumpTo로 목록을 옮긴다. 픽셀이 바뀌었으므로
+/// RangeMaintainingScrollPhysics(기본 물리의 부모)는 새 범위를 강제하지 않고(위치를 일부러 옮긴 것으로 본다),
+/// 마지막 카드가 아직 레이아웃되지 않아 maxScrollExtent가 추정치일 때 범위 밖(끝 아래 빈 공간)으로 첫 프레임이
+/// 그려진 뒤 스프링으로 미끄러져 돌아온다. 여기서 자르면 첫 프레임이 곧 최종 위치다.
+/// 드래그/관성 중(isScrolling, velocity != 0)에는 기존 동작 그대로 둔다.
+/// 대량 목록(SPL)에는 이 물리가 먹히지 않는다(다시 마운트로 새 위치를 만들어 범위 보정 경로가 다르다 — 시험해 봤고
+/// 3000dp 이상 카드를 목록 끝 근처에서 숨길 때만 첫 프레임이 끝 아래로 그려졌다 미끄러진다). 알려진 한계.
+class ClampOnResizeScrollPhysics extends ClampingScrollPhysics {
+  const ClampOnResizeScrollPhysics({super.parent});
+
+  @override
+  ClampOnResizeScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      ClampOnResizeScrollPhysics(parent: buildParent(ancestor));
+
+  @override
+  double adjustPositionForNewDimensions({
+    required ScrollMetrics oldPosition,
+    required ScrollMetrics newPosition,
+    required bool isScrolling,
+    required double velocity,
+  }) {
+    final adjusted = super.adjustPositionForNewDimensions(
+      oldPosition: oldPosition,
+      newPosition: newPosition,
+      isScrolling: isScrolling,
+      velocity: velocity,
+    );
+    if (isScrolling || velocity != 0.0) return adjusted;
+    final min = newPosition.minScrollExtent;
+    final max = newPosition.maxScrollExtent;
+    if (!min.isFinite || !max.isFinite || max < min) return adjusted;
+    return adjusted.clamp(min, max).toDouble();
+  }
+}
+
 /// 접기/보이기 뒤 누른 카드의 새 위쪽 가장자리(뷰포트 기준 dp). 커지거나 높이를 모르면(newHeight null)
 /// 그대로. 줄어들면 clamp(top, finger - newHeight + inset, finger - inset) — 위쪽을 그대로 둬도 손가락 밑이면
 /// 그대로, 아니면 최소한만 내린다(위로는 절대 안 올린다). 끝으로 스크롤 범위 안으로 자른다 — 범위 밖으로
@@ -1976,7 +2013,7 @@ class _CardListScreenState extends State<CardListScreen> with RouteAware {
         controller: _simpleScrollController,
         itemCount: _cards.length,
         itemBuilder: _buildCardItem,
-        physics: const ClampingScrollPhysics(),
+        physics: const ClampOnResizeScrollPhysics(),
         // 검색을 닫고 위치를 잡는 동안만 모든 칸을 레이아웃시킨다 (평소엔 null = 기본값).
         cacheExtent: searchExitCacheExtent(settling: _settlingSearchExit),
       );
