@@ -10,9 +10,9 @@
 <en-US>
 Folder icons and search improvements
 
-- Set a folder icon to any emoji or one or two characters, with a color (long-press a folder → Change icon)
+- Use any emoji or 1-2 characters as a folder icon, with a color (long-press a folder → Change icon)
 - After searching, the card you tapped stays in view when you close search
-- Folding or unfolding a card, or showing or hiding its answer, keeps that card under your finger instead of jumping to another card
-- Time-based folder switching can't be turned on while the lock screen is off, and no longer turns on by itself when you enable the lock screen
+- Folding a card or showing/hiding its answer keeps that card under your finger
+- Time-based folder switching can't be turned on while the lock screen is off, and no longer turns on by itself
 - Settings switches now have the same size
 </en-US>
