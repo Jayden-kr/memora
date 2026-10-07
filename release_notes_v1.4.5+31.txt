@@ -1,0 +1,18 @@
+<ko-KR>
+폴더 아이콘과 검색 개선
+
+- 폴더 아이콘을 이모지나 글자 1~2자로 바꾸고 색을 고를 수 있습니다 (폴더 길게 누르기 → 아이콘 변경)
+- 검색 중 누른 카드가 검색을 닫은 뒤에도 그 자리에 보입니다
+- 카드를 접거나 펼치고, 답을 숨기거나 보일 때 누른 카드가 다른 카드로 튀지 않고 손가락 밑에 남습니다
+- 잠금화면이 꺼져 있으면 시간대별 폴더 전환을 켤 수 없고, 잠금화면을 켤 때 자동으로 켜지지 않습니다
+- 설정 화면의 스위치 크기를 통일했습니다
+</ko-KR>
+<en-US>
+Folder icons and search improvements
+
+- Set a folder icon to any emoji or one or two characters, with a color (long-press a folder → Change icon)
+- After searching, the card you tapped stays in view when you close search
+- Folding or unfolding a card, or showing or hiding its answer, keeps that card under your finger instead of jumping to another card
+- Time-based folder switching can't be turned on while the lock screen is off, and no longer turns on by itself when you enable the lock screen
+- Settings switches now have the same size
+</en-US>
